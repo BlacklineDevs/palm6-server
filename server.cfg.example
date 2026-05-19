@@ -77,6 +77,8 @@ ensure qbx_core
 # ensured here in dependency order. Keep that block above the custom layer.
 
 # Custom layer — must be last so it can depend on everything above.
+# custom.cfg ensures server_identity then server_base and registers
+# the ACE allow for /coords (see custom.cfg).
 exec custom.cfg
 
 # ---------------------------------------------------------------------------
@@ -84,6 +86,10 @@ exec custom.cfg
 # ---------------------------------------------------------------------------
 # Replace CHANGEME with a real identifier (license:, steam:, fivem:, discord:)
 # for each admin. Keep this list short and audited.
+#
+# The custom layer also grants `command.coords` to group.admin from
+# custom.cfg, so any principal mapped to group.admin here will be able to
+# run /coords once the layer is loaded.
 add_ace group.admin command       allow
 add_ace group.admin command.quit  deny
 add_principal identifier.license:CHANGEME group.admin

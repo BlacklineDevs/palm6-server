@@ -1,21 +1,11 @@
-local function onClientStart()
+-- Fires when a Qbox character finishes loading after selection.
+-- Verified against Qbox-project/qbx_core: client/character.lua triggers
+-- TriggerEvent('QBCore:Client:OnPlayerLoaded') after a successful load.
+RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
+    if not Config.Welcome.enabled then return end
     lib.notify({
-        title = Config.ServerName,
-        description = Config.Welcome.message,
-        type = 'inform',
+        title = Config.Welcome.title or Config.ServerName,
+        description = Config.Welcome.description,
+        type = Config.Welcome.type or 'inform',
     })
-end
-
-AddEventHandler('onClientResourceStart', function(resource)
-    if resource ~= GetCurrentResourceName() then return end
-    if Config.Welcome.enabled then
-        onClientStart()
-    end
 end)
-
--- TODO: wire the Qbox player-loaded event here once qbx_core is available.
--- Example shape (uncomment and adapt when extending):
---
---   RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
---       -- player is fully loaded; safe to set up HUD, blips, etc.
---   end)
