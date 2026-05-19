@@ -5,50 +5,36 @@ holds only the resources, config overrides, SQL migrations, and docs that are
 specific to this server.
 
 It is **not** a full FiveM server. The Qbox framework and the FXServer
-artifacts themselves are provisioned separately by a txAdmin Qbox recipe and
-must never be committed to this repo.
+artifacts themselves are provisioned separately by a txAdmin `qbox-lean`
+recipe and must never be committed to this repo.
 
 ## What lives here
 
 ```
-/custom.cfg                       # exec'd from the live server.cfg
-/server.cfg.example               # hardened reference server.cfg
-/resources/[custom]/              # all custom resources live under [custom]
-    server_base/                  # minimal starter resource (template)
-        fxmanifest.lua
-        config.lua
-        client/main.lua
-        server/main.lua
-/sql/                             # numbered SQL migrations (0001_*, 0002_*, …)
-/docs/                            # SETUP and DEVELOPMENT docs
+/custom.cfg                                          # exec'd from the live server.cfg
+/server.cfg.example                                  # hardened reference server.cfg
+/resources/[custom]/
+    [config_overrides]/qbx_core_overrides/           # recipe-overrides via convars
+    server_identity/                                 # loading screen, spawn, presence
+    server_base/                                     # commands, banner, welcome notify
+/sql/                                                # numbered SQL migrations
+/docs/                                               # SETUP, DEVELOPMENT, BUILD-ROADMAP
 ```
 
 ## What does NOT live here
 
 - FXServer artifacts (managed by the txAdmin recipe)
 - The Qbox framework resources themselves (`qbx_core`, `qbx_*`, `ox_*`, …)
-- Anything containing secrets (license keys, API keys, DB credentials, …)
+- Anything containing secrets
 
 ## Install workflow
 
-1. Deploy a fresh server with the txAdmin **Qbox recipe**. Let the recipe
-   finish — it produces a `resources/` folder containing the framework and a
-   recipe-generated `server.cfg`.
-2. Copy the contents of this repo's `resources/[custom]/` into the live
-   server's `resources/` folder so the live tree contains
-   `resources/[custom]/server_base/`.
-3. Copy `custom.cfg` to the server root next to the recipe-generated
-   `server.cfg`.
-4. Append the following line to the **bottom** of the recipe-generated
-   `server.cfg`:
+1. Deploy the txAdmin **`qbox-lean`** recipe. Let it finish.
+2. Copy `resources/[custom]/` into the live server's `resources/` folder.
+3. Copy `custom.cfg` next to the recipe-generated `server.cfg`.
+4. Append `exec custom.cfg` to the bottom of `server.cfg`.
+5. Apply migrations from `sql/` in numeric order.
+6. Restart the server.
 
-   ```
-   exec custom.cfg
-   ```
-
-5. Apply any new migrations from `sql/` to the database in numeric order.
-6. Restart the server. The `server_base` resource will start and print a
-   banner.
-
-See `docs/SETUP.md` for the full step-by-step and `docs/DEVELOPMENT.md` for
-conventions when adding new resources.
+See `docs/SETUP.md` for the full walkthrough, `docs/BUILD-ROADMAP.md` for
+the phased build plan, and `docs/DEVELOPMENT.md` for conventions.

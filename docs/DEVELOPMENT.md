@@ -22,7 +22,13 @@ repo. The benefits:
 - Server admins can `ensure`/`restart` the whole layer by name without
   touching framework resources.
 
-Do not nest more brackets inside `[custom]`. One level is enough.
+A single nested bracket category, `[config_overrides]`, is allowed inside
+`[custom]` to group recipe-override resources (e.g.
+`[custom]/[config_overrides]/qbx_core_overrides`). These resources publish
+convars and ship config files that the recipe-deployed resource reads — they
+never vendor or rebuild the recipe resource itself.
+
+Do not nest deeper than that.
 
 ## Resource naming
 

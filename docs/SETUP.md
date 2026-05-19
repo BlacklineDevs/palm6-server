@@ -1,50 +1,39 @@
 # SETUP — deploying gtarp on a fresh box
 
-This document covers a clean install of the server from scratch. It assumes
-you have an empty Linux host (or Windows box) with txAdmin installed and a
-MySQL/MariaDB instance reachable from the server.
+## 1. Provision FXServer + txAdmin
 
-## 1. Provision FXServer and txAdmin
+Install the latest recommended FXServer artifact and complete txAdmin owner
+setup in the browser.
 
-1. Install the latest recommended FXServer artifact for Linux (or Windows)
-   following the official Cfx instructions.
-2. Start txAdmin and complete the initial owner setup in the browser.
+## 2. Deploy the `qbox-lean` recipe
 
-## 2. Deploy the Qbox recipe via txAdmin
+In txAdmin, create a new server profile and choose the **`qbox-lean`**
+recipe. Provide a database; the recipe creates the Qbox schema
+automatically. The recipe produces:
 
-1. In txAdmin, create a new server profile.
-2. When prompted for a recipe, choose **"Qbox"** (the official Qbox recipe).
-3. Provide a database the recipe can write to. The recipe will create the
-   Qbox schema automatically.
-4. Let the recipe run to completion. It will produce:
-   - a `resources/` folder containing `ox_lib`, `oxmysql`, `ox_target`,
-     `ox_inventory`, `qbx_core`, and the rest of the Qbox framework
-     resources;
-   - a generated `server.cfg` at the server root.
+- a `resources/` tree with `ox_lib`, `oxmysql`, `ox_target`, `ox_inventory`,
+  `qbx_core`, and the rest of the Qbox framework resources;
+- a generated `server.cfg` at the server root.
 
-Do **not** start the server yet.
+Do not start the server yet.
 
 ## 3. Drop the custom layer in
 
 From a checkout of this repo:
 
-1. Copy `resources/[custom]/` into the live server's `resources/` folder so
-   the live tree contains `resources/[custom]/server_base/`. The `[custom]`
-   bracketed folder is treated by FXServer as a resource category and is
-   scanned recursively.
-2. Copy `custom.cfg` to the server root, next to the recipe-generated
-   `server.cfg`.
-3. Open the recipe-generated `server.cfg` and append at the very bottom:
-
-   ```
-   exec custom.cfg
-   ```
-
-   This is the single hook the custom layer needs.
-
-4. Compare the recipe-generated `server.cfg` against `server.cfg.example` in
-   this repo and reconcile drift — particularly `sv_maxclients`,
-   `sv_endpointprivacy`, `sv_enforceGameBuild`, and `set onesync on`.
+1. Copy `resources/[custom]/` into the live server's `resources/` so the
+   live tree contains:
+   - `resources/[custom]/[config_overrides]/qbx_core_overrides/`
+   - `resources/[custom]/server_identity/`
+   - `resources/[custom]/server_base/`
+2. Copy `custom.cfg` next to the recipe-generated `server.cfg`.
+3. Append `exec custom.cfg` to the bottom of `server.cfg`. This is the
+   single hook the custom layer needs — `custom.cfg` itself `ensure`s
+   the override resource, then `server_identity`, then `server_base`,
+   and grants the `command.coords` ACE.
+4. Diff your `server.cfg` against `server.cfg.example`. Reconcile
+   `sv_maxclients`, `sv_endpointprivacy`, `sv_enforceGameBuild`, and
+   `set onesync on`.
 
 ## 4. Apply SQL migrations
 
@@ -54,29 +43,38 @@ Apply every file in `sql/` to the Qbox database in numeric order:
 mysql -u <user> -p <database> < sql/0001_init.sql
 ```
 
-Migration `0001_init.sql` is intentionally empty; it exists so subsequent
-migrations have a starting point.
+## 5. Secrets and environment-specific values
 
-## 5. Secrets
+Secrets in txAdmin's secret store, never in this repo:
 
-Configure these in txAdmin's secret-managed convars, **never** in this repo:
+- `sv_licenseKey`
+- `steam_webApiKey`
+- the `oxmysql` connection string
 
-- `sv_licenseKey` — your Cfx server key
-- `steam_webApiKey` — Steam Web API key
-- the database connection string passed to `oxmysql`
+Edit in the repo (not secrets, but per-environment):
+
+- `resources/[custom]/server_identity/config.lua` — `DiscordAppId`
+- `resources/[custom]/[config_overrides]/qbx_core_overrides/config.lua` —
+  multichar slots, starting funds, identifier requirements
 
 ## 6. First boot
 
-Start the server from txAdmin. In the console you should see the
-`server_base` startup banner. In-game, `/serverinfo` should respond.
+Start the server. Verify:
 
-If the banner is missing, check that `exec custom.cfg` is present in
-`server.cfg` and that `ensure server_base` is in `custom.cfg`.
+1. Dark gtarp loading screen appears on join.
+2. Console banner: `server_base started — version 0.1.0`.
+3. `/serverinfo` responds in chat.
+4. Welcome notification fires once the character finishes loading
+   (`QBCore:Client:OnPlayerLoaded`).
+5. Character spawns at Legion Square.
+
+If anything is missing, check `exec custom.cfg` is the last non-blank line
+of `server.cfg`, that all three `ensure` lines appear in `custom.cfg`, and
+that `ox_lib`/`oxmysql`/`qbx_core` are ensured before `exec custom.cfg`.
 
 ## 7. Updates
 
-- Framework updates (Qbox, ox_*) are applied by re-running or updating the
-  txAdmin recipe — never by editing files in this repo.
-- Custom changes are made here, committed, pulled to the host, and reloaded
-  with `restart server_base` (or the relevant custom resource) from the
-  console.
+- Framework updates: re-run the txAdmin recipe; never edit those files
+  here.
+- Custom changes: commit here, pull on the host, `restart <resource>` from
+  the console.
