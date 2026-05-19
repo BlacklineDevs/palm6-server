@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+*.env
+secrets.cfg
+
+# Cache and logs
+cache/
+logs/
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# SQL backups / dumps
+*.sql.bak
+dump.sql

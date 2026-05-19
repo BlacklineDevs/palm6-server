@@ -1,0 +1,16 @@
+-- ============================================================================
+-- 0001_init.sql
+--
+-- Initial (empty) migration for the gtarp custom layer.
+--
+-- All custom schema changes for this server live in numbered migration files
+-- in this folder: 0001_init.sql, 0002_<short_description>.sql, and so on.
+-- Migrations are applied in numeric order against the Qbox database, on top
+-- of whatever schema the Qbox framework itself installs.
+--
+-- Rules:
+--   - Never edit a migration after it has been applied to any environment.
+--     Add a new numbered file instead.
+--   - Use IF NOT EXISTS / IF EXISTS guards so re-running is safe.
+--   - Keep one logical change per migration where practical.
+-- ============================================================================
