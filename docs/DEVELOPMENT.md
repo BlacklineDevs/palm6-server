@@ -58,6 +58,20 @@ Declare every cross-resource dependency in `fxmanifest.lua`'s
 `dependencies` block so FXServer can refuse to start the resource if a
 dependency is missing.
 
+## Money source-of-truth
+
+`[custom]/[config_overrides]/qbx_economy_overrides/config.lua` is the
+single source of truth for paycheck cadence, currency, and per-job/per-grade
+payroll. Downstream job-config resources read it via the exports:
+
+```lua
+local pays = exports.qbx_economy_overrides:GetJobPaychecks()
+local mins = exports.qbx_economy_overrides:GetPaycheckInterval()
+```
+
+Do not hardcode money values in individual job resources — extend the
+ladder in `qbx_economy_overrides/config.lua` instead.
+
 ## SQL migrations
 
 - One change per file where practical.
