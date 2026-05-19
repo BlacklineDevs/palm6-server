@@ -83,6 +83,7 @@ end
 AddEventHandler('playerConnecting', function(_name, _setKickReason, deferrals)
     local src = source
     deferrals.defer()
+    -- Wait(0) yield: required after deferrals.defer before deferrals.update.
     Wait(0)
     deferrals.update('Checking allowlist…')
 
