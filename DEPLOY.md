@@ -35,7 +35,8 @@ Deploys are serialized with a `concurrency` group, so overlapping runs don't col
 
 The SFTP root is the server container root, so remote paths are relative to it.
 The `[custom]` / `[config_overrides]` folders contain literal square brackets; the
-workflow backslash-escapes them so `lftp` doesn't treat them as glob patterns.
+workflow passes these paths to `lftp` as plain double-quoted strings so the literal
+bracketed directory names resolve correctly.
 
 ## Required GitHub configuration
 

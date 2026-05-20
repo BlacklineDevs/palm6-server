@@ -75,16 +75,18 @@ jobs:
           fi
 
           # Reverse-mirror (upload) the custom layer. The [custom] and
-          # [config_overrides] folders contain literal square brackets, which
-          # lftp would otherwise treat as glob character classes — so the
-          # brackets are backslash-escaped (\[ \]). cmd:fail-exit makes lftp
-          # return non-zero on any error so the job fails on upload problems.
+          # [config_overrides] folders contain literal square brackets. Inside
+          # lftp's own command parser the bracketed path must be passed as a
+          # plain double-quoted string — NOT backslash-escaped. (Escaping with
+          # \[ \] makes lftp look for a directory literally named "\[custom\]",
+          # which doesn't exist.) cmd:fail-exit makes lftp return non-zero on
+          # any error so the job fails on upload problems.
           lftp -u "$SFTP_USERNAME,$SFTP_PASSWORD" "sftp://$SFTP_HOST:$SFTP_PORT" <<EOF
           set sftp:auto-confirm yes
           set cmd:fail-exit yes
           set net:max-retries 2
           set net:timeout 30
-          mirror --reverse --verbose --no-perms $DELETE_FLAG resources/\[custom\]/ "$REMOTE_BASE"/resources/\[custom\]/
+          mirror --reverse --verbose --no-perms $DELETE_FLAG "resources/[custom]/" "$REMOTE_BASE/resources/[custom]/"
           bye
           EOF
           echo "Custom layer uploaded to $REMOTE_BASE/resources/[custom]/"
