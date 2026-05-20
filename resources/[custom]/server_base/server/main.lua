@@ -2,10 +2,9 @@ local function printBanner()
     local name = Config.ServerName or 'server_base'
     print('========================================')
     print(('[%s] server_base started — version 0.1.0'):format(name))
-    print(('  locale=%s  debug=%s  spawn_by_identity=%s'):format(
+    print(('  locale=%s  debug=%s'):format(
         tostring(Config.Locale),
-        tostring(Config.Debug),
-        tostring(Config.SpawnHandledByIdentity)
+        tostring(Config.Debug)
     ))
     print('========================================')
 end
