@@ -50,6 +50,9 @@ Secrets in txAdmin's secret store, never in this repo:
 - `sv_licenseKey`
 - `steam_webApiKey`
 - the `oxmysql` connection string
+- `gtarp:staff_webhook` — Discord webhook for staff actions (Phase 7)
+- `gtarp:discord_bot_token` and `gtarp:discord_guild_id` — used by
+  `gtarp_allowlist` (Phase 9) to read Discord role membership
 
 Edit in the repo (not secrets, but per-environment):
 

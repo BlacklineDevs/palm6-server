@@ -24,6 +24,7 @@ local function spawnAtConfigPoint()
     if not p then return end
 
     DoScreenFadeOut(250)
+    -- Wait(0) yield: blocking until the engine reports the fade is complete.
     while not IsScreenFadedOut() do Wait(0) end
 
     SetEntityCoords(ped, p.x, p.y, p.z, false, false, false, false)
