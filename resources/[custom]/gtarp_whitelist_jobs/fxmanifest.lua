@@ -12,6 +12,7 @@ shared_scripts {
 }
 
 server_scripts {
+    'bridge/sv_framework.lua',  -- framework adapter — must load before logic
     'server/main.lua',
 }
 
