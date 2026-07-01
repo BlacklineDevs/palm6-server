@@ -21,16 +21,16 @@ Do not start the server yet.
 
 From a checkout of this repo:
 
-1. Copy `resources/[custom]/` into the live server's `resources/` so the
-   live tree contains:
-   - `resources/[custom]/[config_overrides]/qbx_core_overrides/`
-   - `resources/[custom]/server_identity/`
-   - `resources/[custom]/server_base/`
+1. Copy the **entire** `resources/[custom]/` tree into the live server's
+   `resources/` — all `[config_overrides]/*` override resources plus the
+   `gtarp_*`, `server_identity`, and `server_base` resources, each with its
+   `bridge/` folder. `custom.cfg`'s `ensure` list is the authoritative set of
+   what must be present.
 2. Copy `custom.cfg` next to the recipe-generated `server.cfg`.
 3. Append `exec custom.cfg` to the bottom of `server.cfg`. This is the
-   single hook the custom layer needs — `custom.cfg` itself `ensure`s
-   the override resource, then `server_identity`, then `server_base`,
-   and grants the `command.coords` ACE.
+   single hook the custom layer needs — `custom.cfg` itself `ensure`s every
+   override resource and every `gtarp_*` resource in dependency order, then
+   `server_identity` and `server_base`, and grants the command ACEs.
 4. Diff your `server.cfg` against `server.cfg.example`. Reconcile
    `sv_maxclients`, `sv_endpointprivacy`, `sv_enforceGameBuild`, and
    `set onesync on`.
