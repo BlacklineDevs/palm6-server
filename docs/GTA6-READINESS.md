@@ -65,7 +65,7 @@ The parts with no hard dependency on the GTA V engine or framework:
   lifecycle.
 - The auto-deploy pipeline (SFTP + panel restart) — engine-independent.
 - SQL schema for **our own** tables (`courier_postings`, `audit_log`,
-  `event_violations`, `allowlist`, `properties`, …).
+  `event_violations`, `allowlist`, `properties`, `grind_skill`, …).
 - All of `docs/`.
 
 ### Tier 2 — Carries with a bridge rewrite (thin adapter swap)
@@ -82,6 +82,12 @@ rewrite one small adapter file per resource against the GTA VI framework.
   is the only runtime binding)
 - `server_base`
 - `server_identity` (loading screen is Tier 1; spawn handler is Tier 3)
+- `gtarp_housing` (buy/sell/keys/stash lifecycle is Tier 1/2; door and
+  shell-interior coords are Tier 3 — see retune worksheet §9)
+- `gtarp_grind` (loop timing, yields, prices, XP are Tier 1; gather-spot
+  and buyer coords are Tier 3 — see retune worksheet §10)
+- `gtarp_robbery` (timers, rewards, dispatch logic are Tier 1/2; store and
+  ATM coords are Tier 3 — see retune worksheet §11)
 
 ### Tier 3 — Rewrite / retune (bound to the GTA V world)
 Anything tied to the Los Santos map, the GTA V model set, or GTA V
@@ -204,6 +210,9 @@ coords are known.
 | `gtarp_perf` | 2 | Bridge `GetGameTimer`; p95/p99 math unchanged. |
 | `server_base` | 2 | Bridge `/coords` natives; banner/logger/`/serverinfo` unchanged. |
 | `server_identity` | 2/3 | Loading screen carries as-is; **respawn coords** are Tier 3. |
+| `gtarp_housing` | 2/3 | Bridge the framework money/inventory calls; buy/sell/keys logic unchanged. **Door and shell-interior coords** (worksheet §9) are Tier 3. |
+| `gtarp_grind` | 2/3 | Bridge inventory/XP calls; loop timing and yields unchanged. **Gather-spot and buyer coords** (worksheet §10) are Tier 3. |
+| `gtarp_robbery` | 2/3 | Bridge police-dispatch/notify calls; timers and rewards unchanged. **Store and ATM coords** (worksheet §11) are Tier 3. |
 | `[config_overrides]/qbx_economy` | 1 (values) | Re-wire to new framework's economy keys; **numbers carry**. |
 | `[config_overrides]/ox_inventory` (items) | 1 (data) | Item catalog carries; re-wire to new inventory API; shop **coords** Tier 3. |
 | `[config_overrides]/qbx_police` etc. | 3 | Re-author coords + **model names**; grade/salary **design** carries. |

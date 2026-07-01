@@ -145,7 +145,7 @@ tester:
       (armouries, grades, salaries).
 - [ ] Population density matches `qbx_density_overrides` (peds/traffic feel).
 
-## 12. Housing — `gtarp_housing`
+## 11. Housing — `gtarp_housing`
 
 - [ ] On boot the console prints `[gtarp_housing] loaded N properties`
       (N ≥ 4 from the seeded catalog).
@@ -162,7 +162,7 @@ tester:
 - [ ] Two people entering the same home share one instance; different homes
       don't overlap (routing buckets).
 
-## 13. Grind jobs — `gtarp_grind`
+## 12. Grind jobs — `gtarp_grind`
 
 - [ ] Buy a Fishing Rod / Pickaxe / Hunting Knife at the Hardware Store
       (Sandy Shores / Paleto).
@@ -173,7 +173,7 @@ tester:
 - [ ] XP persists across relog (`grind_skill` table).
 - [ ] All three loops (fishing / mining / hunting) complete solo.
 
-## 14. Robbery — `gtarp_robbery`
+## 13. Robbery — `gtarp_robbery`
 
 - [ ] With `Config.MinPolice = 0`, draw a weapon at a store register / ATM →
       `[E]` starts the hold-up; unarmed is refused.
@@ -186,7 +186,7 @@ tester:
 
 ---
 
-## 11. Triage — common failures
+## 14. Triage — common failures
 
 | Symptom | Likely cause |
 | --- | --- |
