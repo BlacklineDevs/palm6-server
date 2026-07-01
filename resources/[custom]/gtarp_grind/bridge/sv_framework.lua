@@ -29,10 +29,10 @@ function Bridge.Notify(src, title, msg, t)
     })
 end
 
--- How many of `item` the player holds.
+-- How many of `item` the player holds. ox_inventory's documented count query.
 function Bridge.CountItem(src, item)
-    local ok, n = pcall(function() return exports.ox_inventory:GetItemCount(src, item) end)
-    return (ok and n) or 0
+    local ok, n = pcall(function() return exports.ox_inventory:Search(src, 'count', item) end)
+    return (ok and tonumber(n)) or 0
 end
 
 -- Does the player hold at least `count` (default 1) of `item`?

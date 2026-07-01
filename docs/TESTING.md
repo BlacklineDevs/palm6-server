@@ -145,6 +145,34 @@ tester:
       (armouries, grades, salaries).
 - [ ] Population density matches `qbx_density_overrides` (peds/traffic feel).
 
+## 12. Housing — `gtarp_housing`
+
+- [ ] On boot the console prints `[gtarp_housing] loaded N properties`
+      (N ≥ 4 from the seeded catalog).
+- [ ] For-sale property doors show a blip (Config.ShowForSaleBlips) and a
+      `[E] to buy ($price)` prompt in range.
+- [ ] Buying with enough bank charges the price and flips the door to owned;
+      buying without funds is refused.
+- [ ] Owner `[E]` menu offers Enter / Give key to nearest / Manage keys /
+      Sell back; **Enter** fades you into the shell interior, `/exithome`
+      returns you to the door.
+- [ ] `/stash` inside opens the per-property stash; items persist on relog.
+- [ ] Give a key to a second player → they get an Enter prompt; revoke removes
+      it. **Sell back** refunds 50% and re-lists the property.
+- [ ] Two people entering the same home share one instance; different homes
+      don't overlap (routing buckets).
+
+## 13. Grind jobs — `gtarp_grind`
+
+- [ ] Buy a Fishing Rod / Pickaxe / Hunting Knife at the Hardware Store
+      (Sandy Shores / Paleto).
+- [ ] At a gather spot, `[E]` runs a progress bar and grants the yield; doing
+      it **without the tool** is refused; spamming hits the 8s cooldown.
+- [ ] Selling at the matching buyer pays cash for the whole stack; the price
+      rises as your activity XP climbs (check across several sells).
+- [ ] XP persists across relog (`grind_skill` table).
+- [ ] All three loops (fishing / mining / hunting) complete solo.
+
 ---
 
 ## 11. Triage — common failures

@@ -29,7 +29,7 @@ local function addXp(cid, activity, amount)
     loadXp(cid)
     local xp = (xpCache[cid][activity] or 0) + amount
     xpCache[cid][activity] = xp
-    MySQL.prepare.await(
+    MySQL.query.await(
         'INSERT INTO grind_skill (citizenid, activity, xp) VALUES (?, ?, ?) \z
          ON DUPLICATE KEY UPDATE xp = VALUES(xp)',
         { cid, activity, xp })
