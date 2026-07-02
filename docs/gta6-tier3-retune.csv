@@ -62,3 +62,9 @@ robbery,ATM Legion Sq,"vector3(147.40, -1035.50, 29.34)",,gtarp_robbery/shared/c
 robbery,ATM Del Perro,"vector3(-1204.60, -324.80, 37.87)",,gtarp_robbery/shared/config.lua :: ATMs.locations
 robbery,ATM Sandy Shores,"vector3(1822.40, 3683.10, 34.28)",,gtarp_robbery/shared/config.lua :: ATMs.locations
 evidence,Evidence locker Mission Row,"vector3(434.0, -983.0, 30.7)",,gtarp_evidence/shared/config.lua :: Config.LockerCoords
+turf,Zone Legion Square,"vector3(195.17, -933.77, 30.69)",,gtarp_turf/shared/config.lua :: Config.Zones
+turf,Zone Grove Street,"vector3(-47.30, -1757.40, 29.42)",,gtarp_turf/shared/config.lua :: Config.Zones
+turf,Zone Mirror Park,"vector3(1163.10, -322.90, 69.20)",,gtarp_turf/shared/config.lua :: Config.Zones
+turf,Zone Vinewood,"vector3(-1222.10, -906.90, 12.33)",,gtarp_turf/shared/config.lua :: Config.Zones
+turf,Zone Sandy Shores,"vector3(1961.30, 3740.30, 32.34)",,gtarp_turf/shared/config.lua :: Config.Zones
+turf,Zone Paleto Bay,"vector3(1728.66, 6414.16, 35.04)",,gtarp_turf/shared/config.lua :: Config.Zones

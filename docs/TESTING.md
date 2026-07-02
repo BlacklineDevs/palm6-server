@@ -216,9 +216,26 @@ tester:
 - [ ] Off duty (or not police), `/logevidence`, `/evidence`, and the
       locker prompt all refuse with "You need to be on duty...".
 
+## 16. Turf — `gtarp_turf`
+
+- [ ] On boot the console prints `[gtarp_turf] loaded 6 turf zone(s)`.
+- [ ] All six zones show a blip (white/unclaimed by default on a fresh DB).
+- [ ] `/setgang <name>` into a gang, walk to a zone → `[E]` starts tagging;
+      completing it flips the zone's `owner_gang` and blip colour/label.
+- [ ] Without a gang (`PlayerData.gang.name == 'none'`), the tag attempt
+      is refused ("You need to be in a gang...").
+- [ ] Re-tagging a zone your own gang already holds is refused ("Your
+      gang already holds this turf.").
+- [ ] A second player in a rival gang can flip an already-claimed zone —
+      no defender-presence requirement in v1.
+- [ ] `/turf` shows a leaderboard (gangs ranked by zones held) plus any
+      unclaimed zones.
+- [ ] Restarting the resource preserves ownership (seeded via
+      `INSERT IGNORE`, not reset).
+
 ---
 
-## 16. Triage — common failures
+## 17. Triage — common failures
 
 | Symptom | Likely cause |
 | --- | --- |

@@ -66,7 +66,7 @@ The parts with no hard dependency on the GTA V engine or framework:
 - The auto-deploy pipeline (SFTP + panel restart) — engine-independent.
 - SQL schema for **our own** tables (`courier_postings`, `audit_log`,
   `event_violations`, `allowlist`, `gtarp_properties`, `grind_skill`,
-  `gtarp_evidence`, …).
+  `gtarp_evidence`, `gtarp_turf`, …).
 - All of `docs/`.
 
 ### Tier 2 — Carries with a bridge rewrite (thin adapter swap)
@@ -93,6 +93,8 @@ rewrite one small adapter file per resource against the GTA VI framework.
   whatever damaged vehicle is nearby)
 - `gtarp_evidence` (log/locker lifecycle is Tier 1/2; locker coords are
   Tier 3 — see retune worksheet §12)
+- `gtarp_turf` (zone/ownership/leaderboard lifecycle is Tier 1/2; zone
+  coords are Tier 3 — see retune worksheet §13)
 
 ### Tier 3 — Rewrite / retune (bound to the GTA V world)
 Anything tied to the Los Santos map, the GTA V model set, or GTA V
@@ -220,6 +222,7 @@ coords are known.
 | `gtarp_robbery` | 2/3 | Bridge police-dispatch/notify calls; timers and rewards unchanged. **Store and ATM coords** (worksheet §11) are Tier 3. |
 | `gtarp_mechanic` | 2 | Bridge the framework money/job calls and repair natives; invoice logic unchanged. No coords of its own. |
 | `gtarp_evidence` | 2/3 | Bridge the framework job/stash calls; log/locker logic unchanged. **Locker coords** (worksheet §12) are Tier 3. |
+| `gtarp_turf` | 2/3 | Bridge the framework gang calls and blip natives; tag/ownership/leaderboard logic unchanged. **Zone coords** (worksheet §13) are Tier 3. |
 | `[config_overrides]/qbx_economy` | 1 (values) | Re-wire to new framework's economy keys; **numbers carry**. |
 | `[config_overrides]/ox_inventory` (items) | 1 (data) | Item catalog carries; re-wire to new inventory API; shop **coords** Tier 3. |
 | `[config_overrides]/qbx_police` etc. | 3 | Re-author coords + **model names**; grade/salary **design** carries. |

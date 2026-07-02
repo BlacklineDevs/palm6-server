@@ -197,6 +197,23 @@ changes.
 | --- | --- | --- |
 | Evidence locker — Mission Row | `vector3(434.0, -983.0, 30.7)` | _TBD_ |
 
+## 13. Turf — gang zones
+
+Source: `resources/[custom]/gtarp_turf/shared/config.lua` (`Config.Zones`).
+Tag/ownership/leaderboard lifecycle is Tier 1; only coords are Tier 3.
+These reuse already-validated points from elsewhere in this worksheet
+(spawn §1, shops §4, robbery §11) rather than new coords — retune those
+sections and this one together if a shared point moves.
+
+| Zone | Current (GTA V) | GTA VI value |
+| --- | --- | --- |
+| Legion Square | `vector3(195.17, -933.77, 30.69)` | _TBD_ |
+| Grove Street | `vector3(-47.30, -1757.40, 29.42)` | _TBD_ |
+| Mirror Park | `vector3(1163.10, -322.90, 69.20)` | _TBD_ |
+| Vinewood | `vector3(-1222.10, -906.90, 12.33)` | _TBD_ |
+| Sandy Shores | `vector3(1961.30, 3740.30, 32.34)` | _TBD_ |
+| Paleto Bay | `vector3(1728.66, 6414.16, 35.04)` | _TBD_ |
+
 ---
 
 ## Not in this worksheet (intentionally)
