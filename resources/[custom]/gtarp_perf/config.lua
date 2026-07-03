@@ -8,6 +8,12 @@
 --
 -- This resource MUST be cheap to run; it should not itself become the
 -- thing it is measuring.
+--
+-- Overlap note (audited 2026-07-03): no recipe resource duplicates this,
+-- but txAdmin natively graphs server-thread tick health. What this adds on
+-- top: the Discord webhook hitch alert (p95/p99 past a threshold) and the
+-- GetSummary export for in-server consumption. It measures aggregate
+-- main-thread stall, not per-resource cost — use resmon/profiler for that.
 -- ============================================================================
 
 Config = {}

@@ -2,9 +2,17 @@
 -- gtarp_staff/config.lua
 --
 -- Staff tooling owns:
---   - lightweight chat commands that staff can run (bring, goto, freeze, etc.)
 --   - an audit log table (sql/0007_staff_log.sql)
---   - a Discord webhook fan-out for every staff action
+--   - a Discord webhook fan-out for every logged staff action
+--   - the exports.gtarp_staff:Log(...) sink other resources write to
+--     (allowlist denials, eventguard violations, ...)
+--
+-- The staff CHAT COMMANDS this resource used to register (/tp /tpm /bring
+-- /goto /revive /heal) were removed 2026-07-03: every one collided with a
+-- command the Qbox recipe already registers (qbx_core /tp /tpm, qbx_medical
+-- /revive /heal) or duplicated qbx_adminmenu's goto/bring menu actions. Use
+-- the recipe's own commands/menu; this resource is now purely the audit-log
+-- + webhook sink.
 --
 -- The webhook URL is read from a convar so it stays out of version control.
 -- Set `gtarp:staff_webhook` in txAdmin's convar / secret store.
@@ -15,19 +23,3 @@ Config = {}
 -- Convar name we read the webhook URL from. Operator sets:
 --   set gtarp:staff_webhook "https://discord.com/api/webhooks/XXX/YYY"
 Config.WebhookConvar = 'gtarp:staff_webhook'
-
--- Default ACE permission node required to invoke any /staff:* command.
--- Per-command nodes (command.tp, command.bring, etc.) are also enforced.
-Config.AceBaseNode = 'command.staff'
-
--- Each entry: { command = 'name', ace = 'command.<name>', help = '...' }
--- The handler function is wired in server/main.lua and dispatched on this
--- table — keeping the registration in one place.
-Config.Commands = {
-    { command = 'tp',      ace = 'command.tp',      help = '/tp <id>  teleport to player' },
-    { command = 'tpm',     ace = 'command.tpm',     help = '/tpm      teleport to map waypoint' },
-    { command = 'bring',   ace = 'command.bring',   help = '/bring <id>  bring player to you' },
-    { command = 'goto',    ace = 'command.goto',    help = '/goto <id>   teleport to player (alias of /tp)' },
-    { command = 'revive',  ace = 'command.revive',  help = '/revive <id> revive player' },
-    { command = 'heal',    ace = 'command.heal',    help = '/heal <id>   heal player' },
-}

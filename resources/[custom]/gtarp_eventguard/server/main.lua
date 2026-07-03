@@ -64,18 +64,6 @@ local function guard(eventName, budget)
             return
         end
         b.calls[#b.calls + 1] = now()
-
-        -- Cheap amount-validation for money-shaped events.
-        local args = { ... }
-        if eventName == 'QBCore:Server:UpdateMoney' then
-            local amount = tonumber(args[2])
-            if amount and math.abs(amount) > (Config.MaxClientMoneyDelta or 5000) then
-                record(src, eventName, ('amount=%d > max %d'):format(
-                    amount, Config.MaxClientMoneyDelta))
-                CancelEvent()
-                return
-            end
-        end
     end)
 end
 

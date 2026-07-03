@@ -4,7 +4,7 @@ lua54 'yes'
 
 author 'EvThatGuy'
 version '0.1.0'
-description 'gtarp staff tooling — audit log + Discord webhook for staff commands'
+description 'gtarp staff tooling — audit-log + Discord webhook sink (exports.gtarp_staff:Log)'
 
 shared_scripts {
     '@ox_lib/init.lua',

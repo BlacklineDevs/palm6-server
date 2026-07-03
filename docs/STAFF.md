@@ -18,18 +18,24 @@ recipe-generated `server.cfg`.
 
 ## Command matrix
 
-| Command         | owner | admin | mod | trial |
-|-----------------|:-----:|:-----:|:---:|:-----:|
-| `/coords`       |   y   |   y   |  y  |   y   |
-| `/serverinfo`   |   y   |   y   |  y  |   y   |
-| `/tp`, `/goto`  |   y   |   y   |  y  |       |
-| `/tpm`          |   y   |   y   |  y  |       |
-| `/bring`        |   y   |   y   |  y  |       |
-| `/revive`       |   y   |   y   |  y  |       |
-| `/heal`         |   y   |   y   |  y  |       |
-| `/setjob`       |   y   |   y   |     |       |
-| `/giveitem`     |   y   |   y   |     |       |
-| `/staff_log`    |   y   |   y   |     |       |
+All player-management commands are the RECIPE's own (qbx_core `/tp` `/tpm`,
+qbx_medical `/revive` `/heal`, qbx_adminmenu's `/admin` menu for
+goto/bring/spectate/etc.) — gtarp_staff's duplicate registrations were
+removed 2026-07-03 because they collided with and overrode the recipe
+handlers. The recipe restricts these to `group.admin`; the `custom.cfg` ACE
+matrix is what extends `/tp` `/tpm` `/revive` `/heal` to `group.mod`.
+
+| Command                     | owner | admin | mod | trial |
+|-----------------------------|:-----:|:-----:|:---:|:-----:|
+| `/coords`                   |   y   |   y   |  y  |   y   |
+| `/serverinfo`               |   y   |   y   |  y  |   y   |
+| `/tp` (qbx_core)            |   y   |   y   |  y  |       |
+| `/tpm` (qbx_core)           |   y   |   y   |  y  |       |
+| `/revive` (qbx_medical)     |   y   |   y   |  y  |       |
+| `/heal` (qbx_medical)       |   y   |   y   |  y  |       |
+| `/admin` menu (qbx_adminmenu — goto/bring/spectate/…) | y | y | per its config | |
+| `/setjob`                   |   y   |   y   |     |       |
+| `/giveitem`                 |   y   |   y   |     |       |
 
 ## ACE wiring
 
@@ -47,7 +53,9 @@ accidentally strip lower-tier access.
 
 ## Audit log
 
-Every staff command is written to the `audit_log` table
+Staff/security actions logged through `exports.gtarp_staff:Log(...)`
+(allowlist denials, eventguard violations, pumpcoin rug reveals, …) are
+written to the `audit_log` table
 (`sql/0007_staff_log.sql`) and posted to the Discord webhook configured
 via the `gtarp:staff_webhook` convar. The webhook URL is a secret-grade
 value and must be set in txAdmin's secret store, never committed.

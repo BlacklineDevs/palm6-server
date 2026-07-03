@@ -12,8 +12,8 @@ production replacement for txAdmin's own anticheat layer.
 |---|---------------------------------------------------|------------------------------------------------|
 | 1 | Client-script injection (request-control flood)   | `sv_filterRequestControl 2` in custom.cfg      |
 | 2 | Native scripthook hooks (mod menus)               | `sv_scriptHookAllowed 0`                       |
-| 3 | Spam of money-mutating events                     | Ratelimit + amount cap (`gtarp_eventguard`)    |
-| 4 | Spam of inventory open / shop transactions        | Ratelimit (`gtarp_eventguard`)                 |
+| 3 | Client-dictated money mutation                    | Structural: qbx_core money is server-authoritative (`AddMoney`/`RemoveMoney` only — no client-triggerable money net event exists; eventguard's legacy `QBCore:Server:UpdateMoney` guard was inert and removed 2026-07-03) |
+| 4 | Spam of inventory open / shop transactions        | ox_inventory's own per-event validation (`Utils.LogExploit`) + ratelimit (`gtarp_eventguard`) |
 | 5 | Spam of custom courier events                     | Ratelimit (`gtarp_eventguard`)                 |
 | 6 | Long-lived suspicious sessions                    | 3-strike kick (`Config.KickThreshold`)         |
 | 7 | Coord spoofing / off-map vehicles                 | `onesync_distanceCullVehicles true`            |

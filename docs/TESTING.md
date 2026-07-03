@@ -102,14 +102,21 @@ tester:
       the poster (online = live credit, offline = DB `players.money` write via
       the bridge).
 
-## 6. Staff toolkit — `gtarp_staff`
+## 6. Staff toolkit — `gtarp_staff` (audit sink) + recipe commands
 
-- [ ] `/tp`, `/tpm`, `/bring`, `/goto`, `/revive`, `/heal`, `/giveitem`
-      behave for `group.admin` / `group.mod` per the ACE matrix in
-      `custom.cfg`; a `group.trial` principal is limited to `/coords`.
-- [ ] Each staff action writes an `audit_log` row.
-- [ ] If `gtarp:staff_webhook` is set, actions post to the Discord webhook.
-- [ ] Non-staff cannot run staff commands (ACE denies).
+gtarp_staff registers NO commands (its duplicates of recipe commands were
+removed 2026-07-03) — the commands below are the recipe's own, extended to
+mods by the ACE matrix in `custom.cfg`.
+
+- [ ] `/tp`, `/tpm` (qbx_core), `/revive`, `/heal` (qbx_medical) work for
+      `group.admin` AND `group.mod`; goto/bring work via qbx_adminmenu's
+      `/admin` menu; a `group.trial` principal is limited to `/coords`.
+- [ ] Boot log shows `[gtarp_staff] audit-log sink online`.
+- [ ] Actions logged via `exports.gtarp_staff:Log` (e.g. an allowlist deny,
+      an eventguard violation) write an `audit_log` row.
+- [ ] If `gtarp:staff_webhook` is set, logged actions post to the Discord
+      webhook.
+- [ ] Non-staff cannot run the recipe staff commands (ACE denies).
 
 ## 7. Job whitelist — `gtarp_whitelist_jobs`
 

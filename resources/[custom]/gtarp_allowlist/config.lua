@@ -8,6 +8,13 @@
 --      Used for manual additions or for players without Discord linked.
 --
 -- A join is approved if EITHER source matches.
+--
+-- Relationship to txAdmin's native whitelist (audited 2026-07-03): txAdmin
+-- ships guildRoles and approvedLicense whitelist modes, but runs exactly ONE
+-- mode at a time — it cannot express this resource's "role OR license"
+-- either-match, and it has no gtarp_staff deny-logging. This resource
+-- intentionally supersedes it: keep txAdmin's whitelist mode set to
+-- `disabled` (its default) or joins get double-gated.
 -- ============================================================================
 
 Config = {}

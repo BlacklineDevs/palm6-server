@@ -1,9 +1,13 @@
 -- ============================================================================
 -- gtarp_staff/server/main.lua
 --
--- Implements the staff-command set, logs every invocation to audit_log,
--- and fans out to a Discord webhook (URL via convar). All commands are
--- ACE-restricted; ACEs are granted in custom.cfg.
+-- Audit-log sink: writes staff/security actions to the audit_log table and
+-- fans out to a Discord webhook (URL via convar). Other resources append
+-- through exports.gtarp_staff:Log(action, actorSrc, targetSrc, detail).
+--
+-- This resource no longer registers chat commands — the Qbox recipe already
+-- ships /tp /tpm (qbx_core), /revive /heal (qbx_medical) and goto/bring via
+-- qbx_adminmenu; registering them here overrode the recipe handlers.
 -- ============================================================================
 
 local function actorName(src)
@@ -46,92 +50,13 @@ local function log(action, actorSrc, targetSrc, detail)
     end, 'POST', payload, { ['Content-Type'] = 'application/json' })
 end
 
-local function notify(src, title, msg, t)
-    if src == 0 then print(('[%s] %s'):format(title, msg)); return end
-    Bridge.NotifyClient(src, title, msg, t)
-end
-
-local function targetCoordsOf(src)
-    return Bridge.GetCoords(src)
-end
-
--- ---------------------------------------------------------------------------
--- Command implementations
--- ---------------------------------------------------------------------------
-
-local Handlers = {}
-
-function Handlers.tp(src, args)
-    local target = tonumber(args[1])
-    if not target then return notify(src, 'Staff', 'usage: /tp <id>', 'error') end
-    local c = targetCoordsOf(target)
-    if not c then return notify(src, 'Staff', 'no such player', 'error') end
-    if src == 0 then log('tp', 0, target, 'console teleport'); return end
-    Bridge.SetCoords(src, c.x, c.y, c.z)
-    log('tp', src, target, ('to %.1f,%.1f,%.1f'):format(c.x, c.y, c.z))
-end
-
--- 'goto' is a reserved keyword in Lua 5.4, so it cannot be a dot-indexed
--- field name. Use bracket indexing; runtime dispatch uses Handlers[cmd].
-Handlers["goto"] = Handlers.tp
-
-function Handlers.tpm(src)
-    if src == 0 then return notify(src, 'Staff', 'tpm requires in-game', 'error') end
-    TriggerClientEvent('gtarp_staff:tpm', src)
-    log('tpm', src, nil, 'to waypoint')
-end
-
-function Handlers.bring(src, args)
-    if src == 0 then return notify(src, 'Staff', 'bring requires in-game', 'error') end
-    local target = tonumber(args[1])
-    if not target then return notify(src, 'Staff', 'usage: /bring <id>', 'error') end
-    local me = targetCoordsOf(src)
-    if not me then return end
-    Bridge.SetCoords(target, me.x, me.y, me.z)
-    log('bring', src, target, ('to %.1f,%.1f,%.1f'):format(me.x, me.y, me.z))
-end
-
-function Handlers.revive(src, args)
-    local target = tonumber(args[1]) or src
-    if target == 0 then return notify(src, 'Staff', 'usage: /revive <id>', 'error') end
-    Bridge.Revive(target)
-    log('revive', src, target, '')
-end
-
-function Handlers.heal(src, args)
-    local target = tonumber(args[1]) or src
-    if target == 0 then return notify(src, 'Staff', 'usage: /heal <id>', 'error') end
-    if Bridge.Heal(target) then
-        log('heal', src, target, 'health=200')
-    end
-end
-
--- ---------------------------------------------------------------------------
--- Register all commands from Config.Commands
--- ---------------------------------------------------------------------------
-
-local function register()
-    for _, entry in ipairs(Config.Commands) do
-        local fn = Handlers[entry.command]
-        if not fn then
-            print(('[gtarp_staff] no handler for /%s'):format(entry.command))
-        else
-            RegisterCommand(entry.command, function(src, args)
-                fn(src, args)
-            end, true) -- restricted by ACE
-        end
-    end
-end
-
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    register()
-    print(('[gtarp_staff] registered %d staff commands; webhook=%s'):format(
-        #Config.Commands,
+    print(('[gtarp_staff] audit-log sink online; webhook=%s'):format(
         GetConvar(Config.WebhookConvar, '') ~= '' and 'set' or 'unset'
     ))
 end)
 
--- Public export so other phases (e.g. allowlist denials, eventguard kicks)
--- can write to the same audit log.
+-- Public export so other resources (allowlist denials, eventguard kicks,
+-- pumpcoin rug reveals, ...) write to the same audit log.
 exports('Log', log)

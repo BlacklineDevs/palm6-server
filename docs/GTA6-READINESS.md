@@ -212,7 +212,7 @@ coords are known.
 | deploy workflow | 1 | Repoint paths to the GTA VI server base; mechanism unchanged. |
 | `gtarp_courier` | 2 | Rewrite 2 bridge files (done as template). |
 | `gtarp_whitelist_jobs` | 2 | Bridge the `setjob`/`OnPlayerLoaded` calls; allow-table logic unchanged. |
-| `gtarp_staff` | 2 | Bridge command targets + any natives; webhook + audit logic unchanged. |
+| `gtarp_staff` | 2 | Bridge name/identifier lookups only; webhook + audit logic unchanged (commands removed 2026-07-03 — recipe owns them). |
 | `gtarp_perf` | 2 | Bridge `GetGameTimer`; p95/p99 math unchanged. |
 | `server_base` | 2 | Bridge `/coords` natives; banner/logger/`/serverinfo` unchanged. |
 | `server_identity` | 2/3 | Loading screen carries as-is; **respawn coords** are Tier 3. |

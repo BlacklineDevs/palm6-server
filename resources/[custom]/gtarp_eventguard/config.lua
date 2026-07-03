@@ -11,11 +11,14 @@ Config = {}
 
 Config.KickThreshold = 3
 
--- Maximum amount we trust from the client on money-mutating events. The
--- server should always re-validate against authoritative state, but this
--- is a cheap upper bound for sanity.
-Config.MaxClientMoneyDelta = 5000
-
+-- Only list events some resource actually registers as NET events
+-- (RegisterNetEvent) — the guard hooks with AddEventHandler, so a name
+-- nothing net-registers can never fire and its budget is dead weight.
+-- The legacy qb-core names (QBCore:Server:UpdateMoney / SetMetaData /
+-- OnJobUpdate) were removed 2026-07-03: Qbox never registers them as net
+-- events (money is server-authoritative via qbx_core AddMoney/RemoveMoney;
+-- OnJobUpdate is an internal TriggerEvent), so those guards were inert
+-- since they shipped.
 Config.Events = {
     -- gtarp custom layer events
     ['gtarp_courier:post']     = { calls = 5,  window_seconds = 60  },
@@ -23,12 +26,8 @@ Config.Events = {
     ['gtarp_courier:complete'] = { calls = 20, window_seconds = 60  },
     ['gtarp_courier:cancel']   = { calls = 10, window_seconds = 60  },
 
-    -- qbx money / inventory hot events. If your recipe pins different
-    -- names, edit here.
-    ['QBCore:Server:UpdateMoney']  = { calls = 30, window_seconds = 30 },
-    ['QBCore:Server:SetMetaData']  = { calls = 30, window_seconds = 30 },
-    ['QBCore:Server:OnJobUpdate']  = { calls = 10, window_seconds = 30 },
-
-    -- ox_inventory shop purchase fan-out — recipe-shipped name.
+    -- ox_inventory shop purchase fan-out — recipe-shipped net event.
+    -- ox_inventory does its own per-event data validation (Utils.LogExploit);
+    -- this blunt call-count budget is defense-in-depth on top.
     ['ox_inventory:openInventory'] = { calls = 30, window_seconds = 30 },
 }
