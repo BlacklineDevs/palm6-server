@@ -22,3 +22,21 @@ Config.LockerMaxWeight = 500000
 
 -- How many recent entries `/evidence` shows.
 Config.LogEntryLimit = 15
+
+-- ---------------------------------------------------------------------------
+-- v2 — case files + suspect linkage
+-- ---------------------------------------------------------------------------
+
+-- How many cases `/evidence cases` and `/evidence suspect <cid>` list.
+Config.CaseListLimit = 15
+
+-- How many entries a case detail view (`/evidence case <id>` / GetCase) returns.
+Config.CaseEntryLimit = 30
+
+-- Max lengths for player-supplied text (server-side clamps).
+Config.CaseTitleMax = 100
+Config.EntryMax = 1000
+
+-- Server-side command cooldowns (ms) — evidence commands are spammable.
+Config.WriteCooldownMs = 2000
+Config.ReadCooldownMs = 1000

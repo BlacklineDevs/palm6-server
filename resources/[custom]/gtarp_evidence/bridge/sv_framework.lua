@@ -61,6 +61,11 @@ function Bridge.Distance(a, b)
     return #(vector3(a.x, a.y, a.z) - vector3(b.x, b.y, b.z))
 end
 
+-- Monotonic server clock in milliseconds (for command rate limiting).
+function Bridge.NowMs()
+    return GetGameTimer()
+end
+
 -- Register the evidence-locker inventory stash with ox_inventory.
 function Bridge.RegisterStash(id, label, slots, maxWeight)
     pcall(function()

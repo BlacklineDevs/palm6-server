@@ -2,7 +2,7 @@
 -- gtarp_evidence/client/main.lua
 --
 -- Pure logic. Calls Game.* (bridge/cl_game.lua) for all native access.
--- No direct natives / ox_lib here (§6 gate). Server is authoritative on the
+-- No direct natives or framework UI calls here (§6 gate). Server is authoritative on the
 -- on-duty gate and proximity — this is UI + prompts.
 -- ============================================================================
 

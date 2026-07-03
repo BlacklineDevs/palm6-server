@@ -3,8 +3,8 @@ game 'gta5'
 lua54 'yes'
 
 author 'EvThatGuy'
-version '0.1.0'
-description 'gtarp evidence — police evidence log + locker'
+version '0.2.0'
+description 'gtarp evidence — police evidence log + locker + case files & suspect linkage'
 
 shared_scripts {
     '@ox_lib/init.lua',
