@@ -12,7 +12,11 @@ local STASH_ID = 'evidence_locker'
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    Bridge.RegisterStash(STASH_ID, 'Evidence Locker', Config.LockerSlots, Config.LockerMaxWeight)
+    -- Restrict to the police group and to the locker coords so ox_inventory
+    -- enforces access itself; the server on-duty/proximity gate below is then
+    -- a second layer, not the only one.
+    Bridge.RegisterStash(STASH_ID, 'Evidence Locker', Config.LockerSlots, Config.LockerMaxWeight,
+        { police = 0 }, Config.LockerCoords)
     print('[gtarp_evidence] evidence locker registered')
 end)
 

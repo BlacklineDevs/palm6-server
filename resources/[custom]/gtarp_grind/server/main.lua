@@ -57,8 +57,11 @@ RegisterNetEvent('gtarp_grind:gather', function(activityKey, spotIndex)
         return
     end
 
-    local spot = act.spots[spotIndex]
-    if not nearby(src, spot) then
+    -- spotIndex is client-supplied: an out-of-range value would make `spot`
+    -- nil, and nearby(src, nil) fails open (returns true), letting a crafted
+    -- event gather from anywhere. Require a real spot before the range check.
+    local spot = type(spotIndex) == 'number' and act.spots[spotIndex] or nil
+    if not spot or not nearby(src, spot) then
         Bridge.Notify(src, act.label, 'You are not at a gathering spot.', 'error')
         return
     end

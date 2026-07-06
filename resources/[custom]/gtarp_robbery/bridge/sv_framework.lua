@@ -50,14 +50,18 @@ function Bridge.Distance(a, b)
     return #(vector3(a.x, a.y, a.z) - vector3(b.x, b.y, b.z))
 end
 
--- Is this player's ped currently holding a weapon (not unarmed)? Checked
--- server-side so Config.RequireWeapon can't be bypassed by calling the net
--- event directly — GetSelectedPedWeapon works on any synced ped, same as
--- GetEntityCoords above.
+-- Is this player's ped currently holding a weapon (not unarmed)? Best-effort
+-- server-side check for Config.RequireWeapon. Unlike GetEntityCoords,
+-- GetSelectedPedWeapon is not reliably a server native across builds — it may
+-- return a stale value or error — so the call is guarded: a failure fails open
+-- (treated as armed) rather than crashing the whole start handler and breaking
+-- robberies for everyone. Enforcement is therefore advisory, not a hard gate.
 function Bridge.IsArmed(src)
     local ped = GetPlayerPed(src)
     if not ped or ped == 0 then return false end
-    return GetSelectedPedWeapon(ped) ~= `WEAPON_UNARMED`
+    local ok, weapon = pcall(GetSelectedPedWeapon, ped)
+    if not ok then return true end
+    return weapon ~= `WEAPON_UNARMED`
 end
 
 -- List of server ids of on-duty police.

@@ -70,14 +70,18 @@ RegisterNetEvent('gtarp_mechanic:complete', function(vehNetId)
     if now - pend.startedAt < math.floor(Config.ProgressMs / 1000) then return end  -- skipped the repair animation
 
     if not Bridge.IsOnDutyMechanic(src) then return end
-    local veh = vehicleCoordsOk(src, vehNetId)
+    local veh, vc = vehicleCoordsOk(src, vehNetId)
     if not veh then
         Bridge.Notify(src, 'Mechanic', 'You left the vehicle.', 'error')
         return
     end
 
+    -- Re-validate the invoiced customer is still at the vehicle. Proximity was
+    -- only checked at `start`; without re-checking, a customer who drove/walked
+    -- off during the repair bar (or was never consenting) is still charged.
     local customer = pend.customer
-    if not Bridge.GetCoords(customer) then
+    local cc = Bridge.GetCoords(customer)
+    if not cc or Bridge.Distance(cc, vc) > Config.CustomerSearchRadius then
         Bridge.Notify(src, 'Mechanic', 'The customer is no longer around.', 'error')
         return
     end

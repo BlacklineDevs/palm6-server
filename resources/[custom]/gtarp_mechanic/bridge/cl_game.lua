@@ -71,8 +71,19 @@ function Game.ProgressBar(label, ms)
     })
 end
 
--- Fully repair a vehicle's engine, body, and visible deformation.
+-- Fully repair a vehicle's engine, body, and visible deformation. The repair
+-- runs on the mechanic's client for a vehicle they may not own (the customer,
+-- if seated, is the network owner), so request control first — otherwise the
+-- SetVehicle* writes don't sync and the customer is charged for a car that
+-- stays broken.
 function Game.RepairVehicle(veh)
+    if not NetworkHasControlOfEntity(veh) then
+        NetworkRequestControlOfEntity(veh)
+        local deadline = GetGameTimer() + 1000
+        while not NetworkHasControlOfEntity(veh) and GetGameTimer() < deadline do
+            Wait(0)
+        end
+    end
     SetVehicleFixed(veh)
     SetVehicleDeformationFixed(veh)
     SetVehicleUndriveable(veh, false)

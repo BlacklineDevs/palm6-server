@@ -61,9 +61,13 @@ function Bridge.Distance(a, b)
     return #(vector3(a.x, a.y, a.z) - vector3(b.x, b.y, b.z))
 end
 
--- Register the evidence-locker inventory stash with ox_inventory.
-function Bridge.RegisterStash(id, label, slots, maxWeight)
+-- Register the evidence-locker inventory stash with ox_inventory. `groups`
+-- and `coords` are passed through so ox_inventory itself enforces access:
+-- without them the stash is globally open and any client can bypass the
+-- server-side on-duty/proximity gate by calling ox_inventory:openInventory
+-- directly.
+function Bridge.RegisterStash(id, label, slots, maxWeight, groups, coords)
     pcall(function()
-        exports.ox_inventory:RegisterStash(id, label, slots or 50, maxWeight or 100000)
+        exports.ox_inventory:RegisterStash(id, label, slots or 50, maxWeight or 100000, false, groups, coords)
     end)
 end
