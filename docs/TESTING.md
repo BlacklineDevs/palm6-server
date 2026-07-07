@@ -384,7 +384,60 @@ via `qbx_properties` directly; there is nothing custom to verify here.
       PASSes; with a configured feed, exactly one `[devtest] contract
       probe` embed lands.
 
-## 24. Triage — common failures
+## 24. Insurance — `gtarp_insurance`
+
+- [ ] Boot banner: `Mors Mutual open — N active policy(ies), N claim(s)
+      processing; replay forensics ONLINE` (says `offline` if
+      `gtarp_replay` is stopped — the no-scene fraud signal must disable,
+      not fire).
+- [ ] `/insure [plate]` away from the Little Seoul desk → "insurance
+      desk" error. At the desk, on a vehicle you own → premium charged
+      from bank, policy row in `gtarp_insurance_policies`, second
+      `/insure` on the same plate → "already carries an active policy".
+- [ ] `/insure` on a plate you don't own → rejected (server reads
+      `player_vehicles`, not the client).
+- [ ] Damage claim: `/fileclaim [plate] damage` with the vehicle absent →
+      "bring the damaged vehicle into the city". With the vehicle present
+      but <25% damaged → adjuster floor error. Damage it hard →
+      claim files, payout = coverage × damage − deductible, lands in
+      bank ~10 min later (sweep marks `paid` BEFORE crediting).
+- [ ] Theft claim on a vehicle the DB says is stored → "stored, not
+      stolen". On an out vehicle that is spawned in the world → "on the
+      street right now". Out + nowhere in the world → files at full
+      coverage minus deductible.
+- [ ] Fraud: insure a vehicle and claim within the hour with no replay
+      scene near it → claim `flagged_paid`, `gtarp_evidence` case opened
+      (visible via `/mdtcase`), payout still lands.
+- [ ] `/policy` lists active policies with hours left + processing claims.
+- [ ] devtest boot: `insurance.GetSummary` shape PASSes; both
+      `gtarp_insurance_*` tables present.
+
+## 25. Police MDT — `gtarp_mdt`
+
+- [ ] Boot banner: `desk online — N active BOLO(s), N report(s) on file;
+      contract qbx_police_overrides, case system ONLINE` (contract says
+      `built-in defaults` if the override resource is stopped).
+- [ ] Every command refuses off-duty/civilian sources AND on-duty police
+      not carrying `mdt_tablet` (buy it at the armoury shop).
+- [ ] `/bolo test unit theft red sultan` → every on-duty officer gets the
+      notify; row in `gtarp_mdt_bolos` expiring per the contract
+      (default 60 min); with the police Discord feed configured, one
+      "BOLO #N issued" embed.
+- [ ] `/bolos` lists it with minutes left; `/boloclear [#]` resolves it;
+      `/bolos` again → "no active BOLOs" once expired or cleared.
+- [ ] `/mdtcases` lists open evidence cases (insurance fraud flags,
+      witness canvasses, counterfeit leads all appear here);
+      `/mdtcase [#]` prints status, opener, suspects, recent entries.
+- [ ] `/mdtreport 0 [20+ chars]` files standalone paperwork;
+      `/mdtreport [case#] [text]` also lands the text in the case file
+      (check `/mdtcase` shows a `[report/gtarp_mdt]` entry). Short text →
+      "write it up properly" error.
+- [ ] `enabled = false` in `qbx_police_overrides` `Config.MDT` → boot
+      prints the disabled line, no MDT commands exist.
+- [ ] devtest boot: `mdt.GetSummary` + `evidence.ListCases` PASS; both
+      `gtarp_mdt_*` tables present.
+
+## 26. Triage — common failures
 
 | Symptom | Likely cause |
 | --- | --- |

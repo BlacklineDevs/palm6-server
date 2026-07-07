@@ -90,6 +90,19 @@ local function testEvidence()
         check(type(full.suspects) == 'table' and #full.suspects >= 1, 'evidence.GetCase includes linked suspect')
     end
 
+    -- ListCases (additive export, consumed by gtarp_mdt) — probe case is
+    -- still open here, so it must appear in the open list.
+    try('evidence.ListCases', function()
+        local rows = exports.gtarp_evidence:ListCases('open', 25)
+        if check(type(rows) == 'table', 'evidence.ListCases returns table') then
+            local found = false
+            for _, r in ipairs(rows) do
+                if tonumber(r.id) == caseId then found = true break end
+            end
+            check(found, 'evidence.ListCases includes the open probe case')
+        end
+    end)
+
     -- cleanup (children first — no FK cascade assumed)
     pcall(function()
         MySQL.update.await('DELETE FROM gtarp_evidence WHERE case_id = ?', { caseId })
@@ -137,6 +150,17 @@ local function testShapes()
         end)
     else
         fail('eventguard — resource not started')
+    end
+
+    if resourceUp('gtarp_mdt') then
+        try('mdt.GetSummary', function()
+            local s = exports.gtarp_mdt:GetSummary()
+            check(type(s) == 'table' and type(s.activeBolos) == 'number'
+                and type(s.reports) == 'number',
+                'mdt.GetSummary returns {activeBolos, reports}')
+        end)
+    else
+        fail('mdt — resource not started')
     end
 
     if resourceUp('gtarp_insurance') then
@@ -233,6 +257,7 @@ local REQUIRED_TABLES = {
                           'gtarp_flashdrop_provenance', 'gtarp_flashdrop_listings' },
     gtarp_grind       = { 'grind_skill' },
     gtarp_insurance   = { 'gtarp_insurance_policies', 'gtarp_insurance_claims' },
+    gtarp_mdt         = { 'gtarp_mdt_bolos', 'gtarp_mdt_reports' },
     gtarp_pumpcoin    = { 'gtarp_pumpcoin_coins', 'gtarp_pumpcoin_holdings', 'gtarp_pumpcoin_trades' },
     gtarp_replay      = { 'gtarp_replay_scenes', 'gtarp_replay_participants' },
     gtarp_staff       = { 'audit_log' },

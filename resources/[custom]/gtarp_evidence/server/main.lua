@@ -321,6 +321,31 @@ exports('GetCase', function(caseId)
     return getCaseFull(caseId)
 end)
 
+-- ADDITIVE export (added for gtarp_mdt) — not one of the frozen four, but
+-- the same rule applies now that it exists: never change the signature.
+-- Read-only; no schema impact.
+--
+-- ListCases(status: string|nil, limit: number|nil) -> { { id, title,
+--   status, created_at, suspects }, ... }  (newest activity first;
+--   status defaults 'open', limit clamps to [1, 25])
+exports('ListCases', function(status, limit)
+    status = tostring(status or 'open')
+    limit = math.min(math.max(math.floor(tonumber(limit) or 10), 1), 25)
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await([[
+            SELECT c.id, c.title, c.status, c.created_at,
+                   (SELECT COUNT(*) FROM gtarp_evidence_suspects s WHERE s.case_id = c.id) AS suspects
+            FROM gtarp_evidence_cases c
+            WHERE c.status = ?
+            ORDER BY c.updated_at DESC
+            LIMIT ?
+        ]], { status, limit }) or {}
+    end)
+    for _, r in ipairs(rows) do r.created_at = tostring(r.created_at) end
+    return rows
+end)
+
 -- ---------------------------------------------------------------------------
 -- v1 commands (unchanged behavior)
 -- ---------------------------------------------------------------------------
