@@ -270,3 +270,22 @@ end)
 exports('GetSummary', function()
     return { open = unpaidCount(), settled = paidCount() }
 end)
+
+-- ADDITIVE export for gtarp_legal (expungement eligibility). Same
+-- never-change-signature rule.
+-- GetOpenFor(citizenid) -> { count, total } over unpaid + escalated.
+exports('GetOpenFor', function(citizenid)
+    citizenid = tostring(citizenid or '')
+    local out = { count = 0, total = 0 }
+    if citizenid == '' then return out end
+    pcall(function()
+        local r = MySQL.single.await(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM gtarp_citations WHERE citizenid = ? AND status IN ('unpaid','escalated')",
+            { citizenid })
+        if r then
+            out.count = tonumber(r.n) or 0
+            out.total = tonumber(r.total) or 0
+        end
+    end)
+    return out
+end)

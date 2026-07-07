@@ -481,7 +481,34 @@ via `qbx_properties` directly; there is nothing custom to verify here.
 - [ ] devtest boot: `citations.GetSummary` + `mdt.IssueWarrant`
       unknown-citizen rejection PASS; `gtarp_citations` table present.
 
-## 27. Triage — common failures
+## 27. Legal — `gtarp_legal`
+
+- [ ] Boot banner: `court open — N petition(s) before the court, N
+      granted all-time; records ONLINE`.
+- [ ] `/record` shows your unsealed bookings, open citations + total,
+      and warrant flag. `/record [someone-else]` as a civilian →
+      "only an on-duty lawyer" error; as an on-duty lawyer → the
+      client's sheet.
+- [ ] `/expunge [booking#]` away from the courthouse → courthouse
+      error. On a booking younger than 7 days → age error. With an
+      active warrant or open citations on the subject → gated with the
+      specific reason. Without $2500 bank → fee error.
+- [ ] Valid filing → fee debited, petition row `processing`, police
+      Discord feed post (if configured), court rules in ~10 min.
+- [ ] Granted → booking vanishes from `/record` (and from
+      `gtarp_mdt:GetBookingsFor`), stays in police desk totals; player
+      notified if online. Second `/expunge` on the same booking → "no
+      unsealed booking".
+- [ ] The trap: file a valid petition, then get cited before the ruling
+      → petition DENIED with the reason, fee kept, booking unsealed.
+- [ ] Lawyer flow: on-duty lawyer files for a client at the courthouse —
+      fee comes from the LAWYER's bank; recipe `/paylawyer` still works
+      for the RP settlement.
+- [ ] devtest boot: `legal.GetSummary`, `mdt.GetBooking` unknown-id
+      rejection, `citations.GetOpenFor` zeroed shape all PASS;
+      `gtarp_legal_petitions` table present.
+
+## 28. Triage — common failures
 
 | Symptom | Likely cause |
 | --- | --- |

@@ -182,6 +182,30 @@ local function testShapes()
         fail('citations — resource not started')
     end
 
+    if resourceUp('gtarp_legal') then
+        try('legal.GetSummary', function()
+            local s = exports.gtarp_legal:GetSummary()
+            check(type(s) == 'table' and type(s.processing) == 'number'
+                and type(s.granted) == 'number',
+                'legal.GetSummary returns {processing, granted}')
+        end)
+        if resourceUp('gtarp_mdt') then
+            try('mdt.GetBooking rejects unknown id', function()
+                local b = exports.gtarp_mdt:GetBooking(999999999)
+                check(b == nil, 'mdt.GetBooking returns nil for unknown booking')
+            end)
+        end
+        if resourceUp('gtarp_citations') then
+            try('citations.GetOpenFor shape', function()
+                local r = exports.gtarp_citations:GetOpenFor('devtest_no_such_citizen')
+                check(type(r) == 'table' and r.count == 0 and r.total == 0,
+                    'citations.GetOpenFor returns zeroed {count, total} for unknown citizen')
+            end)
+        end
+    else
+        fail('legal — resource not started')
+    end
+
     if resourceUp('gtarp_insurance') then
         try('insurance.GetSummary', function()
             local s = exports.gtarp_insurance:GetSummary()
@@ -277,6 +301,7 @@ local REQUIRED_TABLES = {
     gtarp_grind       = { 'grind_skill' },
     gtarp_citations   = { 'gtarp_citations' },
     gtarp_insurance   = { 'gtarp_insurance_policies', 'gtarp_insurance_claims' },
+    gtarp_legal       = { 'gtarp_legal_petitions' },
     gtarp_mdt         = { 'gtarp_mdt_bolos', 'gtarp_mdt_reports',
                           'gtarp_mdt_warrants', 'gtarp_mdt_bookings',
                           'gtarp_mdt_calls' },

@@ -717,6 +717,73 @@ exports('IssueWarrant', function(citizenid, reason, officerLabel)
     return issueWarrant(citizenid, citizenName, 0, reason, 'system', officerLabel)
 end)
 
+-- ADDITIVE exports for gtarp_legal (rap sheets + expungement). Sealed
+-- bookings stay in the table (police desk stats count them) but leave
+-- the rap-sheet surface. Same never-change-signature rule.
+
+-- GetBookingsFor(citizenid) -> { {id, charges, officer_name, booked_at,
+--   case_id}, ... } — unsealed only, newest first, capped at 25.
+exports('GetBookingsFor', function(citizenid)
+    citizenid = tostring(citizenid or '')
+    if citizenid == '' then return {} end
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await([[
+            SELECT id, charges, officer_name, booked_at, case_id
+            FROM gtarp_mdt_bookings
+            WHERE citizenid = ? AND sealed_at IS NULL
+            ORDER BY id DESC LIMIT 25
+        ]], { citizenid }) or {}
+    end)
+    for _, r in ipairs(rows) do r.booked_at = tostring(r.booked_at) end
+    return rows
+end)
+
+-- HasActiveWarrant(citizenid) -> boolean
+exports('HasActiveWarrant', function(citizenid)
+    return #activeWarrantsFor(tostring(citizenid or '')) > 0
+end)
+
+-- GetBooking(bookingId) -> { id, citizenid, charges, booked_at,
+--   age_hours, sealed } | nil
+exports('GetBooking', function(bookingId)
+    bookingId = tonumber(bookingId)
+    if not bookingId then return nil end
+    local row
+    pcall(function()
+        row = MySQL.single.await([[
+            SELECT id, citizenid, charges, booked_at,
+                   TIMESTAMPDIFF(HOUR, booked_at, NOW()) AS age_hours,
+                   (sealed_at IS NOT NULL) AS sealed
+            FROM gtarp_mdt_bookings WHERE id = ?
+        ]], { bookingId })
+    end)
+    if not row then return nil end
+    return {
+        id = row.id,
+        citizenid = row.citizenid,
+        charges = row.charges,
+        booked_at = tostring(row.booked_at),
+        age_hours = tonumber(row.age_hours) or 0,
+        sealed = (tonumber(row.sealed) or 0) == 1,
+    }
+end)
+
+-- SealBooking(bookingId) -> boolean — marks a booking expunged. Only
+-- gtarp_legal's granted petitions call this; idempotent-safe (sealing a
+-- sealed row returns false).
+exports('SealBooking', function(bookingId)
+    bookingId = tonumber(bookingId)
+    if not bookingId then return false end
+    local sealed = false
+    pcall(function()
+        sealed = MySQL.update.await(
+            'UPDATE gtarp_mdt_bookings SET sealed_at = NOW() WHERE id = ? AND sealed_at IS NULL',
+            { bookingId }) == 1
+    end)
+    return sealed
+end)
+
 ---Desk counts for devtest and future consumers.
 exports('GetSummary', function()
     return {
