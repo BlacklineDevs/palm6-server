@@ -316,6 +316,39 @@ local function refCase(src, raw)
     return caseId
 end
 
+-- Core issuance shared by /warrant and the IssueWarrant export. Caller
+-- has already validated the citizen, the reason bounds, and the
+-- one-active-per-citizen rule. Returns warrantId or nil.
+local function issueWarrant(target, citizenName, caseId, reason, issuerCid, officerLabel)
+    local ok, warrantId = pcall(function()
+        return MySQL.insert.await([[
+            INSERT INTO gtarp_mdt_warrants (citizenid, citizen_name, issued_by, officer_name, case_id, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ]], { target, citizenName, issuerCid, officerLabel, caseId > 0 and caseId or nil, reason })
+    end)
+    if not ok or not warrantId then return nil end
+
+    if caseId > 0 and Bridge.ResourceStarted('gtarp_evidence') then
+        pcall(function()
+            exports.gtarp_evidence:AppendEntry(caseId, 'warrant',
+                { warrant_id = warrantId, citizenid = target, reason = reason, officer = officerLabel },
+                'gtarp_mdt')
+        end)
+    end
+    Bridge.NotifyPolice(('Warrant #%d'):format(warrantId),
+        ('%s — %s'):format(citizenName, reason), 'inform')
+    if Bridge.ResourceStarted('gtarp_discord') then
+        pcall(function()
+            exports.gtarp_discord:Announce('police', {
+                title = ('Warrant #%d issued'):format(warrantId),
+                description = ('%s — %s'):format(citizenName, reason),
+                fields = { { name = 'Officer', value = officerLabel, inline = true } },
+            })
+        end)
+    end
+    return warrantId
+end
+
 -- /warrant <citizenid> <case#|0> <reason...>
 local function cmdWarrant(src, args)
     local cid = gate(src, 'warrant')
@@ -345,35 +378,10 @@ local function cmdWarrant(src, args)
         return
     end
 
-    local officer = Bridge.GetPlayerName(src)
-    local ok, warrantId = pcall(function()
-        return MySQL.insert.await([[
-            INSERT INTO gtarp_mdt_warrants (citizenid, citizen_name, issued_by, officer_name, case_id, reason)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ]], { target, citizenName, cid, officer, caseId > 0 and caseId or nil, reason })
-    end)
-    if not ok or not warrantId then
+    local warrantId = issueWarrant(target, citizenName, caseId, reason, cid, Bridge.GetPlayerName(src))
+    if not warrantId then
         Bridge.Notify(src, 'MDT', 'Warrant system is down — nothing was issued.', 'error')
         return
-    end
-
-    if caseId > 0 and Bridge.ResourceStarted('gtarp_evidence') then
-        pcall(function()
-            exports.gtarp_evidence:AppendEntry(caseId, 'warrant',
-                { warrant_id = warrantId, citizenid = target, reason = reason, officer = officer },
-                'gtarp_mdt')
-        end)
-    end
-    Bridge.NotifyPolice(('Warrant #%d'):format(warrantId),
-        ('%s — %s'):format(citizenName, reason), 'inform')
-    if Bridge.ResourceStarted('gtarp_discord') then
-        pcall(function()
-            exports.gtarp_discord:Announce('police', {
-                title = ('Warrant #%d issued'):format(warrantId),
-                description = ('%s — %s'):format(citizenName, reason),
-                fields = { { name = 'Officer', value = officer, inline = true } },
-            })
-        end)
     end
     dbg(('warrant #%d on %s by %s'):format(warrantId, target, cid))
 end
@@ -590,6 +598,29 @@ AddEventHandler('onResourceStart', function(resource)
         :format(activeBoloCount(), activeWarrantCount(), reportCount(), bookingCount(),
             Bridge.GetMDTContract() and 'qbx_police_overrides' or 'built-in defaults',
             Bridge.ResourceStarted('gtarp_evidence') and 'ONLINE' or 'offline'))
+end)
+
+-- ADDITIVE export — sibling systems (gtarp_citations' overdue escalation)
+-- put warrants in the ledger without touching its tables. Same
+-- never-change-signature rule as gtarp_evidence's exports.
+--
+-- IssueWarrant(citizenid: string, reason: string, officerLabel: string)
+--   -> warrantId: number|nil
+-- nil when: no such citizen, citizen already has an active warrant, or
+-- reason out of bounds. No case linkage from this path (pass through
+-- /warrant for that).
+exports('IssueWarrant', function(citizenid, reason, officerLabel)
+    citizenid = tostring(citizenid or '')
+    reason = tostring(reason or '')
+    officerLabel = tostring(officerLabel or 'System')
+    if citizenid == '' or #reason < Config.Warrants.ReasonMinChars
+        or #reason > Config.Warrants.ReasonMaxChars then
+        return nil
+    end
+    local citizenName = Bridge.GetCitizenName(citizenid)
+    if not citizenName then return nil end
+    if #activeWarrantsFor(citizenid) > 0 then return nil end
+    return issueWarrant(citizenid, citizenName, 0, reason, 'system', officerLabel)
 end)
 
 ---Desk counts for devtest and future consumers.

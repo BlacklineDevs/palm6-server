@@ -164,6 +164,24 @@ local function testShapes()
         fail('mdt — resource not started')
     end
 
+    if resourceUp('gtarp_citations') then
+        try('citations.GetSummary', function()
+            local s = exports.gtarp_citations:GetSummary()
+            check(type(s) == 'table' and type(s.open) == 'number'
+                and type(s.settled) == 'number',
+                'citations.GetSummary returns {open, settled}')
+        end)
+        if resourceUp('gtarp_mdt') then
+            try('mdt.IssueWarrant rejects unknown citizen', function()
+                local w = exports.gtarp_mdt:IssueWarrant('devtest_no_such_citizen',
+                    'devtest probe — must not issue', 'devtest')
+                check(w == nil, 'mdt.IssueWarrant returns nil for unknown citizen')
+            end)
+        end
+    else
+        fail('citations — resource not started')
+    end
+
     if resourceUp('gtarp_insurance') then
         try('insurance.GetSummary', function()
             local s = exports.gtarp_insurance:GetSummary()
@@ -257,6 +275,7 @@ local REQUIRED_TABLES = {
     gtarp_flashdrop   = { 'gtarp_flashdrop_drops', 'gtarp_flashdrop_serials',
                           'gtarp_flashdrop_provenance', 'gtarp_flashdrop_listings' },
     gtarp_grind       = { 'grind_skill' },
+    gtarp_citations   = { 'gtarp_citations' },
     gtarp_insurance   = { 'gtarp_insurance_policies', 'gtarp_insurance_claims' },
     gtarp_mdt         = { 'gtarp_mdt_bolos', 'gtarp_mdt_reports',
                           'gtarp_mdt_warrants', 'gtarp_mdt_bookings' },

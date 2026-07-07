@@ -450,7 +450,33 @@ via `qbx_properties` directly; there is nothing custom to verify here.
 - [ ] devtest boot: `mdt.GetSummary` + `evidence.ListCases` PASS; all
       four `gtarp_mdt_*` tables present.
 
-## 26. Triage — common failures
+## 26. Citations — `gtarp_citations`
+
+- [ ] Boot banner: `ledger open — N open, N settled; escalation ONLINE
+      (gtarp_mdt warrants)` (`off` if gtarp_mdt stopped or Enabled=false).
+- [ ] `/cite [citizenid] [amount] [reason]` refuses civilians, off-duty,
+      and officers without `mdt_tablet`; refuses amounts outside
+      $25-5000 and fake citizenids. Valid cite → row in
+      `gtarp_citations`, cited player notified if online.
+- [ ] `/fines` as the cited player lists it with hours left and total;
+      other players see "no outstanding fines".
+- [ ] `/payfine [#]` away from city hall → desk error. At city hall
+      without funds → "need $N in the bank". With funds → bank debited,
+      row flips `paid`, police society account credited
+      (Renewed-Banking).
+- [ ] Escalation: set a citation's `due_at` into the past in the DB,
+      wait one sweep (≤5 min) → row flips `escalated` + `warrant_id`
+      set, warrant appears in `/warrants` as "City Hall Collections",
+      cited player notified if online. Paying the escalated fine works
+      but does NOT auto-drop the warrant (deliberate — police RP).
+- [ ] Citizen already carrying an active warrant: overdue citation still
+      flips to `escalated` (no second warrant, debt stays open).
+- [ ] Recipe billing unaffected: on-the-spot police bill dialog and
+      radar fines still work exactly as before.
+- [ ] devtest boot: `citations.GetSummary` + `mdt.IssueWarrant`
+      unknown-citizen rejection PASS; `gtarp_citations` table present.
+
+## 27. Triage — common failures
 
 | Symptom | Likely cause |
 | --- | --- |
