@@ -432,10 +432,23 @@ via `qbx_properties` directly; there is nothing custom to verify here.
       `/mdtreport [case#] [text]` also lands the text in the case file
       (check `/mdtcase` shows a `[report/gtarp_mdt]` entry). Short text →
       "write it up properly" error.
+- [ ] `/warrant [citizenid] 0 [reason]` on a real citizen (grab a
+      citizenid from `/mdtcase` suspects or the players table) → officers
+      notified, row in `gtarp_mdt_warrants`; repeat on the same citizen →
+      "already has active warrant" error. Fake citizenid → "no citizen
+      with that id".
+- [ ] `/warrants` lists it with age; `/mdtcase` on a case whose suspect
+      has one shows `ACTIVE WARRANT #N` on the suspect line.
+- [ ] `/book [citizenid] [case#] [charges]` → booking row filed, the
+      citizen's active warrants flip to `served`, the case file gains a
+      `[booking/gtarp_mdt]` entry, and the booked player (if online) gets
+      the notify. `/warrantclear [#]` flips one to `dropped` instead.
+- [ ] Physical side unaffected: recipe `/cuff` `/jail` `/unjail` still
+      work exactly as before (this layer never touches them).
 - [ ] `enabled = false` in `qbx_police_overrides` `Config.MDT` → boot
       prints the disabled line, no MDT commands exist.
-- [ ] devtest boot: `mdt.GetSummary` + `evidence.ListCases` PASS; both
-      `gtarp_mdt_*` tables present.
+- [ ] devtest boot: `mdt.GetSummary` + `evidence.ListCases` PASS; all
+      four `gtarp_mdt_*` tables present.
 
 ## 26. Triage — common failures
 

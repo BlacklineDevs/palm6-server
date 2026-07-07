@@ -74,6 +74,43 @@ function Bridge.Reply(src, lines)
     end
 end
 
+-- Resolve a citizenid to a display name, online or offline, or nil when
+-- no such citizen exists. Offline path reads the framework's players
+-- table (charinfo JSON) — framework schema knowledge, so it lives here.
+function Bridge.GetCitizenName(citizenid)
+    for _, src in ipairs(GetPlayers()) do
+        src = tonumber(src)
+        local p = getPlayer(src)
+        if p and p.PlayerData and p.PlayerData.citizenid == citizenid then
+            return Bridge.GetPlayerName(src)
+        end
+    end
+    local name
+    pcall(function()
+        local row = MySQL.single.await('SELECT charinfo FROM players WHERE citizenid = ?', { citizenid })
+        if row and row.charinfo then
+            local ci = json.decode(row.charinfo)
+            if type(ci) == 'table' then
+                name = ('%s %s'):format(ci.firstname or '', ci.lastname or '')
+                    :gsub('^%s+', ''):gsub('%s+$', '')
+            end
+        end
+    end)
+    return name
+end
+
+-- Server source for an online character, or nil.
+function Bridge.GetSourceByCitizenId(citizenid)
+    for _, src in ipairs(GetPlayers()) do
+        src = tonumber(src)
+        local p = getPlayer(src)
+        if p and p.PlayerData and p.PlayerData.citizenid == citizenid then
+            return src
+        end
+    end
+    return nil
+end
+
 -- The qbx_police_overrides GetMDT() contract, or nil when that resource
 -- isn't running (caller falls back to Config.MDTDefaults).
 function Bridge.GetMDTContract()

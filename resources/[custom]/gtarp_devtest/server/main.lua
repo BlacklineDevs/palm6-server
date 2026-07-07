@@ -156,8 +156,9 @@ local function testShapes()
         try('mdt.GetSummary', function()
             local s = exports.gtarp_mdt:GetSummary()
             check(type(s) == 'table' and type(s.activeBolos) == 'number'
-                and type(s.reports) == 'number',
-                'mdt.GetSummary returns {activeBolos, reports}')
+                and type(s.reports) == 'number' and type(s.activeWarrants) == 'number'
+                and type(s.bookings) == 'number',
+                'mdt.GetSummary returns {activeBolos, reports, activeWarrants, bookings}')
         end)
     else
         fail('mdt — resource not started')
@@ -257,7 +258,8 @@ local REQUIRED_TABLES = {
                           'gtarp_flashdrop_provenance', 'gtarp_flashdrop_listings' },
     gtarp_grind       = { 'grind_skill' },
     gtarp_insurance   = { 'gtarp_insurance_policies', 'gtarp_insurance_claims' },
-    gtarp_mdt         = { 'gtarp_mdt_bolos', 'gtarp_mdt_reports' },
+    gtarp_mdt         = { 'gtarp_mdt_bolos', 'gtarp_mdt_reports',
+                          'gtarp_mdt_warrants', 'gtarp_mdt_bookings' },
     gtarp_pumpcoin    = { 'gtarp_pumpcoin_coins', 'gtarp_pumpcoin_holdings', 'gtarp_pumpcoin_trades' },
     gtarp_replay      = { 'gtarp_replay_scenes', 'gtarp_replay_participants' },
     gtarp_staff       = { 'audit_log' },

@@ -28,6 +28,19 @@ running and falls back to identical built-in defaults when it isn't.
 - `/mdtreport [case# or 0] [text]` — written paperwork (contract minimum
   length, default 20 chars). Case-linked reports also land in the evidence
   file itself via the frozen `AppendEntry` export.
+- `/warrant [citizenid] [case# or 0] [reason]` — open an arrest order on a
+  real citizen (server-validated against the character records, online or
+  offline; one active warrant per citizen). Broadcast like a BOLO;
+  case-linked warrants land in the file.
+- `/warrants` — active warrants with age and case. `/warrantclear [#]`
+  drops one without an arrest.
+- `/book [citizenid] [case# or 0] [charges]` — arrest paperwork. Files the
+  booking, auto-serves the citizen's active warrants, appends to the case,
+  and tells the booked player if they're online. The PHYSICAL side
+  (`/cuff`, `/jail`) stays the recipe's `qbx_police` — this is the paper
+  trail it never wrote.
+- `/mdtcase` suspect lines flag `ACTIVE WARRANT #N` on identified
+  suspects, closing the loop: fraud flag → case file → warrant → booking.
 
 ## Design notes
 
@@ -47,10 +60,18 @@ running and falls back to identical built-in defaults when it isn't.
 
 ## Dup-gate (2026-07-07)
 
-The recipe ships NO MDT, warrant, BOLO, or report system anywhere:
-`grep -riE "warrant|\bmdt\b|bolo"` over deployed `[qbx]`/`[ox]`/
-`[standalone]` matches nothing in `qbx_police` (its only hits in the
-tree are unrelated words). The `mdt_tablet` item and the
-`qbx_police_overrides` `Config.MDT` block are the documented-but-never-
-built layer — same class as the repair-invoice stream that became
-`gtarp_mechanic`.
+The recipe ships NO MDT, warrant, BOLO, booking, or report system
+anywhere: `grep -riE "warrant|\bmdt\b|bolo|booking"` over deployed
+`[qbx]`/`[ox]`/`[standalone]` matches only MIT license text. The
+`mdt_tablet` item and the `qbx_police_overrides` `Config.MDT` block are
+the documented-but-never-built layer — same class as the repair-invoice
+stream that became `gtarp_mechanic`.
+
+What the recipe DOES own (and this resource deliberately does not
+touch): the physical enforcement verbs — `/cuff`, `/sc`, `/escort`,
+`/jail`, `/unjail` — plus plate tooling (`/flagplate`, `/plateinfo`) and
+property seizure (`/seizecash`, `/impound`, `/depot`), all in
+`qbx_police/server/commands.lua`. Its `/jail` is a pure client event
+with no database record — warrants and bookings here are the paperwork
+that arrest never filed. BOLOs (freeform APBs on people/situations) are
+distinct from `/flagplate` (plate-keyed ANPR flags); both coexist.

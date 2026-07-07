@@ -86,6 +86,7 @@ local function cmdMdt(src)
     local lines = {}
     local bolos = activeBoloCount()
     lines[#lines + 1] = ('%d active BOLO(s) — /bolos to list, /bolo [text] to issue'):format(bolos)
+    lines[#lines + 1] = ('%d active warrant(s) — /warrants to list'):format(activeWarrantCount())
     local cases = openCases(Config.Cases.ListLimit)
     if cases then
         lines[#lines + 1] = ('%d open case file(s)%s — /mdtcases to list'):format(
@@ -239,9 +240,13 @@ local function cmdCase(src, args)
     lines[#lines + 1] = ('case %d [%s] %s'):format(c.id, c.status, c.title)
     lines[#lines + 1] = ('opened %s by %s'):format(tostring(c.created_at), c.created_by_name ~= '' and c.created_by_name or c.created_by)
     for _, s in ipairs(c.suspects or {}) do
-        lines[#lines + 1] = s.citizenid
-            and ('suspect: citizen %s'):format(s.citizenid)
-            or ('suspect (unidentified): %s'):format(tostring(s.descriptor))
+        if s.citizenid then
+            local w = activeWarrantsFor(s.citizenid)
+            lines[#lines + 1] = ('suspect: citizen %s%s'):format(s.citizenid,
+                #w > 0 and (' — ACTIVE WARRANT #%d'):format(w[1].id) or '')
+        else
+            lines[#lines + 1] = ('suspect (unidentified): %s'):format(tostring(s.descriptor))
+        end
     end
     local shown = 0
     for _, e in ipairs(c.entries or {}) do
@@ -255,6 +260,249 @@ local function cmdCase(src, args)
         lines[#lines + 1] = ('… %d more entr(ies) on file'):format(#c.entries - shown)
     end
     Bridge.Reply(src, lines)
+end
+
+-- ---------------------------------------------------------------------------
+-- Warrants (v0.2.0) — the paper trail on top of qbx_police's physical
+-- /cuff //jail. A warrant is an open order naming a citizen; a booking is
+-- the paperwork filed when the arrest actually happens, and it auto-serves
+-- that citizen's active warrants.
+-- ---------------------------------------------------------------------------
+
+local function activeWarrantCount()
+    local n = 0
+    pcall(function()
+        local r = MySQL.single.await(
+            "SELECT COUNT(*) AS n FROM gtarp_mdt_warrants WHERE status = 'active'")
+        n = r and tonumber(r.n) or 0
+    end)
+    return n
+end
+
+local function bookingCount()
+    local n = 0
+    pcall(function()
+        local r = MySQL.single.await('SELECT COUNT(*) AS n FROM gtarp_mdt_bookings')
+        n = r and tonumber(r.n) or 0
+    end)
+    return n
+end
+
+local function activeWarrantsFor(citizenid)
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await(
+            "SELECT id, reason FROM gtarp_mdt_warrants WHERE citizenid = ? AND status = 'active'",
+            { citizenid }) or {}
+    end)
+    return rows
+end
+
+-- Optional case reference shared by /warrant and /book: 0 = none, >0 must
+-- be a real case. Returns validated caseId (0 for none) or nil on error.
+local function refCase(src, raw)
+    local caseId = tonumber(raw)
+    if not caseId or caseId < 0 then
+        return nil
+    end
+    if caseId > 0 then
+        local c
+        pcall(function() c = exports.gtarp_evidence:GetCase(caseId) end)
+        if type(c) ~= 'table' then
+            Bridge.Notify(src, 'MDT', 'No case file with that number (use 0 for none).', 'error')
+            return nil
+        end
+    end
+    return caseId
+end
+
+-- /warrant <citizenid> <case#|0> <reason...>
+local function cmdWarrant(src, args)
+    local cid = gate(src, 'warrant')
+    if not cid then return end
+    local target = tostring(args[1] or '')
+    local caseId = refCase(src, args[2])
+    local reason = table.concat(args, ' ', 3):gsub('^%s+', ''):gsub('%s+$', '')
+    if target == '' or not caseId or #reason < Config.Warrants.ReasonMinChars then
+        Bridge.Notify(src, 'MDT', 'Usage: /warrant [citizenid] [case# or 0] [reason]', 'error')
+        return
+    end
+    if #reason > Config.Warrants.ReasonMaxChars then
+        Bridge.Notify(src, 'MDT',
+            ('Warrant reason caps at %d characters.'):format(Config.Warrants.ReasonMaxChars), 'error')
+        return
+    end
+
+    local citizenName = Bridge.GetCitizenName(target)
+    if not citizenName then
+        Bridge.Notify(src, 'MDT', 'No citizen with that id on record.', 'error')
+        return
+    end
+    local existing = activeWarrantsFor(target)
+    if #existing > 0 then
+        Bridge.Notify(src, 'MDT',
+            ('Citizen already has active warrant #%d — /book serves it.'):format(existing[1].id), 'error')
+        return
+    end
+
+    local officer = Bridge.GetPlayerName(src)
+    local ok, warrantId = pcall(function()
+        return MySQL.insert.await([[
+            INSERT INTO gtarp_mdt_warrants (citizenid, citizen_name, issued_by, officer_name, case_id, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ]], { target, citizenName, cid, officer, caseId > 0 and caseId or nil, reason })
+    end)
+    if not ok or not warrantId then
+        Bridge.Notify(src, 'MDT', 'Warrant system is down — nothing was issued.', 'error')
+        return
+    end
+
+    if caseId > 0 and Bridge.ResourceStarted('gtarp_evidence') then
+        pcall(function()
+            exports.gtarp_evidence:AppendEntry(caseId, 'warrant',
+                { warrant_id = warrantId, citizenid = target, reason = reason, officer = officer },
+                'gtarp_mdt')
+        end)
+    end
+    Bridge.NotifyPolice(('Warrant #%d'):format(warrantId),
+        ('%s — %s'):format(citizenName, reason), 'inform')
+    if Bridge.ResourceStarted('gtarp_discord') then
+        pcall(function()
+            exports.gtarp_discord:Announce('police', {
+                title = ('Warrant #%d issued'):format(warrantId),
+                description = ('%s — %s'):format(citizenName, reason),
+                fields = { { name = 'Officer', value = officer, inline = true } },
+            })
+        end)
+    end
+    dbg(('warrant #%d on %s by %s'):format(warrantId, target, cid))
+end
+
+-- /warrants — active list
+local function cmdWarrants(src)
+    if not gate(src, 'warrants') then return end
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await([[
+            SELECT id, citizenid, citizen_name, reason, case_id,
+                   TIMESTAMPDIFF(HOUR, created_at, NOW()) AS age_h
+            FROM gtarp_mdt_warrants WHERE status = 'active'
+            ORDER BY id DESC LIMIT ?
+        ]], { Config.Warrants.ListLimit }) or {}
+    end)
+    if #rows == 0 then
+        Bridge.Reply(src, { 'no active warrants' })
+        return
+    end
+    local lines = {}
+    for _, w in ipairs(rows) do
+        lines[#lines + 1] = ('#%d %s (%s) — %s [%dh old%s]'):format(
+            w.id, w.citizen_name, w.citizenid, w.reason,
+            tonumber(w.age_h) or 0,
+            w.case_id and (', case ' .. w.case_id) or '')
+    end
+    lines[#lines + 1] = '/book [citizenid] [case# or 0] [charges] serves — /warrantclear [#] drops'
+    Bridge.Reply(src, lines)
+end
+
+-- /warrantclear <id> — drop without an arrest
+local function cmdWarrantClear(src, args)
+    local cid = gate(src, 'warrantclear')
+    if not cid then return end
+    local id = tonumber(args[1])
+    if not id then
+        Bridge.Notify(src, 'MDT', 'Usage: /warrantclear [warrant #]', 'error')
+        return
+    end
+    local cleared = false
+    pcall(function()
+        cleared = MySQL.update.await(
+            "UPDATE gtarp_mdt_warrants SET status = 'dropped', resolved_at = NOW(), resolved_by = ? WHERE id = ? AND status = 'active'",
+            { cid, id }) == 1
+    end)
+    if cleared then
+        Bridge.Notify(src, 'MDT', ('Warrant #%d dropped.'):format(id), 'success')
+    else
+        Bridge.Notify(src, 'MDT', 'No active warrant with that number.', 'error')
+    end
+end
+
+-- /book <citizenid> <case#|0> <charges...> — arrest paperwork; auto-serves
+-- the citizen's active warrants. The physical jailing stays qbx_police's.
+local function cmdBook(src, args)
+    local cid = gate(src, 'book')
+    if not cid then return end
+    local target = tostring(args[1] or '')
+    local caseId = refCase(src, args[2])
+    local charges = table.concat(args, ' ', 3):gsub('^%s+', ''):gsub('%s+$', '')
+    if target == '' or not caseId or #charges < Config.Warrants.ChargesMin then
+        Bridge.Notify(src, 'MDT', 'Usage: /book [citizenid] [case# or 0] [charges]', 'error')
+        return
+    end
+    if #charges > Config.Warrants.ChargesMax then
+        Bridge.Notify(src, 'MDT',
+            ('Charges text caps at %d characters.'):format(Config.Warrants.ChargesMax), 'error')
+        return
+    end
+
+    local citizenName = Bridge.GetCitizenName(target)
+    if not citizenName then
+        Bridge.Notify(src, 'MDT', 'No citizen with that id on record.', 'error')
+        return
+    end
+
+    local warrants = activeWarrantsFor(target)
+    local officer = Bridge.GetPlayerName(src)
+    local ok, bookingId = pcall(function()
+        return MySQL.insert.await([[
+            INSERT INTO gtarp_mdt_bookings (citizenid, citizen_name, booked_by, officer_name, case_id, warrant_id, charges)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ]], { target, citizenName, cid, officer,
+              caseId > 0 and caseId or nil,
+              warrants[1] and warrants[1].id or nil, charges })
+    end)
+    if not ok or not bookingId then
+        Bridge.Notify(src, 'MDT', 'Booking system is down — nothing was filed.', 'error')
+        return
+    end
+
+    local served = 0
+    for _, w in ipairs(warrants) do
+        pcall(function()
+            served = served + (tonumber(MySQL.update.await(
+                "UPDATE gtarp_mdt_warrants SET status = 'served', resolved_at = NOW(), resolved_by = ? WHERE id = ? AND status = 'active'",
+                { cid, w.id })) or 0)
+        end)
+    end
+
+    if caseId > 0 and Bridge.ResourceStarted('gtarp_evidence') then
+        pcall(function()
+            exports.gtarp_evidence:AppendEntry(caseId, 'booking',
+                { booking_id = bookingId, citizenid = target, charges = charges,
+                  officer = officer, warrants_served = served }, 'gtarp_mdt')
+        end)
+    end
+
+    local tSrc = Bridge.GetSourceByCitizenId(target)
+    if tSrc then
+        Bridge.Notify(tSrc, 'Booking', ('You were booked: %s'):format(charges), 'error')
+    end
+    if Bridge.ResourceStarted('gtarp_discord') then
+        pcall(function()
+            exports.gtarp_discord:Announce('police', {
+                title = ('Booking #%d — %s'):format(bookingId, citizenName),
+                description = charges,
+                fields = {
+                    { name = 'Officer', value = officer, inline = true },
+                    { name = 'Warrants served', value = tostring(served), inline = true },
+                },
+            })
+        end)
+    end
+    Bridge.Notify(src, 'MDT',
+        ('Booking #%d filed on %s%s.'):format(bookingId, citizenName,
+            served > 0 and (', %d warrant(s) served'):format(served) or ''), 'success')
+    dbg(('booking #%d on %s by %s (%d warrants served)'):format(bookingId, target, cid, served))
 end
 
 -- ---------------------------------------------------------------------------
@@ -333,14 +581,23 @@ AddEventHandler('onResourceStart', function(resource)
     Bridge.RegisterCommand('mdtcases', function(source) cmdCases(source) end)
     Bridge.RegisterCommand('mdtcase', function(source, args) cmdCase(source, args) end)
     Bridge.RegisterCommand('mdtreport', function(source, args) cmdReport(source, args) end)
+    Bridge.RegisterCommand('warrant', function(source, args) cmdWarrant(source, args) end)
+    Bridge.RegisterCommand('warrants', function(source) cmdWarrants(source) end)
+    Bridge.RegisterCommand('warrantclear', function(source, args) cmdWarrantClear(source, args) end)
+    Bridge.RegisterCommand('book', function(source, args) cmdBook(source, args) end)
 
-    print(('[gtarp_mdt] desk online — %d active BOLO(s), %d report(s) on file; contract %s, case system %s')
-        :format(activeBoloCount(), reportCount(),
+    print(('[gtarp_mdt] desk online — %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s); contract %s, case system %s')
+        :format(activeBoloCount(), activeWarrantCount(), reportCount(), bookingCount(),
             Bridge.GetMDTContract() and 'qbx_police_overrides' or 'built-in defaults',
             Bridge.ResourceStarted('gtarp_evidence') and 'ONLINE' or 'offline'))
 end)
 
----BOLO/report counts for devtest and future consumers.
+---Desk counts for devtest and future consumers.
 exports('GetSummary', function()
-    return { activeBolos = activeBoloCount(), reports = reportCount() }
+    return {
+        activeBolos = activeBoloCount(),
+        reports = reportCount(),
+        activeWarrants = activeWarrantCount(),
+        bookings = bookingCount(),
+    }
 end)

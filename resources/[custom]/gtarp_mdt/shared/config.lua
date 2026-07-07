@@ -41,13 +41,27 @@ Config.Cases = {
 -- Report body upper bound (lower bound comes from the GetMDT contract).
 Config.ReportMaxChars = 1000
 
+-- Warrants + bookings (v0.2.0). The recipe's qbx_police owns the
+-- PHYSICAL side (/cuff /jail) — this is the paper trail on top of it.
+Config.Warrants = {
+    ReasonMinChars = 5,
+    ReasonMaxChars = 200,
+    ListLimit      = 8,
+    ChargesMin     = 5,     -- /book charges text bounds
+    ChargesMax     = 500,
+}
+
 -- Per-source command cooldowns (seconds).
 Config.RateLimits = {
-    mdt       = 2,
-    bolo      = 10,
-    bolos     = 2,
-    boloclear = 2,
-    mdtcases  = 2,
-    mdtcase   = 2,
-    mdtreport = 10,
+    mdt          = 2,
+    bolo         = 10,
+    bolos        = 2,
+    boloclear    = 2,
+    mdtcases     = 2,
+    mdtcase      = 2,
+    mdtreport    = 10,
+    warrant      = 10,
+    warrants     = 2,
+    warrantclear = 2,
+    book         = 10,
 }
