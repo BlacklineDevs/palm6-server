@@ -150,6 +150,10 @@ mods by the ACE matrix in `custom.cfg`.
       sampled (`Bridge` wraps `GetGameTimer`).
 - [ ] If a report webhook/convar is configured, a perf report posts on the
       configured cadence.
+- [ ] `/diag` from the txAdmin console prints three `[gtarp_perf]` lines
+      (resource states / perf summary / eventguard violations). In-game as
+      admin or mod it prints the same three lines to chat; a citizen
+      without `command.diag` gets the standard access-denied response.
 
 ## 10. Economy & world config — `[config_overrides]`
 

@@ -32,3 +32,10 @@ Config.WebhookHitchThreshold = 5
 
 -- Convar with the perf webhook URL.
 Config.WebhookConvar = 'gtarp:perf_webhook'
+
+-- Staff diagnostic command (ACE-restricted, needs `command.diag` — granted
+-- to group.admin / group.mod in custom.cfg). One line each for: custom
+-- resource states, the perf summary, and eventguard violations among online
+-- players. Consumes the GetSummary export so the meter is readable in-game,
+-- not just in the console report cadence. Set false to disable.
+Config.DiagCommand = 'diag'

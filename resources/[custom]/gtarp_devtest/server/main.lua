@@ -144,6 +144,19 @@ local function testShapes()
             local s = exports.gtarp_perf:GetSummary()
             check(type(s) == 'table', 'perf.GetSummary returns table')
         end)
+        try('perf.RunDiag', function()
+            local lines = exports.gtarp_perf:RunDiag()
+            check(type(lines) == 'table' and #lines >= 3,
+                ('perf.RunDiag returns >=3 readout lines (got %s)')
+                    :format(type(lines) == 'table' and tostring(#lines) or type(lines)))
+        end)
+        -- Also dispatch the actual /diag command through the ACE layer
+        -- (resource.gtarp_devtest is granted command.diag in custom.cfg —
+        -- without it this is silently access-denied, which is exactly the
+        -- regression this line exists to catch in the boot log).
+        try('perf — /diag console invocation', function()
+            ExecuteCommand('diag')
+        end)
     else
         fail('perf — resource not started')
     end

@@ -77,10 +77,64 @@ CreateThread(function()
     end
 end)
 
+-- ---------------------------------------------------------------------------
+-- /diag — one-glance custom-layer health for staff. ACE-restricted
+-- (command.diag). Aggregates only data this layer already owns: resource
+-- states, the sampler summary, and eventguard's per-player violation counts.
+-- ---------------------------------------------------------------------------
+local function diagLines()
+    local lines = {}
+
+    local states = Bridge.CustomResources('gtarp_')
+    local up, down = 0, {}
+    for name, state in pairs(states) do
+        if state == 'started' then up = up + 1 else down[#down + 1] = ('%s(%s)'):format(name, state) end
+    end
+    table.sort(down)
+    lines[#lines + 1] = ('resources: %d gtarp up%s'):format(
+        up, #down > 0 and (' — DOWN: ' .. table.concat(down, ', ')) or '')
+
+    local s = summarize()
+    lines[#lines + 1] = s
+        and ('perf: p95=%dms p99=%dms max=%dms hitches=%d (last %d samples)'):format(
+            s.p95, s.p99, s.max, s.hitches, s.count)
+        or 'perf: no samples yet'
+
+    local players = Bridge.GetPlayers()
+    if Bridge.ResourceState('gtarp_eventguard') == 'started' then
+        local total, offenders = 0, {}
+        for _, pid in ipairs(players) do
+            local ok, v = pcall(function()
+                return exports.gtarp_eventguard:GetViolations(tonumber(pid))
+            end)
+            v = ok and tonumber(v) or 0
+            if v > 0 then
+                total = total + v
+                offenders[#offenders + 1] = ('src %s: %d'):format(pid, v)
+            end
+        end
+        lines[#lines + 1] = ('eventguard: %d violation(s) across %d online player(s)%s'):format(
+            total, #players, #offenders > 0 and (' — ' .. table.concat(offenders, ', ')) or '')
+    else
+        lines[#lines + 1] = ('eventguard: NOT RUNNING — %d online player(s) unguarded'):format(#players)
+    end
+
+    return lines
+end
+
+local function diag(src)
+    Bridge.Reply(src, diagLines())
+end
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    print(('[gtarp_perf] sampling every %dms, reporting every %dm, hitch>=%dms'):format(
-        Config.SamplePeriodMs, Config.ReportEveryMinutes, Config.HitchThresholdMs))
+    if Config.DiagCommand then
+        Bridge.RegisterCommand(Config.DiagCommand, function(source) diag(source) end)
+    end
+    print(('[gtarp_perf] sampling every %dms, reporting every %dm, hitch>=%dms%s'):format(
+        Config.SamplePeriodMs, Config.ReportEveryMinutes, Config.HitchThresholdMs,
+        Config.DiagCommand and (' — /' .. Config.DiagCommand .. ' online') or ''))
 end)
 
 exports('GetSummary', summarize)
+exports('RunDiag', diagLines)
