@@ -256,6 +256,17 @@ local function testShapes()
         fail('bounty — resource not started')
     end
 
+    if resourceUp('gtarp_fightclub') then
+        try('fightclub.GetSummary', function()
+            local s = exports.gtarp_fightclub:GetSummary()
+            check(type(s) == 'table' and type(s.openMatches) == 'number'
+                and type(s.queued) == 'number',
+                'fightclub.GetSummary returns {openMatches, queued}')
+        end)
+    else
+        fail('fightclub — resource not started')
+    end
+
     if resourceUp('gtarp_perf') then
         try('perf.GetSummary', function()
             local s = exports.gtarp_perf:GetSummary()
@@ -335,6 +346,7 @@ local REQUIRED_TABLES = {
                           'gtarp_counterfeit_leads', 'gtarp_counterfeit_heat' },
     gtarp_courier     = { 'courier_postings' },
     gtarp_eventguard  = { 'event_violations' },
+    gtarp_fightclub   = { 'gtarp_fightclub_matches', 'gtarp_fightclub_bets' },
     gtarp_evidence    = { 'gtarp_evidence', 'gtarp_evidence_cases', 'gtarp_evidence_suspects' },
     gtarp_flashdrop   = { 'gtarp_flashdrop_drops', 'gtarp_flashdrop_serials',
                           'gtarp_flashdrop_provenance', 'gtarp_flashdrop_listings' },

@@ -564,7 +564,51 @@ via `qbx_properties` directly; there is nothing custom to verify here.
 - [ ] devtest boot: `bounty.GetSummary` shape PASSes; `gtarp_bounty_contracts`
       table present.
 
-## 30. Triage — common failures
+## 30. Underground ring — `gtarp_fightclub`
+
+- [ ] Boot banner: `ring open — N match(es) in progress`.
+- [ ] `/fcjoin` away from the ring → "you need to be at the fight ring".
+      At the ring, alone → "queued at the ring, waiting for an opponent".
+      A second citizen `/fcjoin`s at the ring → both get a
+      `Match #N: you vs <name>. Betting is open for 60s` notify;
+      `/fcmatches` shows `#N [BETTING 5Xs left] 1) A vs 2) B`.
+- [ ] `/fcjoin` twice from the same character → "you're already in the
+      queue". `/fcleave` removes you; a follow-up `/fcjoin` re-queues
+      cleanly.
+- [ ] `/fcbet N 1 100` as one of the two fighters in match N → "fighters
+      cannot bet on their own match", nothing charged. As a third
+      character → bank debited $100, "bet placed" confirmation.
+- [ ] Second `/fcbet N 1 50` from the same bettor on the same match →
+      "you already have a bet on this match" (the
+      `UNIQUE(match_id, citizenid)` constraint), no second charge.
+- [ ] `/fcbet` on a match number after its 60s betting window closes →
+      "betting just closed on that match".
+- [ ] Race guard: two rapid-fire `/fcbet` commands from the same
+      character on the same match (spam the command) → exactly one bet
+      row lands, one bank charge — verify no duplicate row in
+      `gtarp_fightclub_bets`.
+- [ ] Live fight: after betting closes, walk one fighter out of the ring
+      radius → that fighter forfeits within one sweep tick (≤`PollSec`),
+      the other is declared winner, purse lands in their bank, and each
+      bettor on the winning fighter is paid their proportional share
+      (verify against the pool math: `rake=10%`, `purse=15%`, remainder
+      split proportional to stake, rounded down).
+- [ ] Drawing any weapon mid-fight → instant forfeit for that fighter
+      (`RequireUnarmed`).
+- [ ] Reducing a fighter's health to ≤110 (GTA's 100-200 ped scale) via
+      the other fighter's fists → that fighter is declared KO'd, match
+      resolves, no manual `/capture`-style command needed.
+- [ ] Both fighters disqualified in the same sweep tick (e.g. both leave
+      the ring) → match resolves as a draw, every bettor refunded in
+      full, no rake or purse taken.
+- [ ] No knockout inside `MaxDurationSec` (180s) → timeout draw, full
+      refund to every bettor.
+- [ ] Disconnect a live fighter → the other is declared winner on the
+      next sweep tick (`checkFighter` treats "not online" as a forfeit).
+- [ ] devtest boot: `fightclub.GetSummary` shape PASSes;
+      `gtarp_fightclub_matches` + `gtarp_fightclub_bets` tables present.
+
+## 31. Triage — common failures
 
 | Symptom | Likely cause |
 | --- | --- |
