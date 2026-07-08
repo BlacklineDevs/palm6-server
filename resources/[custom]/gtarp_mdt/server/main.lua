@@ -668,8 +668,19 @@ end)
 -- ---------------------------------------------------------------------------
 -- Commands + boot
 -- ---------------------------------------------------------------------------
+-- onResourceStart can fire more than once for this resource's own name in
+-- some boot sequences (same failure mode documented and fixed in
+-- gtarp_eventguard: guards/handlers silently double-registering). Command
+-- and net-event registration are not safe to run twice in the same VM —
+-- Bridge.OnPoliceAlert binds a fresh RegisterNetEvent handler every call, so
+-- a double-fire would double-process every future 911 alert — so make the
+-- whole boot block idempotent regardless of how many times the event fires.
+local startupDone = false
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
+    if startupDone then return end
+    startupDone = true
 
     MDT = Bridge.GetMDTContract() or Config.MDTDefaults
     if MDT.enabled == false then
