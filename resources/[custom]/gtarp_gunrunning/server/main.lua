@@ -122,9 +122,16 @@ end
 -- the true serial server-side (Bridge.GetCurrentWeaponSerial) rather than
 -- trusting the event's `serial` parameter, which a modified client could
 -- spoof to frame an innocent citizen — same discipline gtarp_mdt's
--- spoofable-source fix and gtarp_ransom's kidnap re-validation used.
+-- spoofable-source fix and gtarp_ransom's kidnap re-validation used. The
+-- event's `coords` parameter is untrusted for the same reason: it's the
+-- shooter's own client asserting where the casing landed, and this evidence
+-- entry is treated as real forensics — re-derived server-side via
+-- Bridge.GetCoords rather than recorded as given (found during the
+-- independent harden pass; the module previously trusted this one field
+-- while explicitly distrusting the adjacent serial field for the same
+-- reason).
 -- ---------------------------------------------------------------------------
-RegisterNetEvent('evidence:server:CreateCasing', function(_weapon, _clientSerial, coords)
+RegisterNetEvent('evidence:server:CreateCasing', function(_weapon, _clientSerial, _clientCoords)
     local src = source
     local realSerial = Bridge.GetCurrentWeaponSerial(src)
     if not realSerial then return end -- non-serialized weapon, nothing to trace
@@ -137,6 +144,7 @@ RegisterNetEvent('evidence:server:CreateCasing', function(_weapon, _clientSerial
     if not sale then return end -- not a black-market weapon, nothing to link
 
     if not Bridge.ResourceStarted('gtarp_evidence') then return end
+    local coords = Bridge.GetCoords(src) or _clientCoords
     -- incidentKey buckets by serial + 5-minute window so one gunfight (many
     -- shots, many CreateCasing events) collapses into ONE case with
     -- multiple ballistics_match entries, instead of a new case per shot.

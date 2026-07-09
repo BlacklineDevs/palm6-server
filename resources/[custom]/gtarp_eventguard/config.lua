@@ -64,6 +64,15 @@ Config.Events = {
     -- guard and its own tighter Config.AcceptCooldownSec.
     ['gtarp_onboarding:acceptRules'] = { calls = 3, window_seconds = 60 },
 
+    -- gtarp_onboarding:checkStatus — fires once per normal player load
+    -- (client-side Game.OnPlayerLoaded) but is a bare client-addressable
+    -- net event with NO in-resource rate limit (unlike acceptRules, which
+    -- has its own Config.AcceptCooldownSec on top of this). It does a real
+    -- DB read every call. Found during the independent harden pass on
+    -- gtarp_onboarding — same "blunt budget as defense-in-depth" reasoning
+    -- as ox_inventory:openInventory above.
+    ['gtarp_onboarding:checkStatus'] = { calls = 10, window_seconds = 60 },
+
     -- evidence:server:CreateCasing — recipe-shipped net event (qbx_police).
     -- gtarp_gunrunning registers a second handler on it to cross-reference
     -- fired-weapon serials against its black-market sales registry. The
