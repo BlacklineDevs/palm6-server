@@ -401,6 +401,22 @@ local function testShapes()
     else
         fail('perf — resource not started')
     end
+
+    if resourceUp('gtarp_economy') then
+        try('economy.GetSummary', function()
+            local s = exports.gtarp_economy:GetSummary()
+            check(type(s) == 'table' and type(s.dirtyMinted) == 'number'
+                and type(s.dirtyRemoved) == 'number' and type(s.netInPlay) == 'number',
+                'economy.GetSummary returns {dirtyMinted, dirtyRemoved, netInPlay}')
+        end)
+        try('economy.RunEconomy', function()
+            local lines = exports.gtarp_economy:RunEconomy()
+            check(type(lines) == 'table' and #lines >= 3,
+                'economy.RunEconomy returns the scoreboard lines')
+        end)
+    else
+        fail('economy — resource not started')
+    end
 end
 
 -- Every ExtraItems declaration must be visible in ox_inventory's runtime
