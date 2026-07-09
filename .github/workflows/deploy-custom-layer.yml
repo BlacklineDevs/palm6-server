@@ -26,12 +26,12 @@ env:
   # Non-secret connection details. Override any of these by creating a repo
   # variable (Settings > Secrets and variables > Actions > Variables) of the
   # same name. Secrets (SFTP_PASSWORD, PTERO_API_KEY) are NOT defaulted here.
-  SFTP_HOST: ${{ vars.SFTP_HOST || 'fx-dtx-12.apollopanel.com' }}
+  SFTP_HOST: ${{ vars.SFTP_HOST || 'fx-dtx-10.apollopanel.com' }}
   SFTP_PORT: ${{ vars.SFTP_PORT || '2022' }}
-  SFTP_USERNAME: ${{ vars.SFTP_USERNAME || 'w8bh16e6.221eea0c' }}
+  SFTP_USERNAME: ${{ vars.SFTP_USERNAME || 'w8bh16e6.9524616c' }}
   PANEL_URL: ${{ vars.PANEL_URL || 'https://control.rocketnode.com' }}
-  SERVER_ID: ${{ vars.SERVER_ID || '221eea0c' }}
-  REMOTE_BASE: ${{ vars.REMOTE_BASE || 'txData/QboxLeanPack_0DF2F5.base' }}
+  SERVER_ID: ${{ vars.SERVER_ID || '9524616c' }}
+  REMOTE_BASE: ${{ vars.REMOTE_BASE || '.' }}
   # Set to 'false' (repo variable UPLOAD_CUSTOM_CFG) to skip pushing custom.cfg.
   UPLOAD_CUSTOM_CFG: ${{ vars.UPLOAD_CUSTOM_CFG || 'true' }}
   # Set repo variable MIRROR_DELETE to 'true' for a strict exact mirror that
@@ -181,7 +181,14 @@ jobs:
           get "$REMOTE_BASE/resources/[ox]/ox_inventory/data/items.lua" -o "$WORK/[ox]/ox_inventory/data/items.lua"
           EOF
             bash tools/patch-ox-items.sh "$WORK" &&
-            lua5.4 -e "assert(loadfile('$WORK/[ox]/ox_inventory/data/items.lua'))" &&
+            # ox_inventory item defs may use CfxLua backtick hash literals
+            # (model = `prop_x`): the live server accepts them, but stock
+            # lua5.4 rejects them as a syntax error and would fail the gate on
+            # a perfectly valid file (silently skipping the item sync). Check a
+            # COPY with backticks flattened to strings so the gate still catches
+            # real syntax errors; the file we upload keeps its original backticks.
+            sed 's/`/"/g' "$WORK/[ox]/ox_inventory/data/items.lua" > "$WORK/items.check.lua" &&
+            lua5.4 -e "assert(loadfile('$WORK/items.check.lua'))" &&
             run_lftp <<EOF
           put "$WORK/[ox]/ox_inventory/data/items.lua" -o "$REMOTE_BASE/resources/[ox]/ox_inventory/data/items.lua"
           EOF
