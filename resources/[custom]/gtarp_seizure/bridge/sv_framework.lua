@@ -109,6 +109,12 @@ function Bridge.ResourceStarted(name)
     return GetResourceState(name) == 'started'
 end
 
+-- Soft hype broadcast to the gtarp_discord announcer (tolerated absent).
+function Bridge.Announce(feed, payload)
+    if GetResourceState('gtarp_discord') ~= 'started' then return end
+    pcall(function() exports.gtarp_discord:Announce(feed, payload) end)
+end
+
 function Bridge.RegisterCommand(name, handler)
     RegisterCommand(name, handler, false)
 end

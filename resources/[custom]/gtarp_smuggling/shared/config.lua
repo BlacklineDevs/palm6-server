@@ -48,6 +48,10 @@ Config.Dropoffs = {
     { id = 'sandy_air',    label = 'the Sandy airfield apron',mode = 'air', coords = vector3(1720.0, 3290.0, 41.0),  payoutMin = 7000, payoutMax = 11000 },
 }
 
+-- A delivered run at/above this payout broadcasts a vague Weazel News "heat"
+-- bulletin (bigger sea/air runs; small land drops stay quiet — no spam).
+Config.AnnounceMinPayout = 5000
+
 Config.DeliverRadius   = 18.0     -- how close to the drop counts as delivered
 Config.RunTimeLimitSec = 900      -- 15 min to make the drop before the run dies
 Config.CooldownSec     = 120      -- per-character, between starting runs

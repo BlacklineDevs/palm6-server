@@ -156,6 +156,14 @@ local function cmdDeliver(src)
     end
 
     runLock[cid] = nil
+    -- Hype: bigger sea/air runs make the news (small land drops stay quiet).
+    if payout >= Config.AnnounceMinPayout then
+        Bridge.Announce('heat', {
+            title = 'Contraband on the move',
+            description = ('Word is a %s shipment slipped through to %s tonight.'):format(
+                tostring(d.mode):upper(), d.label),
+        })
+    end
     Bridge.Notify(src, 'Smuggling', ('Dropped. $%d dirty — get it laundered.'):format(payout), 'success')
     dbg(('%s delivered run %d for $%d'):format(cid, run.id, payout))
 end

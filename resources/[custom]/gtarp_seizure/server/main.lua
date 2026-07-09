@@ -88,6 +88,11 @@ local function cmdSeizeDirty(src)
     end)
 
     seizeLock[suspectCid] = nil
+    -- Hype: a police win on the case desk (suspect kept vague — no identity leak).
+    Bridge.Announce('police', {
+        title = 'Assets forfeited',
+        description = ('LSPD seized **$%d** in dirty money from a wanted suspect and booked it into evidence.'):format(held),
+    })
     Bridge.Notify(src, 'Forfeiture', ('Seized $%d in dirty money — booked into evidence.'):format(held), 'success')
     Bridge.Notify(target.src, 'Forfeiture', ('Police forfeited $%d in dirty money from you.'):format(held), 'error')
     dbg(('%s forfeited $%d from %s (case %s)'):format(officerCid, held, suspectCid, tostring(caseId)))

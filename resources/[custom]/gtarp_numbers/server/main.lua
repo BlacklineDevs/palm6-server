@@ -100,6 +100,14 @@ local function runDraw()
                 ('Your number %02d hit — $%d waiting at %s.'):format(win, amt, Config.Bookie.label), 'success')
         end
     end
+
+    -- Hype: a draw that actually paid out is street news (rare — 1/100 a slip).
+    if payoutTotal > 0 then
+        Bridge.Announce('heat', {
+            title = 'Numbers came in',
+            description = ('Tonight\'s number was **%02d** — the bookie paid out **$%d** to the lucky ones.'):format(win, payoutTotal),
+        })
+    end
     print(('[gtarp_numbers] draw #%d — winning number %02d (%d bet(s), $%d staked, $%d owed)'):format(
         seq, win, #bets, staked, payoutTotal))
     dbg(('draw %d resolved'):format(seq))

@@ -95,6 +95,13 @@ function Bridge.ResourceStarted(name)
     return GetResourceState(name) == 'started'
 end
 
+-- Soft hype broadcast to the gtarp_discord announcer (tolerated absent; a feed
+-- with no webhook convar set is a silent no-op inside the announcer).
+function Bridge.Announce(feed, payload)
+    if GetResourceState('gtarp_discord') ~= 'started' then return end
+    pcall(function() exports.gtarp_discord:Announce(feed, payload) end)
+end
+
 -- High-resolution server timer (ms since server start). Mixed into the
 -- per-draw RNG reseed as an entropy source a client can't observe — see the
 -- reseed in server/main.lua runDraw() (defeats boot-seed prediction of draws).
