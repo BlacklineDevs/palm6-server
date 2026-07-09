@@ -299,6 +299,17 @@ local function testShapes()
         fail('gunrunning — resource not started')
     end
 
+    if resourceUp('gtarp_chopshop') then
+        try('chopshop.GetSummary', function()
+            local s = exports.gtarp_chopshop:GetSummary()
+            check(type(s) == 'table' and type(s.activeStolenReports) == 'number'
+                and type(s.totalSales) == 'number',
+                'chopshop.GetSummary returns {activeStolenReports, totalSales}')
+        end)
+    else
+        fail('chopshop — resource not started')
+    end
+
     if resourceUp('gtarp_perf') then
         try('perf.GetSummary', function()
             local s = exports.gtarp_perf:GetSummary()
@@ -384,6 +395,7 @@ local REQUIRED_TABLES = {
                           'gtarp_flashdrop_provenance', 'gtarp_flashdrop_listings' },
     gtarp_grind       = { 'grind_skill' },
     gtarp_gunrunning  = { 'gtarp_gunrunning_sales' },
+    gtarp_chopshop    = { 'gtarp_chopshop_stolen', 'gtarp_chopshop_sales' },
     gtarp_citations   = { 'gtarp_citations' },
     gtarp_insurance   = { 'gtarp_insurance_policies', 'gtarp_insurance_claims' },
     gtarp_legal       = { 'gtarp_legal_petitions' },

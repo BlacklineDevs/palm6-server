@@ -709,3 +709,38 @@ via `qbx_properties` directly; there is nothing custom to verify here.
       not on every gunshot server-wide).
 - [ ] devtest boot: `gunrunning.GetSummary` shape PASSes;
       `gtarp_gunrunning_sales` table present.
+
+## 35. Stolen vehicle economy — `gtarp_chopshop`
+
+- [ ] Boot banner: `shop open — N active stolen report(s), M sale(s)
+      all-time`.
+- [ ] `/reportstolen <plate>` for a plate NOT registered to the caller →
+      "That plate is not registered to you," no row written.
+- [ ] `/reportstolen <plate>` for the caller's own registered vehicle →
+      a `gtarp_chopshop_stolen` row with `status='active'`,
+      `expires_at` ~72h out.
+- [ ] `/reportstolen` the same plate twice → second call rejected
+      ("already reported stolen"), no duplicate row.
+- [ ] `/sellstolen` away from the drop point → "You need to be at the
+      chop shop."
+- [ ] `/sellstolen` at the drop point while not driving (on foot, or a
+      passenger) → "You need to be driving the vehicle."
+- [ ] `/sellstolen` your own registered vehicle at the drop point →
+      refused ("take it to a legal scrapyard instead"), vehicle NOT
+      deleted, no sale row.
+- [ ] `/sellstolen` a non-owned, non-reported vehicle (found car, nobody's
+      registered it) → sale proceeds, `was_stolen=0`, no evidence case
+      opened (legal-gray, not itself a chargeable act).
+- [ ] `/sellstolen` a vehicle whose plate has an ACTIVE `/reportstolen`
+      flag → sale proceeds, `was_stolen=1`, the `gtarp_chopshop_stolen`
+      row flips to `resolved`, a `gtarp_evidence` case opens linking the
+      seller as suspect, `gtarp_chopshop_sales.evidence_case_id` is set.
+  - [ ] Payout matches `Config.ClassPayout[GetVehicleClass(vehicle)]`
+      exactly; vehicle entity is deleted after payout (not before —
+      confirm no route pays out without also deleting, or deletes without
+      paying).
+  - [ ] A vehicle class not in `Config.ClassPayout` (e.g. emergency,
+      military) → refused ("We don't touch that kind of vehicle"), no
+      sale.
+- [ ] devtest boot: `chopshop.GetSummary` shape PASSes;
+      `gtarp_chopshop_stolen` + `gtarp_chopshop_sales` tables present.
