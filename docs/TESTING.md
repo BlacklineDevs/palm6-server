@@ -744,3 +744,143 @@ via `qbx_properties` directly; there is nothing custom to verify here.
       sale.
 - [ ] devtest boot: `chopshop.GetSummary` shape PASSes;
       `gtarp_chopshop_stolen` + `gtarp_chopshop_sales` tables present.
+
+## 36. Money laundering — `gtarp_laundering`
+
+- [ ] Boot banner: `laundromat open — $X washed all-time across N run(s);
+      fee 30%`.
+- [ ] `/dirtymoney` with no `black_money` → "Holding $0 dirty …"; with some
+      → shows held total, today's remaining ceiling, and the fee %.
+- [ ] `/launder` away from the front → "You need to be at the laundromat."
+- [ ] `/launder` at the front with no `black_money` → "You have no dirty
+      money to wash."
+- [ ] `/launder` at the front holding ≥ `MinPerRun` → up to the smaller of
+      {held, `MaxPerRun`, remaining daily cap} in `black_money` is REMOVED,
+      `floor(amount * 0.7)` lands in BANK (clean), and a
+      `gtarp_laundering_runs` row records dirty_in/clean_out/fee_bps.
+- [ ] Launder repeatedly until the per-day `DailyCap` is hit → "done taking
+      your money today," no further wash until tomorrow (SUM over CURDATE).
+- [ ] Wash a run ≥ `Heat.BigRunAlways` (or after heat builds) → police get a
+      dispatch alert and a `gtarp_evidence` "Money laundering" case opens
+      linking the launderer; small quiet runs stay unflagged.
+- [ ] Two `/launder` in the same tick → only one runs (cooldown), the daily
+      cap is never exceeded by more than one run.
+- [ ] devtest boot: `laundering.GetSummary` shape PASSes;
+      `gtarp_laundering_runs` table present.
+
+## 37. Numbers racket — `gtarp_numbers`
+
+- [ ] Boot banner: `bookie open — draw #N live (every 10m), M draw(s) run,
+      $X staked all-time; pays 60x`.
+- [ ] `/numbers` with a bad number/stake or out of range → usage/range
+      error, no bet, no cash taken.
+- [ ] `/numbers <0-99> <stake>` away from the bookie → "You need to find the
+      bookie."
+- [ ] `/numbers <n> <stake>` at the bookie with enough clean cash → stake
+      debited from CASH (atomic), a `gtarp_numbers_bets` row `status='open'`
+      on the current `draw_seq`; over `MaxBetsPerDraw` slips → refused.
+- [ ] `/numbersinfo` → countdown to next draw, your open slips, pending
+      dirty winnings, last winning number.
+- [ ] Wait for a draw (or shorten `DrawIntervalSec`): a `gtarp_numbers_draws`
+      row records the winning number; matching bets → `status='won'` with
+      `payout = stake*60`, others `lost`. Online winners get a notify.
+- [ ] `/collectnumbers` at the bookie → all your unpaid `won` bets pay out in
+      `black_money`, marked `paid=1`; running it again → "Nothing to collect."
+- [ ] Cover-all-numbers sanity: staking all 100 numbers loses money (pays one
+      60x winner for 100 stakes) — confirms it's a sink, not a printer.
+- [ ] (Anti-cheat) winning numbers across several draws are NOT predictable
+      from the public history — the per-draw reseed holds.
+- [ ] devtest boot: `numbers.GetSummary` shape PASSes; `gtarp_numbers_bets`
+      + `gtarp_numbers_draws` tables present.
+
+## 38. Protection racket — `gtarp_protection`
+
+- [ ] Boot banner: `racket open — 6 business(es), N shakedown(s) all-time
+      ($X); turf link ONLINE` (or `OFFLINE` if `gtarp_turf` isn't running).
+- [ ] `/shakedown` with no gang → "You're not in a crew."
+- [ ] `/shakedown` at a business whose turf zone your gang does NOT control →
+      "… isn't your crew's block," no payout.
+- [ ] Capture the turf zone (via `gtarp_turf`), then `/shakedown` at its
+      business → `black_money` payout in `[PayoutMin, PayoutMax]`, a
+      `gtarp_protection_collections` row, and the business is "paid up" for
+      ~30 min (gang-agnostic).
+- [ ] `/shakedown` the same business again before the interval → "already
+      paid up — back in ~Nm."
+- [ ] Two gang members `/shakedown` the same business at once → only one
+      collects (per-business lock + re-checked cooldown).
+- [ ] ~20% of shakedowns → police dispatch alert + a `gtarp_evidence`
+      "Extortion" case linking the collector.
+- [ ] `/rackets` → count of controlled business blocks, ready vs paid-up.
+- [ ] devtest boot: `protection.GetSummary` shape PASSes;
+      `gtarp_protection_collections` table present.
+
+## 39. Loan shark — `gtarp_loanshark`
+
+- [ ] Boot banner: `shark open — N loan(s) outstanding, M defaulted;
+      warrants via gtarp_mdt, 15% interest`.
+- [ ] `/borrow` with `gtarp_mdt` stopped → "enforcement is offline — no
+      loans" (default must have teeth).
+- [ ] `/borrow <amount>` away from the shark → "You need to find the shark";
+      out of `[MinPrincipal, MaxPrincipal]` → range error.
+- [ ] `/borrow <amount>` at the shark, no existing loan, not wanted → you
+      receive `amount` in `black_money`, a `gtarp_loanshark_loans` row owes
+      `floor(amount*1.15)` with `due_at` ~3h out.
+- [ ] `/borrow` again while you already owe → "You already owe the shark";
+      while `HasActiveWarrant` → refused.
+- [ ] `/loaninfo` → remaining owed + countdown (or OVERDUE).
+- [ ] `/repay <amount|all>` at the shark from BANK → reduces owed; paying it
+      off → `status='repaid'`; overpay is clamped to remaining.
+- [ ] Let a loan pass `due_at` (or shorten `TermSec`): the sweep flips it to
+      `defaulted` and `gtarp_mdt` issues a "Loan Shark" warrant (which
+      `gtarp_bounty` then auto-posts). `/repay` no longer works on it (settle
+      with the law).
+- [ ] Race a repay against the default sweep → the payment is refunded if the
+      loan defaulted first (never lost, never double-resolved).
+- [ ] devtest boot: `loanshark.GetSummary` shape PASSes;
+      `gtarp_loanshark_loans` table present.
+
+## 40. Asset forfeiture — `gtarp_seizure`
+
+- [ ] Boot banner: `forfeiture online — N seizure(s), $X taken out of
+      circulation; warrant gate via gtarp_mdt, evidence ONLINE`.
+- [ ] `/seizedirty` as a non-police (or off-duty) player → "Only on-duty
+      police can seize assets."
+- [ ] On-duty officer `/seizedirty` with no suspect within ~3m → "No suspect
+      close enough."
+- [ ] `/seizedirty` over a nearby suspect WITHOUT an active warrant → "No
+      active warrant … no probable cause," nothing taken.
+- [ ] `/seizedirty` over a nearby WANTED suspect holding `black_money` → all
+      their `black_money` is REMOVED (destroyed, not given to the officer), a
+      `gtarp_seizure_forfeitures` row logs officer/suspect/amount, and a
+      `gtarp_evidence` "Asset forfeiture" case links the suspect. Both parties
+      get a notify.
+- [ ] Wanted suspect with no `black_money` → "carrying no dirty money."
+- [ ] Two officers `/seizedirty` the same suspect at once → only one takes it
+      (per-suspect lock); the other sees "already processing" or $0.
+- [ ] `/seizures` (on-duty) → all-time count + total + last-24h forfeited.
+- [ ] devtest boot: `seizure.GetSummary` shape PASSes;
+      `gtarp_seizure_forfeitures` table present.
+
+## 41. Contraband smuggling — `gtarp_smuggling`
+
+- [ ] Boot banner: `routes open — 6 drop site(s) (land/sea/air), N run(s)
+      delivered ($X dirty all-time); evidence ONLINE`.
+- [ ] `/smuggle` away from the docks contact → "Find the docks contact."
+- [ ] `/smuggle` at the pickup with no active run → a `gtarp_smuggling_runs`
+      row `status='active'` with a random drop + mode + payout and
+      `expires_at` ~15m out; police get a dispatch ping; you're told the drop
+      label, mode, deadline, and pay.
+- [ ] `/smuggle` again while a run is active → "already have a shipment in
+      transit."
+- [ ] `/smugglerun` → your drop, mode, pay, and time left.
+- [ ] `/deliver` away from the assigned drop → "Not at the drop — get to …";
+      at the drop within the window → `black_money` payout (air > sea > land),
+      run `status='delivered'`, a `gtarp_evidence` "smuggling" case links you.
+- [ ] Let a run pass `expires_at` then `/deliver` (or `/smuggle` again) → the
+      stale run is marked `expired`, no payout; you can start a fresh run.
+- [ ] Two `/deliver` at once, or deliver right as it expires → paid at most
+      once (guarded delivery claim); a failed payout restores the run.
+- [ ] No new ox item is required (run is server state) — no `patch-ox-items`
+      needed for this resource on a fresh deploy.
+- [ ] devtest boot: `smuggling.GetSummary` shape PASSes;
+      `gtarp_smuggling_runs` table present.
