@@ -100,6 +100,28 @@ local function appendEffect(list, name)
     return true
 end
 
+-- Apply an additive's ORDER-DEPENDENT reactions (Config.Reactions) to the
+-- CURRENT effect set: every existing effect with a rule for this additive is
+-- transformed, in a SINGLE pass over the incoming list, so a freshly-produced
+-- effect is not itself re-transformed by the same additive. Order is preserved
+-- (walked in ipairs order); a transform that would duplicate an existing effect
+-- collapses to the first occurrence, so the list never grows here (the 8-cap is
+-- untouched — only appendEffect adds the additive's base effect afterwards).
+-- Returns a NEW list; the caller reassigns. Purely deterministic, server-side.
+local function reactEffects(list, additiveKey)
+    local rules = Config.Reactions and Config.Reactions[additiveKey]
+    if not rules then return list end
+    local out, seen = {}, {}
+    for _, name in ipairs(list) do
+        local mapped = rules[name] or name
+        if not seen[mapped] then
+            seen[mapped] = true
+            out[#out + 1] = mapped
+        end
+    end
+    return out
+end
+
 local function effectsLine(effects)
     if type(effects) ~= 'table' or #effects == 0 then return 'No effects' end
     return table.concat(effects, ', ')
@@ -563,7 +585,12 @@ local function doMix(src, cid, baseSlot, additiveItem, brand)
         return
     end
 
-    -- Resolve effects: append-if-absent, order preserved, 8-cap.
+    -- Resolve effects: FIRST transform matching existing effects via this
+    -- additive's order-dependent reactions (Schedule I), THEN append the
+    -- additive's own base effect if absent. Order preserved, 8-cap respected.
+    local beforeMix = table.concat(effects, '\0')
+    effects = reactEffects(effects, additiveItem)
+    local reacted = table.concat(effects, '\0') ~= beforeMix
     local addedMain = appendEffect(effects, additive.effect)
 
     -- Bad-mix roll (server-side, never the client's skill result): a careless
@@ -574,7 +601,7 @@ local function doMix(src, cid, baseSlot, additiveItem, brand)
         if appendEffect(effects, junk) then badMix = true end
     end
 
-    if not addedMain and not badMix and #effects >= Config.MaxEffects then
+    if not addedMain and not reacted and not badMix and #effects >= Config.MaxEffects then
         Bridge.Notify(src, 'Mixing', 'This product is already maxed out on effects.', 'error')
         return
     end

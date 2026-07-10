@@ -96,6 +96,173 @@ Config.AdditiveOrder = {
 }
 
 -- ---------------------------------------------------------------------------
+-- §2b Reactions — the ORDER-DEPENDENT transform layer (the signature Schedule I
+-- mechanic). Reactions[additiveKey] = { [existingEffect] = newEffect, ... }.
+-- When an additive is mixed into a product that ALREADY carries `existingEffect`,
+-- that effect is TRANSFORMED into `newEffect` (before the additive's own base
+-- effect from §2 is appended). Every matching existing effect transforms at once,
+-- against the current set; because a mix applies ONE additive at a time, the
+-- outcome is genuinely order-dependent (A-then-B ≠ B-then-A). Keys match
+-- Config.Additives; effect strings match Config.Effects EXACTLY.
+--
+-- SOURCE: the real Schedule I mixing database, cross-checked 2026-07-10 against
+-- the Schedule 1 Fandom wiki per-ingredient pages, the Steam "Complete Mixing
+-- Database (2026)" / "How to Get Every Effect (Full Transformation Guide)"
+-- guides, and the scheduleonemixer / prodigygamers transformation charts. The
+-- live game patches these during early access — THIS TABLE IS THE TUNING
+-- SURFACE: retune it against the current in-game mixing DB when the game updates.
+-- A few Motor Oil / Mega Bean / Battery / Energy Drink rows are corroborated by
+-- the calculator charts rather than a directly-quoted snippet; treat those as
+-- the best-known core and verify if a row ever feels off.
+-- ---------------------------------------------------------------------------
+Config.Reactions = {
+    cuke = {
+        ['Toxic']             = 'Euphoric',
+        ['Slippery']          = 'Munchies',
+        ['Sneaky']            = 'Paranoia',
+        ['Foggy']             = 'Cyclopean',
+        ['Gingeritis']        = 'Thought-Provoking',
+        ['Munchies']          = 'Athletic',
+        ['Euphoric']          = 'Laxative',
+    },
+    banana = {
+        ['Energizing']        = 'Thought-Provoking',
+        ['Calming']           = 'Sneaky',
+        ['Toxic']             = 'Smelly',
+        ['Long-Faced']        = 'Refreshing',
+        ['Cyclopean']         = 'Thought-Provoking',
+        ['Disorienting']      = 'Focused',
+        ['Focused']           = 'Seizure-Inducing',
+        ['Paranoia']          = 'Jennerising',
+        ['Smelly']            = 'Anti-Gravity',
+    },
+    paracetamol = {
+        ['Calming']           = 'Slippery',
+        ['Toxic']             = 'Tropic Thunder',
+        ['Spicy']             = 'Bright-Eyed',
+        ['Glowing']           = 'Toxic',
+        ['Foggy']             = 'Calming',
+        ['Focused']           = 'Gingeritis',
+        ['Munchies']          = 'Anti-Gravity',
+        ['Paranoia']          = 'Balding',
+        ['Electrifying']      = 'Athletic',
+        ['Energizing']        = 'Paranoia',
+    },
+    donut = {
+        ['Calorie-Dense']     = 'Explosive',
+        ['Balding']           = 'Sneaky',
+        ['Anti-Gravity']      = 'Slippery',
+        ['Jennerising']       = 'Gingeritis',
+        ['Focused']           = 'Euphoric',
+        ['Shrinking']         = 'Energizing',
+        ['Munchies']          = 'Calming',
+    },
+    viagra = {
+        ['Athletic']          = 'Sneaky',
+        ['Euphoric']          = 'Bright-Eyed',
+        ['Laxative']          = 'Calming',
+        ['Disorienting']      = 'Toxic',
+    },
+    mouthwash = {
+        ['Calming']           = 'Anti-Gravity',
+        ['Calorie-Dense']     = 'Sneaky',
+        ['Explosive']         = 'Sedating',
+        ['Focused']           = 'Jennerising',
+    },
+    flu_medicine = {
+        ['Calming']           = 'Bright-Eyed',
+        ['Athletic']          = 'Munchies',
+        ['Thought-Provoking'] = 'Gingeritis',
+        ['Cyclopean']         = 'Foggy',
+        ['Munchies']          = 'Slippery',
+        ['Laxative']          = 'Euphoric',
+        ['Euphoric']          = 'Toxic',
+        ['Focused']           = 'Calming',
+        ['Electrifying']      = 'Refreshing',
+        ['Shrinking']         = 'Paranoia',
+    },
+    gasoline = {
+        ['Energizing']        = 'Euphoric',
+        ['Gingeritis']        = 'Smelly',
+        ['Jennerising']       = 'Sneaky',
+        ['Sneaky']            = 'Tropic Thunder',
+        ['Munchies']          = 'Sedating',
+        ['Euphoric']          = 'Spicy',
+        ['Laxative']          = 'Foggy',
+        ['Disorienting']      = 'Glowing',
+        ['Paranoia']          = 'Calming',
+        ['Electrifying']      = 'Disorienting',
+        ['Shrinking']         = 'Focused',
+    },
+    energy_drink = {
+        ['Sedating']          = 'Munchies',
+        ['Euphoric']          = 'Energizing',
+        ['Spicy']             = 'Euphoric',
+        ['Glowing']           = 'Disorienting',
+        ['Foggy']             = 'Laxative',
+        ['Disorienting']      = 'Electrifying',
+        ['Focused']           = 'Shrinking',
+        ['Schizophrenic']     = 'Balding',
+    },
+    motor_oil = {
+        ['Energizing']        = 'Munchies',
+        ['Foggy']             = 'Toxic',
+        ['Euphoric']          = 'Sedating',
+        ['Paranoia']          = 'Anti-Gravity',
+        ['Munchies']          = 'Schizophrenic',
+    },
+    mega_bean = {
+        ['Energizing']        = 'Cyclopean',
+        ['Calming']           = 'Glowing',
+        ['Sneaky']            = 'Calming',
+        ['Jennerising']       = 'Paranoia',
+        ['Athletic']          = 'Laxative',
+        ['Slippery']          = 'Toxic',
+        ['Thought-Provoking'] = 'Energizing',
+        ['Seizure-Inducing']  = 'Focused',
+        ['Focused']           = 'Disorienting',
+        ['Shrinking']         = 'Electrifying',
+    },
+    chili = {
+        ['Athletic']          = 'Euphoric',
+        ['Anti-Gravity']      = 'Tropic Thunder',
+        ['Sneaky']            = 'Bright-Eyed',
+        ['Munchies']          = 'Toxic',
+        ['Laxative']          = 'Long-Faced',
+        ['Shrinking']         = 'Refreshing',
+    },
+    battery = {
+        ['Munchies']          = 'Tropic Thunder',
+        ['Euphoric']          = 'Zombifying',
+        ['Electrifying']      = 'Euphoric',
+        ['Laxative']          = 'Calorie-Dense',
+        ['Cyclopean']         = 'Glowing',
+        ['Shrinking']         = 'Munchies',
+    },
+    iodine = {
+        ['Calming']           = 'Balding',
+        ['Toxic']             = 'Sneaky',
+        ['Foggy']             = 'Paranoia',
+        ['Calorie-Dense']     = 'Gingeritis',
+        ['Euphoric']          = 'Seizure-Inducing',
+        ['Refreshing']        = 'Thought-Provoking',
+    },
+    addy = {
+        ['Sedating']          = 'Gingeritis',
+        ['Long-Faced']        = 'Electrifying',
+        ['Glowing']           = 'Refreshing',
+        ['Foggy']             = 'Energizing',
+        ['Explosive']         = 'Euphoric',
+    },
+    horse_semen = {
+        ['Anti-Gravity']      = 'Calming',
+        ['Gingeritis']        = 'Refreshing',
+        ['Thought-Provoking'] = 'Electrifying',
+        ['Seizure-Inducing']  = 'Energizing',
+    },
+}
+
+-- ---------------------------------------------------------------------------
 -- §3 Effects & value multipliers. The 26 positive effects carry a multiplier;
 -- the 8 junk effects are 0.00 (some are RP downsides a bad mix can inflict).
 -- Σ multipliers (capped at 8 effects) drives the price in §5.

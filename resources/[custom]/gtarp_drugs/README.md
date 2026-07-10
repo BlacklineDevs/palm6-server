@@ -31,9 +31,11 @@ port to GTA VI, rewrite the two bridge files, not the logic.
    item** — the rack is a world station.
 3. **Mix.** At the **mixing station** (ox_target), pick a base stack (`weed_bud`
    or an existing `weed_product`) + **one additive**. The **server** resolves the
-   effect list (append-if-absent, order preserved, 8-effect cap), recomputes
-   quality + unit price, asks you to **brand** it (sanitized + length-limited),
-   then mints one **`weed_product`** whose metadata is
+   effect list — it **FIRST transforms** any existing effects the additive reacts
+   with (the order-dependent Schedule I **reaction table**, see below), **THEN**
+   appends the additive's own base effect if absent (order preserved, 8-effect
+   cap). It recomputes quality + unit price, asks you to **brand** it (sanitized +
+   length-limited), then mints one **`weed_product`** whose metadata is
    `{ brand, base, effects[], quality, unit_value, batch_id, producer }`. Inputs
    are consumed first. The named recipe is saved to `drugs_recipes` for one-click
    repeat. A bad-mix roll can inflict a junk (0-value) effect.
@@ -69,6 +71,31 @@ comes from the strain (`Config.Drugs`), the effect multipliers from
 Heavenly ×1.30 — reached by drying fresh buds on the rack). `Config.Price(base,
 effects, quality)` implements it and is the
 **only** number ever trusted for a payout — the client's copy is display-only.
+
+## Effect reactions — the order-dependent transform system (spec §3)
+
+The signature Schedule I mechanic. Each additive still carries **one base effect**
+(`Config.Additives`), but before that base effect is appended the mix **transforms**
+existing effects: if the product already carries an effect the additive reacts
+with, that effect is **converted** into another (often higher-value) one. Because
+a mix applies **one additive at a time**, the outcome is genuinely
+**order-dependent** — `Cuke → Banana` ≠ `Banana → Cuke` — which is what gives the
+loop its strategic depth. All matching effects transform at once, against the
+current set, in a single pass (a freshly-produced effect isn't re-transformed by
+the same additive); a transform that would duplicate an existing effect collapses
+to the first occurrence, so the reaction pass never grows the list and the
+**8-effect cap** is preserved. Resolution is entirely **server-side and
+deterministic** (`reactEffects` in `server/main.lua`, called from `doMix`).
+
+**`Config.Reactions` is the tuning surface.** It maps
+`Reactions[additiveKey] = { [existingEffect] = newEffect, ... }` using the exact
+additive keys and effect names from `Config.Additives` / `Config.Effects`. 112
+rules across all 16 additives ship. The data was cross-checked (2026-07-10)
+against the **Schedule 1 Fandom wiki** per-ingredient pages, the Steam **"Complete
+Mixing Database (2026)"** and **"How to Get Every Effect (Full Transformation
+Guide)"** guides, and the **scheduleonemixer / prodigygamers** transformation
+charts. The live game **patches these during early access** — retune
+`Config.Reactions` against the current in-game mixing DB when the game updates.
 
 ## Anti-exploit (all server-side, spec §12)
 
@@ -139,10 +166,11 @@ earlier generic-draft `cannabis_leaf` / `weed_baggie`.
 
 - **Shipped since MVP:** **drying racks → Heavenly quality** — hang fresh buds on
   the rack to dry them over a wall-clock `drugs_processes` timer, bumping them to
-  Heavenly (tier 4, ×1.30). See the **Dry** step above.
+  Heavenly (tier 4, ×1.30). See the **Dry** step above. · The full order-dependent
+  effect **reaction/transform table** (`Config.Reactions`, 112 rules) — see the
+  **Effect reactions** section above.
 - **Phase 2:** meth + shrooms; NPC customers + hired dealers (the 80/20 split,
-  ≤10 customers each); the full order-dependent effect **reaction/transform
-  table**; rank/XP-gated properties.
+  ≤10 customers each); rank/XP-gated properties.
 - **Phase 3:** cocaine + cauldron; property-gated employee-NPC semi-automation;
   property tiers; dynamic regional demand (`region_demand_mod`).
 

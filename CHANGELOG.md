@@ -66,10 +66,19 @@ branded product with stacking effects + quality → sell → dirty cash → laun
   collect claim**; a crash-stranded run reverts to `running` at boot (never lost).
   No new item — the rack is a world station.
 - 🧪 **Mixing station** — pick a base stack + one additive; the **server** resolves
-  effects (append-if-absent, 8-cap, order kept), recomputes quality + unit price
-  via the spec §5 formula, sanitizes a player brand, mints one `weed_product`
-  (`{brand,base,effects[],quality,unit_value,batch_id,producer}`). Bad-mix roll can
-  inflict a junk effect. Named recipes saved to `drugs_recipes` for one-click repeat.
+  effects (**reactions first, then append-if-absent, 8-cap, order kept**), recomputes
+  quality + unit price via the spec §5 formula, sanitizes a player brand, mints one
+  `weed_product` (`{brand,base,effects[],quality,unit_value,batch_id,producer}`).
+  Bad-mix roll can inflict a junk effect. Named recipes saved to `drugs_recipes` for
+  one-click repeat.
+- ⚗️ **Effect reaction/transform system** — the signature Schedule I mechanic:
+  mixing now **transforms** existing effects into other (often higher-value) ones
+  when an additive reacts with them, so the result is **order-dependent**
+  (`Cuke→Banana` ≠ `Banana→Cuke`). `Config.Reactions` (112 real reaction rules
+  across all 16 additives, cross-checked 2026-07-10 against the Schedule 1 Fandom
+  wiki + Steam "Complete Mixing Database" / "Full Transformation Guide" + calculator
+  charts) is the tuning surface; deterministic, server-side (`reactEffects` in
+  `doMix`), 8-cap preserved. Retune vs the live mixing DB as the game patches it.
 - 💵 **Selling** — real players via ox_inventory trade, plus one **rate-limited NPC
   street-buyer** paying DIRTY `black_money` priced from the item's real metadata,
   bounded by a **per-character daily faucet cap**. Logged to `drugs_sales`.
@@ -86,7 +95,7 @@ branded product with stacking effects + quality → sell → dirty cash → laun
   `drugs_recipes`, `drugs_progression`, `drugs_sales` (`sql/0039_drugs.sql`) +
   `drugs_processes` (the drying-rack timer, `sql/0040_drugs_drying.sql`).
 - ⏭️ **Deferred to Phase 2/3:** meth/shrooms/coke, NPC customers + hired dealers,
-  the order-dependent reaction table, and rank/XP-gated properties.
+  and rank/XP-gated properties.
 
 **📣 Public:**
 > 🌿 **New hustle incoming — grow, cook, and brand your own product**
