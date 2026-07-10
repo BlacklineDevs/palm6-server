@@ -19,7 +19,8 @@ Config.Debug = false
 -- coords). Placeholder Tier-3 coords (see docs/GTA6-READINESS.md) — retune
 -- once a real MLO/prop is picked.
 Config.Board = {
-    coords = { x = 425.10, y = -1332.20, z = 29.49 },  -- Alta St, near the jail/bail-bonds strip
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    coords = { x = 434.60, y = -981.30, z = 30.71 },  -- Mission Row Police Station front entrance, on the sidewalk steps
     radius = 12.0,
     label = 'Bail Bonds Bounty Board',
 }

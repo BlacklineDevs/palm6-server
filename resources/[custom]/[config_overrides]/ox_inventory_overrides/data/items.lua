@@ -58,4 +58,13 @@ ExtraItems = {
     counterfeit_paper   = { label = 'Linen Paper',     weight = 200,  stack = true },
     counterfeit_ink     = { label = 'Intaglio Ink',    weight = 350,  stack = true },
     marker_pen          = { label = 'Detector Pen',    weight = 30,   stack = false },
+
+    -- Drug supply chain (gtarp_drugs). Must match Config in
+    -- gtarp_drugs/shared/config.lua — that resource presence-checks these at
+    -- start and self-disables with a console error if any is missing.
+    -- cannabis_leaf = raw grow yield; weed_baggie = the processed, sellable
+    -- street product (sold to NPCs for black_money). Distinct from qbx_drugs'
+    -- weed_brick/coke_brick so the two item sets never overlap.
+    cannabis_leaf       = { label = 'Cannabis Leaf',   weight = 80,   stack = true },
+    weed_baggie         = { label = 'Baggie of Weed',  weight = 30,   stack = true },
 }

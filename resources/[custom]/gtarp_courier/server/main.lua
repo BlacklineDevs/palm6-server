@@ -122,10 +122,13 @@ RegisterNetEvent('gtarp_courier:complete', function(id)
         return Bridge.Notify(src, 'Courier', 'You are not at the dropoff yet.', 'error')
     end
 
-    MySQL.update.await(
-        "UPDATE courier_postings SET status='complete', completed_at=NOW() WHERE id=?",
-        { id }
-    )
+    local paid = MySQL.update.await(
+        "UPDATE courier_postings SET status='complete', completed_at=NOW() WHERE id=? AND status='taken' AND courier_citizenid=?",
+        { id, citizenid }
+    ) == 1
+    if not paid then
+        return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')
+    end
     Bridge.CreditBank(src, row.bounty, 'courier-payout')
     loadPostings()
     Bridge.Notify(src, 'Courier', ('Delivered. +$%d'):format(row.bounty), 'success')
@@ -139,7 +142,14 @@ RegisterNetEvent('gtarp_courier:cancel', function(id)
     if not row or row.status ~= 'open' or row.poster_citizenid ~= citizenid then
         return Bridge.Notify(src, 'Courier', 'Cannot cancel that posting', 'error')
     end
-    MySQL.update.await("UPDATE courier_postings SET status='cancelled' WHERE id=?", { id })
+    local refunded = MySQL.update.await(
+        "UPDATE courier_postings SET status='cancelled' WHERE id=? AND status='open' AND poster_citizenid=?",
+        { id, citizenid }
+    ) == 1
+    if not refunded then
+        loadPostings()
+        return Bridge.Notify(src, 'Courier', 'Cannot cancel that posting', 'error')
+    end
     Bridge.CreditBankByCitizenId(citizenid, row.bounty, 'courier-refund')
     loadPostings()
     Bridge.Notify(src, 'Courier', 'Posting cancelled, bounty refunded', 'success')
@@ -186,8 +196,9 @@ CreateThread(function()
         )
         if expired then
             for _, r in ipairs(expired) do
-                MySQL.update.await("UPDATE courier_postings SET status='expired' WHERE id=?", { r.id })
-                Bridge.CreditBankByCitizenId(r.poster_citizenid, r.bounty, 'courier-refund')
+                if MySQL.update.await("UPDATE courier_postings SET status='expired' WHERE id=? AND status='open'", { r.id }) == 1 then
+                    Bridge.CreditBankByCitizenId(r.poster_citizenid, r.bounty, 'courier-refund')
+                end
             end
             if #expired > 0 then loadPostings() end
         end
@@ -201,8 +212,9 @@ CreateThread(function()
         )
         if abandoned then
             for _, r in ipairs(abandoned) do
-                MySQL.update.await("UPDATE courier_postings SET status='expired' WHERE id=?", { r.id })
-                Bridge.CreditBankByCitizenId(r.poster_citizenid, r.bounty, 'courier-refund-abandoned')
+                if MySQL.update.await("UPDATE courier_postings SET status='expired' WHERE id=? AND status='taken'", { r.id }) == 1 then
+                    Bridge.CreditBankByCitizenId(r.poster_citizenid, r.bounty, 'courier-refund-abandoned')
+                end
             end
         end
     end

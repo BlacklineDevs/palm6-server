@@ -95,3 +95,13 @@ end
 function Game.Notify(opts)
     lib.notify(opts)
 end
+
+-- Yes/no confirmation dialog. Returns true only if the player confirmed.
+function Game.ConfirmDialog(header, content)
+    return lib.alertDialog({
+        header = header,
+        content = content,
+        centered = true,
+        cancel = true,
+    }) == 'confirm'
+end

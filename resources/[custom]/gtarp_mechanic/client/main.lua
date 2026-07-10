@@ -42,3 +42,12 @@ RegisterNetEvent('gtarp_mechanic:applyRepair', function(vehNetId)
     local veh = Game.GetVehicleFromNetId(vehNetId)
     if veh then Game.RepairVehicle(veh) end
 end)
+
+-- The server offered a repair invoice. Ask the customer to accept before any
+-- charge; only a positive dialog fires the accept back to the server.
+RegisterNetEvent('gtarp_mechanic:confirmInvoice', function(_mechSrc, amount)
+    if Game.ConfirmDialog('Repair Invoice',
+        ('A mechanic wants to charge $%d to repair your vehicle. Accept?'):format(amount)) then
+        TriggerServerEvent('gtarp_mechanic:acceptInvoice')
+    end
+end)

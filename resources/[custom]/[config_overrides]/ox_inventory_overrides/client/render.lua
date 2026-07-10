@@ -35,7 +35,7 @@ if shopCount == 0 then
     return
 end
 
-local hasTarget = GetResourceState('ox_target') == 'started'
+local hasTarget = Game.HasTarget()
 
 local createdPoints = {}
 local createdBlips  = {}
@@ -43,41 +43,19 @@ local createdZones  = {}
 local createdModels = {}
 
 local function openShop(shopType, locationId)
-    exports.ox_inventory:openInventory('shop', {
-        type = shopType,
-        id   = locationId,
-    })
+    Game.OpenShop(shopType, locationId)
 end
 
 local function makeBlip(coords, blipDef, shopName)
-    if type(blipDef) ~= 'table' then return end
-    local b = AddBlipForCoord(coords.x, coords.y, coords.z)
-    SetBlipSprite(b, blipDef.id or 52)
-    SetBlipColour(b, blipDef.colour or 0)
-    SetBlipScale(b, blipDef.scale or 0.8)
-    SetBlipAsShortRange(b, true)
-    BeginTextCommandSetBlipName('STRING')
-    AddTextComponentSubstringPlayerName(shopName or 'Shop')
-    EndTextCommandSetBlipName(b)
-    createdBlips[#createdBlips + 1] = b
+    local b = Game.AddBlip(coords, blipDef, shopName)
+    if b then createdBlips[#createdBlips + 1] = b end
 end
 
 local function addSphereTarget(shopType, locationId, coords, label, groups)
-    local zoneId = exports.ox_target:addSphereZone({
-        coords = coords,
-        radius = 1.5,
-        debug  = false,
-        options = {
-            {
-                name     = ('ox_extra_shop_%s_%d'):format(shopType, locationId),
-                icon     = 'fas fa-shopping-basket',
-                label    = label,
-                groups   = groups,
-                onSelect = function() openShop(shopType, locationId) end,
-                distance = 2.0,
-            },
-        },
-    })
+    local name = ('ox_extra_shop_%s_%d'):format(shopType, locationId)
+    local zoneId = Game.AddSphereTarget(name, coords, label, groups, function()
+        openShop(shopType, locationId)
+    end)
     createdZones[#createdZones + 1] = zoneId
 end
 
@@ -86,67 +64,32 @@ local function addBoxTarget(shopType, locationId, target, label, groups)
     if not coords then return end
     local height = (target.minZ and target.maxZ) and math.abs(target.maxZ - target.minZ) or 1.0
     if height < 0.2 then height = 1.0 end
-    local zoneId = exports.ox_target:addBoxZone({
+    local name = ('ox_extra_shop_%s_%d'):format(shopType, locationId)
+    local zoneId = Game.AddBoxTarget(name, {
         coords   = coords,
-        size     = vec3(target.length or 1.0, target.width or 1.0, height),
-        rotation = target.heading or 0.0,
-        debug    = false,
-        options  = {
-            {
-                name     = ('ox_extra_shop_%s_%d'):format(shopType, locationId),
-                icon     = 'fas fa-shopping-basket',
-                label    = label,
-                groups   = groups,
-                onSelect = function() openShop(shopType, locationId) end,
-                distance = target.distance or 2.0,
-            },
-        },
-    })
+        length   = target.length,
+        width    = target.width,
+        height   = height,
+        heading  = target.heading,
+        distance = target.distance,
+    }, label, groups, function()
+        openShop(shopType, locationId)
+    end)
     createdZones[#createdZones + 1] = zoneId
 end
 
 local function addModelTarget(shopType, models, label, groups)
-    exports.ox_target:addModel(models, {
-        {
-            name     = ('ox_extra_shop_%s_model'):format(shopType),
-            icon     = 'fas fa-shopping-basket',
-            label    = label,
-            groups   = groups,
-            onSelect = function() openShop(shopType) end,
-            distance = 2.0,
-        },
-    })
+    local name = ('ox_extra_shop_%s_model'):format(shopType)
+    Game.AddModelTarget(name, models, label, groups, function()
+        openShop(shopType)
+    end)
     createdModels[#createdModels + 1] = { shopType = shopType, models = models }
 end
 
 local function addMarkerPoint(shopType, locationId, coords)
-    local point = lib.points.new({
-        coords   = coords,
-        distance = 16.0,
-        invId    = locationId,
-        invType  = shopType,
-    })
-
-    function point:nearby()
-        DrawMarker(
-            2,
-            self.coords.x, self.coords.y, self.coords.z + 0.5,
-            0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0,
-            0.3, 0.3, 0.3,
-            255, 255, 255, 200,
-            false, true, 2, false, nil, nil, false
-        )
-        if self.currentDistance < 1.5 then
-            BeginTextCommandDisplayHelp('STRING')
-            AddTextComponentSubstringPlayerName('Press ~INPUT_CONTEXT~ to open shop')
-            EndTextCommandDisplayHelp(0, false, true, -1)
-            if IsControlJustReleased(0, 38) then -- E
-                openShop(self.invType, self.invId)
-            end
-        end
-    end
-
+    local point = Game.AddMarkerPoint(shopType, locationId, coords, function()
+        openShop(shopType, locationId)
+    end)
     createdPoints[#createdPoints + 1] = point
 end
 
@@ -198,19 +141,19 @@ end
 
 local function cleanup()
     for _, p in ipairs(createdPoints) do
-        if p and p.remove then p:remove() end
+        Game.RemovePoint(p)
     end
     createdPoints = {}
     for _, b in ipairs(createdBlips) do
-        if b and DoesBlipExist(b) then RemoveBlip(b) end
+        Game.RemoveBlip(b)
     end
     createdBlips = {}
     if hasTarget then
         for _, zid in ipairs(createdZones) do
-            if zid then exports.ox_target:removeZone(zid) end
+            Game.RemoveZone(zid)
         end
         for _, m in ipairs(createdModels) do
-            exports.ox_target:removeModel(m.models, ('ox_extra_shop_%s_model'):format(m.shopType))
+            Game.RemoveModel(m.models, ('ox_extra_shop_%s_model'):format(m.shopType))
         end
     end
     createdZones  = {}

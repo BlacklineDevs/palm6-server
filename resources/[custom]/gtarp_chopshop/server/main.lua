@@ -149,6 +149,11 @@ local function cmdSellStolen(src)
             "SELECT id, owner_citizenid FROM gtarp_chopshop_stolen WHERE plate = ? AND status = 'active' AND expires_at > NOW()", { plate })
     end)
 
+    if not stolenRow and not ownRow then
+        Bridge.Notify(src, 'Chop Shop', "This one's clean — nothing to chop here.", 'error')
+        return
+    end
+
     local saleId
     local ok = pcall(function()
         saleId = MySQL.insert.await(

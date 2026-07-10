@@ -28,12 +28,18 @@ Config.Payout = 'black_money'    -- dirty protection money (needs laundering)
 -- currently controls. Coords reuse gtarp_turf's already-validated zone points
 -- (Tier 3 placeholders — retune to actual storefronts in-game).
 Config.Businesses = {
-    { id = 'ls_liquor',  label = 'Legion Square Liquor', zone = 'legion_square', coords = vector3(195.17, -933.77, 30.69),   radius = 14.0 },
-    { id = 'gs_grocery', label = 'Grove Street Grocery', zone = 'grove_street',  coords = vector3(-47.30, -1757.40, 29.42),  radius = 14.0 },
-    { id = 'mp_deli',    label = 'Mirror Park Deli',     zone = 'mirror_park',   coords = vector3(1163.10, -322.90, 69.20),   radius = 14.0 },
-    { id = 'vw_pawn',    label = 'Vinewood Pawn',        zone = 'vinewood',      coords = vector3(-1222.10, -906.90, 12.33),  radius = 14.0 },
-    { id = 'ss_diner',   label = 'Sandy Shores Diner',   zone = 'sandy_shores',  coords = vector3(1961.30, 3740.30, 32.34),   radius = 14.0 },
-    { id = 'pb_market',  label = 'Paleto Market',        zone = 'paleto_bay',    coords = vector3(1728.66, 6414.16, 35.04),   radius = 14.0 },
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    { id = 'ls_liquor',  label = 'Legion Square Liquor', zone = 'legion_square', coords = vector3(25.7, -1347.3, 29.49),      radius = 14.0 },   -- 24/7, Innocence Blvd, Strawberry (S of Legion Sq)
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    { id = 'gs_grocery', label = 'Grove Street Grocery', zone = 'grove_street',  coords = vector3(-48.52, -1757.51, 29.42),   radius = 14.0 },   -- 24/7, Grove St, Davis
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    { id = 'mp_deli',    label = 'Mirror Park Deli',     zone = 'mirror_park',   coords = vector3(1163.87, -323.86, 69.21),   radius = 14.0 },   -- Rob's Liquor, East Vinewood / Mirror Park border
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    { id = 'vw_pawn',    label = 'Vinewood Pawn',        zone = 'vinewood',      coords = vector3(373.87, 325.9, 103.57),     radius = 14.0 },   -- 24/7, Clinton Ave, Downtown Vinewood
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    { id = 'ss_diner',   label = 'Sandy Shores Diner',   zone = 'sandy_shores',  coords = vector3(1961.48, 3740.57, 32.34),   radius = 14.0 },   -- 24/7, Alhambra Dr, Sandy Shores
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    { id = 'pb_market',  label = 'Paleto Market',        zone = 'paleto_bay',    coords = vector3(1727.99, 6416.66, 35.04),   radius = 14.0 },   -- 24/7, Great Ocean Hwy, Paleto Bay
 }
 
 -- Payout per shakedown (dirty dollars), rolled in this range.

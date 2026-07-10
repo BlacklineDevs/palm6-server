@@ -13,10 +13,12 @@ shared_scripts {
 }
 
 server_scripts {
+    'bridge/sv_framework.lua',
     'server/apply.lua',
 }
 
 client_scripts {
+    'bridge/cl_game.lua',
     'client/render.lua',
 }
 

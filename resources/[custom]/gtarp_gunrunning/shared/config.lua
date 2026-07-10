@@ -9,7 +9,8 @@ Config.Debug = false
 -- weapon vendor's own proximity zone.
 Config.DropPoint = {
     label  = 'the scrapyard lot',
-    coords = { x = 359.8, y = 2854.6, z = 43.9 },
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    coords = { x = -477.0, y = -1717.0, z = 18.6 },
     radius = 8.0,
 }
 

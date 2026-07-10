@@ -46,8 +46,11 @@ Config.ATMs = {
     reward_min    = 150,
     reward_max    = 400,
     locations = {
-        { label = 'ATM — Legion Sq',    coords = vector3(147.40, -1035.50, 29.34) },
-        { label = 'ATM — Del Perro',    coords = vector3(-1204.60, -324.80, 37.87) },
-        { label = 'ATM — Sandy Shores', coords = vector3(1822.40, 3683.10, 34.28) },
+        -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+        { label = 'ATM — Legion Sq',    coords = vector3(147.43, -1035.79, 29.34) },
+        -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+        { label = 'ATM — Del Perro',    coords = vector3(-1205.35, -325.24, 37.87) },
+        -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+        { label = 'ATM — Sandy Shores', coords = vector3(1822.51, 3683.11, 34.28) },
     },
 }

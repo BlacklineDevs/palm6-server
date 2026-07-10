@@ -94,7 +94,7 @@ end
 -- Fraud scoring — every signal server-derived
 -- ---------------------------------------------------------------------------
 local function scoreClaim(cid, policy, kind, vehCoords, assessed, coverage)
-    local score, factors = 0, {}
+    local score, factors, deny = 0, {}, false
 
     local ageMin = math.floor((now() - (tonumber(policy.created_ts) or now())) / 60)
     if ageMin < Config.Risk.FreshPolicyMin then
@@ -135,6 +135,11 @@ local function scoreClaim(cid, policy, kind, vehCoords, assessed, coverage)
         if scenes == 0 then
             score = score + Config.Risk.NoSceneScore
             factors[#factors + 1] = 'no black-box incident scene near the vehicle'
+            -- Synced entity health is client-authored under one-sync, so a
+            -- damage/total_loss payout must be corroborated by a real replay
+            -- incident scene. When forensics is running and finds none, deny
+            -- the payout outright rather than merely flagging it.
+            deny = true
         end
     end
 
@@ -143,7 +148,7 @@ local function scoreClaim(cid, policy, kind, vehCoords, assessed, coverage)
         factors[#factors + 1] = 'claim maxes the coverage cap'
     end
 
-    return math.min(score, 255), factors
+    return math.min(score, 255), factors, deny
 end
 
 -- ---------------------------------------------------------------------------
@@ -288,7 +293,12 @@ local function cmdFileClaim(src, args)
     end
     if assessed > coverage then assessed = coverage end
 
-    local score, factors = scoreClaim(cid, policy, kind, vehCoords, assessed, coverage)
+    local score, factors, deny = scoreClaim(cid, policy, kind, vehCoords, assessed, coverage)
+    if deny then
+        Bridge.Notify(src, 'Mors Mutual',
+            'No incident scene on record for that vehicle — the adjuster cannot verify the damage. Claim denied.', 'error')
+        return
+    end
 
     local ok, claimId = pcall(function()
         return MySQL.insert.await([[
@@ -303,6 +313,14 @@ local function cmdFileClaim(src, args)
         return
     end
     lastClaim[cid] = t
+
+    -- Retire the policy so activePolicy() (which filters status = 'active')
+    -- can never re-select it: one payout per policy, matching Mors Mutual.
+    pcall(function()
+        MySQL.update.await(
+            "UPDATE gtarp_insurance_policies SET status = 'claimed' WHERE id = ? AND status = 'active'",
+            { policy.id })
+    end)
 
     if score >= Config.Risk.FlagThreshold then
         local caseId = openFraudCase(claimId, cid, Bridge.GetPlayerName(src), veh.plate, kind, factors, assessed)

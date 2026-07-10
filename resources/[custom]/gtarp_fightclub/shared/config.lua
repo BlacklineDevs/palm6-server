@@ -15,9 +15,10 @@ Config.Debug = false
 -- against real coords, never client-trusted). Placeholder Tier-3 coords
 -- (see docs/GTA6-READINESS.md) — retune once a real MLO/prop is picked.
 Config.Ring = {
-    coords = { x = 1198.0, y = -3130.0, z = 5.05 },  -- Elysian Island backlot
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    coords = { x = 108.0, y = -1305.0, z = 29.19 },  -- Vanilla Unicorn back lot, Strawberry
     radius = 15.0,
-    label = 'the fight ring (Elysian Island)',
+    label = 'the fight ring (Vanilla Unicorn back lot)',
 }
 
 -- Queueing. Two citizens present at the ring are auto-paired the instant a

@@ -34,7 +34,8 @@ Config.WinItem      = 'black_money'   -- you win dirty money (needs laundering)
 -- Strawberry) — verify/retune in-game.
 Config.Bookie = {
     label  = 'the bookie',
-    coords = vector3(373.9, -404.2, 66.3),
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    coords = vector3(88.5, -1958.4, 20.8),  -- Grove Street cul-de-sac, Davis
     radius = 12.0,
 }
 

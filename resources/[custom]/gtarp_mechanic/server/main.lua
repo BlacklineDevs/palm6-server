@@ -10,6 +10,8 @@
 
 local cooldowns = {}  -- [vehNetId] = unix expiry
 local pending   = {}  -- [src] = { vehNetId, customer, holdUntil }
+local custCooldowns = {}  -- [citizenid] = unix expiry, per-customer invoice throttle
+local offers    = {}  -- [customerSrc] = { mech, vehNetId, amount, expiry } awaiting accept
 
 local function vehicleCoordsOk(src, netId)
     local veh = Bridge.GetVehicleFromNetId(netId)
@@ -86,18 +88,60 @@ RegisterNetEvent('gtarp_mechanic:complete', function(vehNetId)
         return
     end
 
-    if not Bridge.ChargeBank(customer, Config.RepairCost, 'vehicle-repair') then
-        Bridge.Notify(src, 'Mechanic', 'The customer could not afford the repair.', 'error')
-        Bridge.Notify(customer, 'Mechanic', ('You need $%d in the bank for this repair.'):format(Config.RepairCost), 'error')
+    -- Per-customer throttle. The vehicle cooldown is keyed per netId, so a fresh
+    -- damaged-vehicle netId would otherwise be a brand-new charge each time. Gate
+    -- on the customer's citizenid so they can't be invoiced repeatedly in a row.
+    local ccid = Bridge.GetCitizenId(customer)
+    if ccid and (custCooldowns[ccid] or 0) > now then
+        Bridge.Notify(src, 'Mechanic', 'This customer was just invoiced.', 'error')
         return
     end
-    Bridge.CreditBank(src, Config.RepairCost, 'vehicle-repair-invoice')
 
-    TriggerClientEvent('gtarp_mechanic:applyRepair', src, vehNetId)
+    -- The customer must accept the charge. Offer the invoice and wait for their
+    -- client to confirm via ox_lib alertDialog; the charge/credit and repair run
+    -- only from gtarp_mechanic:acceptInvoice below (re-validated there).
+    offers[customer] = { mech = src, vehNetId = vehNetId, amount = Config.RepairCost, expiry = now + 30 }
+    TriggerClientEvent('gtarp_mechanic:confirmInvoice', customer, src, Config.RepairCost)
+    Bridge.Notify(src, 'Mechanic', 'Invoice sent to the customer for approval.', 'inform')
+end)
 
-    local mechName = Bridge.GetPlayerName(src)
-    Bridge.Notify(src, 'Mechanic', ('Repaired the vehicle. Invoiced $%d.'):format(Config.RepairCost), 'success')
-    Bridge.Notify(customer, 'Mechanic', ('%s repaired your vehicle for $%d.'):format(mechName, Config.RepairCost), 'inform')
+-- The customer accepted the invoice from gtarp_mechanic:confirmInvoice. This is
+-- the ONLY place the charge/credit runs — re-validate the offer, the mechanic's
+-- duty + proximity, the customer's proximity + throttle, and balance server-side.
+RegisterNetEvent('gtarp_mechanic:acceptInvoice', function()
+    local customer = source
+    local offer = offers[customer]
+    if not offer then return end
+    offers[customer] = nil
+
+    local now = os.time()
+    if now > offer.expiry then return end
+
+    local mech = offer.mech
+    if not Bridge.IsOnDutyMechanic(mech) then return end
+
+    local veh, vc = vehicleCoordsOk(mech, offer.vehNetId)
+    if not veh then return end
+
+    local cc = Bridge.GetCoords(customer)
+    if not cc or Bridge.Distance(cc, vc) > Config.CustomerSearchRadius then return end
+
+    local ccid = Bridge.GetCitizenId(customer)
+    if ccid and (custCooldowns[ccid] or 0) > now then return end
+
+    if not Bridge.ChargeBank(customer, offer.amount, 'vehicle-repair') then
+        Bridge.Notify(mech, 'Mechanic', 'The customer could not afford the repair.', 'error')
+        Bridge.Notify(customer, 'Mechanic', ('You need $%d in the bank for this repair.'):format(offer.amount), 'error')
+        return
+    end
+    Bridge.CreditBank(mech, offer.amount, 'vehicle-repair-invoice')
+    if ccid then custCooldowns[ccid] = now + Config.RepairCooldownSeconds end
+
+    TriggerClientEvent('gtarp_mechanic:applyRepair', mech, offer.vehNetId)
+
+    local mechName = Bridge.GetPlayerName(mech)
+    Bridge.Notify(mech, 'Mechanic', ('Repaired the vehicle. Invoiced $%d.'):format(offer.amount), 'success')
+    Bridge.Notify(customer, 'Mechanic', ('%s repaired your vehicle for $%d.'):format(mechName, offer.amount), 'inform')
 end)
 
 RegisterNetEvent('gtarp_mechanic:cancel', function(vehNetId)
@@ -107,5 +151,8 @@ RegisterNetEvent('gtarp_mechanic:cancel', function(vehNetId)
 end)
 
 AddEventHandler('playerDropped', function()
+    local ccid = Bridge.GetCitizenId(source)
+    if ccid then custCooldowns[ccid] = nil end
+    offers[source] = nil
     pending[source] = nil
 end)

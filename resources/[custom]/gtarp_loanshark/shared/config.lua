@@ -26,7 +26,8 @@ Config.DirtyItem = 'black_money'   -- the loan principal is handed over dirty
 -- underpass, Cypress Flats) — retune in-game.
 Config.Shark = {
     label  = 'the shark',
-    coords = vector3(851.6, -1332.9, 26.3),
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    coords = vector3(94.2, -1291.9, 29.1),
     radius = 12.0,
 }
 

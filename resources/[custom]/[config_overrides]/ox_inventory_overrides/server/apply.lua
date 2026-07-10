@@ -44,7 +44,7 @@ local function applyItems()
     -- merge, then VERIFY each item with a fresh per-name lookup and fail
     -- loudly for anything that did not land, instead of silently shipping
     -- items that AddItem will reject as invalid.
-    local ok, items = pcall(function() return exports.ox_inventory:Items() end)
+    local ok, items = Bridge.GetItems()
     if not ok or type(items) ~= 'table' then
         print('[ox_inventory_overrides] ox_inventory:Items() unavailable; skipping merge')
         return 0
@@ -56,7 +56,7 @@ local function applyItems()
     end
     local added, missing = 0, {}
     for name in pairs(ExtraItems) do
-        local okV, item = pcall(function() return exports.ox_inventory:Items(name) end)
+        local okV, item = Bridge.GetItem(name)
         if okV and item ~= nil then
             added = added + 1
         else
@@ -81,9 +81,7 @@ local function applyShops()
     -- interaction surface is created by this resource's own client/render.lua.
     local added = 0
     for key, shop in pairs(ExtraShops) do
-        local ok, err = pcall(function()
-            exports.ox_inventory:RegisterShop(key, shop)
-        end)
+        local ok, err = Bridge.RegisterShop(key, shop)
         if ok then
             added = added + 1
         else

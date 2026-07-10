@@ -336,7 +336,7 @@ local function syncStateContracts()
         local existing
         pcall(function()
             existing = MySQL.single.await(
-                "SELECT id FROM gtarp_bounty_contracts WHERE target_citizenid = ? AND kind = 'state' AND status = 'active'",
+                "SELECT id FROM gtarp_bounty_contracts WHERE target_citizenid = ? AND kind = 'state' AND status IN ('active','claimed')",
                 { cid })
         end)
         if existing then

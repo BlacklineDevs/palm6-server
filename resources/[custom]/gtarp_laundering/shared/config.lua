@@ -41,7 +41,8 @@ Config.DirtyItem = 'black_money'
 -- in-game with a coords tool.
 Config.Front = {
     label  = 'the laundromat',
-    coords = vector3(1146.9, -979.6, 46.4),
+    -- retuned 2026-07-10 — VERIFY IN-GAME (on-ground/reachable)
+    coords = vector3(127.4, -1298.9, 29.2),
     radius = 12.0,
 }
 
