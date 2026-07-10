@@ -888,11 +888,11 @@ via `qbx_properties` directly; there is nothing custom to verify here.
 ## 42. Drugs — `gtarp_drugs` (Schedule I MVP, weed)
 
 - [ ] Boot: `drugs.GetSummary` shape PASSes in devtest; the 4 tables
-      (`drugs_plants`, `drugs_recipes`, `drugs_progression`, `drugs_sales`)
+      (`gtarp_drugs_plants`, `gtarp_drugs_recipes`, `gtarp_drugs_progression`, `gtarp_drugs_sales`)
       are present; new ox items (`weed_seed`, `soil`, `wateringcan`,
       `weed_bud`, `weed_product`, additives) resolve after a `patch-ox-items`.
 - [ ] **Grow:** with `weed_seed` + `soil`, target the grow plot → plant. Row
-      appears in `drugs_plants` with `stage='growing'`. Water over time; the
+      appears in `gtarp_drugs_plants` with `stage='growing'`. Water over time; the
       plant reports `growing` until `ready_at`, then `ready`. Harvest → get
       `weed_bud` with `{strain, quality, effects}` metadata; the plot frees
       (row `harvested` then reclaimed). Let water hit 0% → quality/yield drops.
@@ -900,13 +900,13 @@ via `qbx_properties` directly; there is nothing custom to verify here.
       effects (append-if-absent, capped at 8, order preserved), recomputes
       quality + unit price, prompt to brand → `weed_product` minted with
       `{brand, base, effects, quality, unit_value, batch_id, producer}`. Save a
-      recipe → row in `drugs_recipes`, repeatable. A bad-mix roll can add a junk
+      recipe → row in `gtarp_drugs_recipes`, repeatable. A bad-mix roll can add a junk
       effect. Verify price ≈ `base × (1 + Σ effect mults) × quality markup`.
 - [ ] **Sell (server-authority):** at the NPC buyer, sell `weed_product` → paid
       DIRTY `black_money` computed from the item's REAL metadata (edit a client
       value / spoof the event → price unchanged; server re-fetches the slot).
       Product is removed BEFORE payout; a full inventory refunds it. Row in
-      `drugs_sales`. Hit the per-character daily faucet cap → "buyer tapped out",
+      `gtarp_drugs_sales`. Hit the per-character daily faucet cap → "buyer tapped out",
       remaining product kept.
 - [ ] **Heat/evidence:** sell hot / big harvest → police alert fires and a
       `gtarp_evidence` "street_sale" case links the `batch_id`+`producer`.

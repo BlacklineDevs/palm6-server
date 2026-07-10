@@ -98,7 +98,7 @@ branded product with stacking effects + quality → sell → dirty cash → laun
   interaction** (restart-safe, no client ticks), harvest `weed_bud` with
   `{strain,quality,effects,dried}` metadata. Neglect (water → 0%) drops quality/yield.
 - 🌬️ **Drying rack → Heavenly** — hang a stack of fresh `weed_bud` on the rack
-  (ox_target) to dry it over a **wall-clock `drugs_processes` timer** (`kind='dry'`,
+  (ox_target) to dry it over a **wall-clock `gtarp_drugs_processes` timer** (`kind='dry'`,
   epoch seconds, resolved on interaction like the grow timers). On collect the buds
   come back **bumped to Heavenly (tier 4, ×1.30)** with `dried=true`, and the price
   engine applies the markup on any later mix/sell. One run per rack slot (UNIQUE
@@ -109,7 +109,7 @@ branded product with stacking effects + quality → sell → dirty cash → laun
   effects (**reactions first, then append-if-absent, 8-cap, order kept**), recomputes
   quality + unit price via the spec §5 formula, sanitizes a player brand, mints one
   `weed_product` (`{brand,base,effects[],quality,unit_value,batch_id,producer}`).
-  Bad-mix roll can inflict a junk effect. Named recipes saved to `drugs_recipes` for
+  Bad-mix roll can inflict a junk effect. Named recipes saved to `gtarp_drugs_recipes` for
   one-click repeat.
 - ⚗️ **Effect reaction/transform system** — the signature Schedule I mechanic:
   mixing now **transforms** existing effects into other (often higher-value) ones
@@ -121,7 +121,7 @@ branded product with stacking effects + quality → sell → dirty cash → laun
   `doMix`), 8-cap preserved. Retune vs the live mixing DB as the game patches it.
 - 💵 **Selling** — real players via ox_inventory trade, plus one **rate-limited NPC
   street-buyer** paying DIRTY `black_money` priced from the item's real metadata,
-  bounded by a **per-character daily faucet cap**. Logged to `drugs_sales`.
+  bounded by a **per-character daily faucet cap**. Logged to `gtarp_drugs_sales`.
 - 🚔 **Heat/evidence (basic)** — sales warm a per-dealer heat model; a hot dealer or
   witness roll (and the odd big harvest) trips a native police alert +
   `gtarp_evidence` case. Every unit carries `batch_id`+`producer` for audit.
@@ -131,9 +131,9 @@ branded product with stacking effects + quality → sell → dirty cash → laun
   recomputes from config + metadata; consumes inputs before granting outputs;
   proximity re-derived server-side; all SQL parameterized. 12 net events registered
   in `gtarp_eventguard`. New items added to `ox_inventory_overrides` (replacing the
-  earlier generic `cannabis_leaf`/`weed_baggie` draft). SQL: `drugs_plants`,
-  `drugs_recipes`, `drugs_progression`, `drugs_sales` (`sql/0039_drugs.sql`) +
-  `drugs_processes` (the drying-rack timer, `sql/0040_drugs_drying.sql`).
+  earlier generic `cannabis_leaf`/`weed_baggie` draft). SQL: `gtarp_drugs_plants`,
+  `gtarp_drugs_recipes`, `gtarp_drugs_progression`, `gtarp_drugs_sales` (`sql/0039_drugs.sql`) +
+  `gtarp_drugs_processes` (the drying-rack timer, `sql/0040_drugs_drying.sql`).
 - ⏭️ **Deferred to Phase 2/3:** meth/shrooms/coke, NPC customers + hired dealers,
   and rank/XP-gated properties.
 

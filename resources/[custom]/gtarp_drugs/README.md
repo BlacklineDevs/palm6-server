@@ -22,7 +22,7 @@ port to GTA VI, rewrite the two bridge files, not the logic.
    harvest a plant; let the water hit 0% and quality/yield drop a tier.
 2. **Dry (optional → Heavenly).** Hang a stack of **fresh (undried) `weed_bud`**
    on the **drying rack** (ox_target, next to the mixing station). Drying is a
-   **wall-clock DB timer** (`drugs_processes`, `kind='dry'`) resolved on
+   **wall-clock DB timer** (`gtarp_drugs_processes`, `kind='dry'`) resolved on
    interaction — restart-safe, no client ticks, exactly like the grow timers.
    The buds are consumed into the rack slot at load time and handed back on
    collect **bumped to Heavenly (tier 4, ×1.30)** with `dried = true`. One run
@@ -37,13 +37,13 @@ port to GTA VI, rewrite the two bridge files, not the logic.
    cap). It recomputes quality + unit price, asks you to **brand** it (sanitized +
    length-limited), then mints one **`weed_product`** whose metadata is
    `{ brand, base, effects[], quality, unit_value, batch_id, producer }`. Inputs
-   are consumed first. The named recipe is saved to `drugs_recipes` for one-click
+   are consumed first. The named recipe is saved to `gtarp_drugs_recipes` for one-click
    repeat. A bad-mix roll can inflict a junk (0-value) effect.
 4. **Sell.** Hand-to-hand to **real players** is left to ox_inventory trade
    (products stack only when brand+effects+quality+base match). Plus one
    **rate-limited NPC street-buyer** (ox_target on a spawned ped) that pays
    **DIRTY cash** (`black_money`) priced from the item's real metadata, bounded
-   by a **per-character daily faucet cap**. Every sale logs to `drugs_sales`.
+   by a **per-character daily faucet cap**. Every sale logs to `gtarp_drugs_sales`.
 5. **Launder.** All drug income is `black_money` — the exact item
    `gtarp_laundering` washes into clean bank funds and `gtarp_seizure` can take.
    The two resources are decoupled: this one only ever grants the item; it never
@@ -119,7 +119,7 @@ charts. The live game **patches these during early access** — retune
   interaction — relog/dupe resistant, no client tick to spoof. Harvest uses an
   **atomic `growing → harvested` claim** so a double-fire can't harvest twice.
 - **Every unit carries `batch_id` + `producer`** for a dupe / laundering /
-  seizure audit trail via `drugs_sales` + `gtarp_evidence`.
+  seizure audit trail via `gtarp_drugs_sales` + `gtarp_evidence`.
 
 ## Heat & evidence (basic, present)
 
@@ -147,8 +147,8 @@ earlier generic-draft `cannabis_leaf` / `weed_baggie`.
 
 ## Depends on / wiring
 
-- `sql/0039_drugs.sql` — `drugs_plants`, `drugs_recipes`, `drugs_progression`,
-  `drugs_sales`. `sql/0040_drugs_drying.sql` — `drugs_processes` (the drying-rack
+- `sql/0039_drugs.sql` — `gtarp_drugs_plants`, `gtarp_drugs_recipes`, `gtarp_drugs_progression`,
+  `gtarp_drugs_sales`. `sql/0040_drugs_drying.sql` — `gtarp_drugs_processes` (the drying-rack
   wall-clock timer). Product state lives in ox_inventory metadata, not a table.
 - `gtarp_eventguard` — the 12 net events (`gtarp_drugs:plotMenu` / `plant` /
   `water` / `harvest` / `mixMenu` / `mix` / `mixRecipe` / `sellMenu` / `sell` /
@@ -165,7 +165,7 @@ earlier generic-draft `cannabis_leaf` / `weed_baggie`.
 ## Roadmap (spec §10)
 
 - **Shipped since MVP:** **drying racks → Heavenly quality** — hang fresh buds on
-  the rack to dry them over a wall-clock `drugs_processes` timer, bumping them to
+  the rack to dry them over a wall-clock `gtarp_drugs_processes` timer, bumping them to
   Heavenly (tier 4, ×1.30). See the **Dry** step above. · The full order-dependent
   effect **reaction/transform table** (`Config.Reactions`, 112 rules) — see the
   **Effect reactions** section above.

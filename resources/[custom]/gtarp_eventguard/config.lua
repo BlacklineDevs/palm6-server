@@ -72,7 +72,7 @@ Config.Events = {
     ['gtarp_drugs:sell']      = { calls = 20, window_seconds = 60 },
 
     -- gtarp_drugs drying rack (Phase-2 → Heavenly quality). `dryStart` consumes
-    -- a fresh bud stack into a drugs_processes wall-clock timer; `dryCollect`
+    -- a fresh bud stack into a gtarp_drugs_processes wall-clock timer; `dryCollect`
     -- grants the dried (Heavenly) buds back on the atomic collect claim;
     -- `dryMenu` is a read-only snapshot that fans a per-slot DB read + inventory
     -- scan per call, so it gets a blunt call-count budget as defense-in-depth

@@ -51,7 +51,7 @@ Config.Items = {
 -- ---------------------------------------------------------------------------
 -- §1 Base drugs (weed strains only for the MVP). base_value feeds Config.Price;
 -- default_effect seeds a fresh bud's effect list; unlock_rank gates planting
--- against the grower's drugs_progression rank.
+-- against the grower's gtarp_drugs_progression rank.
 -- ---------------------------------------------------------------------------
 Config.Drugs = {
     weed_ogkush     = { label = 'OG Kush',           base_value = 38, default_effect = 'Calming',    unlock_rank = 0 },
@@ -314,7 +314,7 @@ Config.JunkEffects = {
 -- ---------------------------------------------------------------------------
 -- §4 Quality tiers. markup multiplies the price. Quality is set at GROW time
 -- (grow additives / neglect), then bumped to Heavenly (tier 4) by drying fresh
--- buds on the DRYING RACK (below) — a wall-clock DB timer in drugs_processes,
+-- buds on the DRYING RACK (below) — a wall-clock DB timer in gtarp_drugs_processes,
 -- resolved on interaction like the grow timers (sql/0040_drugs_drying.sql).
 -- ---------------------------------------------------------------------------
 Config.Quality = {
@@ -350,7 +350,7 @@ Config.Grow = {
     plantSeconds     = 4,      -- client progress bar to plant
     waterSeconds     = 3,      -- client progress bar to water
     harvestSeconds   = 6,      -- client progress bar to harvest
-    xp               = 15,     -- drugs_progression XP per harvest
+    xp               = 15,     -- gtarp_drugs_progression XP per harvest
     -- Tier 3 placeholders (a Grapeseed backwoods grow field). VERIFY IN-GAME.
     plots = {
         vector3(2223.5, 5150.4, 59.8),
@@ -380,7 +380,7 @@ Config.Mix = {
 
 -- ---------------------------------------------------------------------------
 -- DRY — the drying rack. Load fresh (undried) weed_bud into a rack slot; it
--- dries over WALL-CLOCK time (a drugs_processes row, kind='dry', epoch seconds,
+-- dries over WALL-CLOCK time (a gtarp_drugs_processes row, kind='dry', epoch seconds,
 -- resolved on interaction exactly like the grow timers — restart-safe, NO
 -- client ticks). On collect the bud is bumped to Heavenly (tier 4) and marked
 -- dried=true; the existing price engine then applies the ×1.30 markup on mix/
@@ -395,7 +395,7 @@ Config.Dry = {
     baseDrySeconds = 1800,       -- 30 min wall-clock to fully dry a loaded stack
     loadSeconds    = 4,          -- client progress bar to hang buds
     collectSeconds = 4,          -- client progress bar to take them down
-    xp             = 12,         -- drugs_progression XP per dried batch
+    xp             = 12,         -- gtarp_drugs_progression XP per dried batch
     -- Tier 3 placeholder (a rack beside the Grand Senora mixing trailer). VERIFY IN-GAME.
     coords = vector3(1388.5, 3608.2, 38.9),
 }
@@ -419,7 +419,7 @@ Config.Sell = {
 }
 
 -- ---------------------------------------------------------------------------
--- Progression (drugs_progression). rank = min(maxRank, floor(xp / xpPerRank)).
+-- Progression (gtarp_drugs_progression). rank = min(maxRank, floor(xp / xpPerRank)).
 -- Gates which strains can be planted (Config.Drugs.unlock_rank).
 -- ---------------------------------------------------------------------------
 Config.Progression = {

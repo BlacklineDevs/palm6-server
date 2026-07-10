@@ -1,12 +1,12 @@
 -- 0039_drugs.sql — tables for gtarp_drugs (Schedule I MVP, weed).
 -- Apply after the qbx base schema. gtarp_-... wait: these tables use the
--- drugs_ prefix that the resource's SQL references directly (drugs_plants /
--- drugs_recipes / drugs_progression / drugs_sales). Finished-product STATE
+-- drugs_ prefix that the resource's SQL references directly (gtarp_drugs_plants /
+-- gtarp_drugs_recipes / gtarp_drugs_progression / gtarp_drugs_sales). Finished-product STATE
 -- lives entirely in ox_inventory metadata, never in a table (spec §11).
 --
 -- Timers are wall-clock UNIX epoch seconds (BIGINT), resolved on interaction
 -- in server/main.lua — restart-safe, no client ticks, relog-dupe resistant.
--- The Phase-2 tables (drugs_processes cook/dry timers, drugs_dealers,
+-- The Phase-2 tables (gtarp_drugs_processes cook/dry timers, drugs_dealers,
 -- drugs_customers) are intentionally NOT created here.
 
 -- One row per LIVE cannabis plant at a grow plot. coord_x/y/z pin it to a
@@ -15,7 +15,7 @@
 -- quality penalty. additives is a JSON list of grow additives applied at
 -- plant time. stage is 'growing' (or briefly 'harvested' during the atomic
 -- harvest claim; a crash-stranded 'harvested' row is swept at boot).
-CREATE TABLE IF NOT EXISTS `drugs_plants` (
+CREATE TABLE IF NOT EXISTS `gtarp_drugs_plants` (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     owner_cid VARCHAR(64) NOT NULL,
     coord_x DOUBLE NOT NULL,
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS `drugs_plants` (
 -- is the ordered list of additive item names; effects_json is the resolved
 -- effect list at save time (display only — the server re-resolves on every
 -- mix). UNIQUE(owner_cid, brand) so re-saving a brand updates it.
-CREATE TABLE IF NOT EXISTS `drugs_recipes` (
+CREATE TABLE IF NOT EXISTS `gtarp_drugs_recipes` (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     owner_cid VARCHAR(64) NOT NULL,
     brand VARCHAR(48) NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS `drugs_recipes` (
 );
 
 -- Per-character grow XP + derived rank tier (gates strains via unlock_rank).
-CREATE TABLE IF NOT EXISTS `drugs_progression` (
+CREATE TABLE IF NOT EXISTS `gtarp_drugs_progression` (
     owner_cid VARCHAR(64) NOT NULL PRIMARY KEY,
     xp INT UNSIGNED NOT NULL DEFAULT 0,
     rank_tier INT UNSIGNED NOT NULL DEFAULT 0,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS `drugs_progression` (
 -- the Phase-2 dealer split). flagged=1 tripped a police alert; evidence_case_id
 -- links a gtarp_evidence v2 case. (citizenid, created_at) is the hot index for
 -- the per-character daily faucet cap.
-CREATE TABLE IF NOT EXISTS `drugs_sales` (
+CREATE TABLE IF NOT EXISTS `gtarp_drugs_sales` (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     citizenid VARCHAR(64) NOT NULL,
     channel VARCHAR(16) NOT NULL DEFAULT 'npc',

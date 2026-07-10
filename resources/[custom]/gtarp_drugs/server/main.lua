@@ -16,7 +16,7 @@
 --           price from config, sanitizes the brand, mints one weed_product.
 --   SELL  — a rate-limited NPC street-buyer pays DIRTY cash (black_money)
 --           priced from the item's REAL metadata (never the client), bounded
---           by a per-character daily faucet cap; logged to drugs_sales.
+--           by a per-character daily faucet cap; logged to gtarp_drugs_sales.
 --
 -- ANTI-EXPLOIT (spec §12): never trust client price/effects/quality/amount;
 -- recompute from config + item metadata every time; proximity re-derived from
@@ -128,7 +128,7 @@ local function effectsLine(effects)
 end
 
 -- ---------------------------------------------------------------------------
--- Progression (drugs_progression)
+-- Progression (gtarp_drugs_progression)
 -- ---------------------------------------------------------------------------
 local function rankOfXp(xp)
     return math.min(Config.Progression.maxRank,
@@ -139,7 +139,7 @@ local function loadXp(cid)
     if xpCache[cid] ~= nil then return end
     xpCache[cid] = 0
     pcall(function()
-        local r = MySQL.single.await('SELECT xp FROM drugs_progression WHERE owner_cid = ?', { cid })
+        local r = MySQL.single.await('SELECT xp FROM gtarp_drugs_progression WHERE owner_cid = ?', { cid })
         if r then xpCache[cid] = tonumber(r.xp) or 0 end
     end)
 end
@@ -156,7 +156,7 @@ local function addXp(cid, amount)
     local rank = rankOfXp(xp)
     pcall(function()
         MySQL.query.await(
-            'INSERT INTO drugs_progression (owner_cid, xp, rank_tier) VALUES (?, ?, ?) \z
+            'INSERT INTO gtarp_drugs_progression (owner_cid, xp, rank_tier) VALUES (?, ?, ?) \z
              ON DUPLICATE KEY UPDATE xp = VALUES(xp), rank_tier = VALUES(rank_tier)',
             { cid, xp, rank })
     end)
@@ -218,7 +218,7 @@ local function plantAtPlot(plot)
     local row
     pcall(function()
         row = MySQL.single.await(
-            'SELECT * FROM drugs_plants WHERE stage = ? \z
+            'SELECT * FROM gtarp_drugs_plants WHERE stage = ? \z
              AND ABS(coord_x - ?) < 0.05 AND ABS(coord_y - ?) < 0.05 AND ABS(coord_z - ?) < 0.05 LIMIT 1',
             { 'growing', plot.x, plot.y, plot.z })
     end)
@@ -349,7 +349,7 @@ RegisterNetEvent('gtarp_drugs:plant', function(plotIndex, strain, additive)
 
     local ok = pcall(function()
         MySQL.insert.await(
-            'INSERT INTO drugs_plants \z
+            'INSERT INTO gtarp_drugs_plants \z
              (owner_cid, coord_x, coord_y, coord_z, strain, soil_tier, planted_at, ready_at, water_level, watered_at, additives, neglected, stage) \z
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             { cid, plot.x, plot.y, plot.z, strain, soilTier, t, ready, 100, t,
@@ -399,7 +399,7 @@ RegisterNetEvent('gtarp_drugs:water', function(plotIndex)
     end
     pcall(function()
         MySQL.update.await(
-            'UPDATE drugs_plants SET water_level = 100, watered_at = ?, neglected = ? WHERE id = ?',
+            'UPDATE gtarp_drugs_plants SET water_level = 100, watered_at = ?, neglected = ? WHERE id = ?',
             { t, neglected, row.id })
     end)
     Bridge.Notify(src, 'Grow', 'Watered.', 'success')
@@ -436,7 +436,7 @@ RegisterNetEvent('gtarp_drugs:harvest', function(plotIndex)
     local claimed = 0
     pcall(function()
         claimed = MySQL.update.await(
-            "UPDATE drugs_plants SET stage = 'harvested' WHERE id = ? AND stage = 'growing'", { row.id }) or 0
+            "UPDATE gtarp_drugs_plants SET stage = 'harvested' WHERE id = ? AND stage = 'growing'", { row.id }) or 0
     end)
     if claimed == 0 then return end
 
@@ -471,13 +471,13 @@ RegisterNetEvent('gtarp_drugs:harvest', function(plotIndex)
     if not Bridge.CanCarry(src, Config.Items.bud, n) or not Bridge.GiveItem(src, Config.Items.bud, n, meta) then
         -- Couldn't take it — put the plant back so nothing is lost.
         pcall(function()
-            MySQL.update.await("UPDATE drugs_plants SET stage = 'growing' WHERE id = ?", { row.id })
+            MySQL.update.await("UPDATE gtarp_drugs_plants SET stage = 'growing' WHERE id = ?", { row.id })
         end)
         Bridge.Notify(src, 'Grow', 'Your hands are full — harvest again with room.', 'error')
         return
     end
 
-    pcall(function() MySQL.query.await('DELETE FROM drugs_plants WHERE id = ?', { row.id }) end)
+    pcall(function() MySQL.query.await('DELETE FROM gtarp_drugs_plants WHERE id = ?', { row.id }) end)
     addXp(cid, Config.Grow.xp)
 
     -- Basic heat: a big harvest is occasionally spotted.
@@ -526,7 +526,7 @@ local function loadRecipes(cid)
     local out = {}
     pcall(function()
         local rows = MySQL.query.await(
-            'SELECT id, brand, base, steps_json FROM drugs_recipes WHERE owner_cid = ? ORDER BY updated_at DESC LIMIT ?',
+            'SELECT id, brand, base, steps_json FROM gtarp_drugs_recipes WHERE owner_cid = ? ORDER BY updated_at DESC LIMIT ?',
             { cid, Config.Mix.maxRecipes })
         for _, r in ipairs(rows or {}) do
             local okS, steps = pcall(function() return json.decode(r.steps_json or '[]') end)
@@ -544,7 +544,7 @@ end
 local function saveRecipe(cid, brand, base, steps, effects)
     pcall(function()
         MySQL.insert.await(
-            'INSERT INTO drugs_recipes (owner_cid, brand, base, steps_json, effects_json) VALUES (?, ?, ?, ?, ?) \z
+            'INSERT INTO gtarp_drugs_recipes (owner_cid, brand, base, steps_json, effects_json) VALUES (?, ?, ?, ?, ?) \z
              ON DUPLICATE KEY UPDATE base = VALUES(base), steps_json = VALUES(steps_json), \z
              effects_json = VALUES(effects_json), updated_at = CURRENT_TIMESTAMP',
             { cid, brand, base, json.encode(steps or {}), json.encode(effects or {}) })
@@ -741,7 +741,7 @@ RegisterNetEvent('gtarp_drugs:mixRecipe', function(baseSlot, recipeId)
     local recipe
     pcall(function()
         recipe = MySQL.single.await(
-            'SELECT brand, base, steps_json FROM drugs_recipes WHERE id = ? AND owner_cid = ?',
+            'SELECT brand, base, steps_json FROM gtarp_drugs_recipes WHERE id = ? AND owner_cid = ?',
             { recipeId, cid })
     end)
     if not recipe then
@@ -785,7 +785,7 @@ local function dirtySoldToday(cid)
     local used = 0
     pcall(function()
         local r = MySQL.single.await(
-            "SELECT COALESCE(SUM(net_dirty),0) AS n FROM drugs_sales \z
+            "SELECT COALESCE(SUM(net_dirty),0) AS n FROM gtarp_drugs_sales \z
              WHERE citizenid = ? AND channel = 'npc' AND created_at >= CURDATE()", { cid })
         used = r and tonumber(r.n) or 0
     end)
@@ -889,7 +889,7 @@ RegisterNetEvent('gtarp_drugs:sell', function(slot, item)
     local m = s.metadata or {}
     pcall(function()
         MySQL.insert.await(
-            'INSERT INTO drugs_sales \z
+            'INSERT INTO gtarp_drugs_sales \z
              (citizenid, channel, brand, base, quality, units, gross, cut_paid, net_dirty, region, flagged, evidence_case_id) \z
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             { cid, 'npc', brand or m.strain or 'buds', base, quality, units, total, 0, total,
@@ -908,7 +908,7 @@ end)
 -- DRY (the drying rack → Heavenly quality)
 -- ===========================================================================
 -- Load fresh (undried) weed_bud into a rack slot; it dries over wall-clock
--- time (a drugs_processes row, kind='dry', epoch seconds), resolved on
+-- time (a gtarp_drugs_processes row, kind='dry', epoch seconds), resolved on
 -- interaction like the grow timers. On collect the whole stack comes back
 -- bumped to Heavenly (tier 4) with dried=true, so the price engine applies the
 -- ×1.30 markup on any later mix/sell. One drying run per slot; the process is
@@ -927,7 +927,7 @@ local function processAtSlot(stationId)
     local row
     pcall(function()
         row = MySQL.single.await(
-            "SELECT * FROM drugs_processes \z
+            "SELECT * FROM gtarp_drugs_processes \z
              WHERE kind = 'dry' AND station_id = ? AND status IN ('running','collecting') LIMIT 1",
             { stationId })
     end)
@@ -1036,7 +1036,7 @@ RegisterNetEvent('gtarp_drugs:dryStart', function(stationId, budSlot)
     local finish = t + math.floor(Config.Dry.baseDrySeconds)
     local ok = pcall(function()
         MySQL.insert.await(
-            'INSERT INTO drugs_processes \z
+            'INSERT INTO gtarp_drugs_processes \z
              (owner_cid, station_id, kind, input_json, started_at, finish_at, status) \z
              VALUES (?, ?, ?, ?, ?, ?, ?)',
             { cid, stationId, 'dry',
@@ -1091,7 +1091,7 @@ RegisterNetEvent('gtarp_drugs:dryCollect', function(stationId)
     local claimed = 0
     pcall(function()
         claimed = MySQL.update.await(
-            "UPDATE drugs_processes SET status = 'collecting' WHERE id = ? AND status = 'running'",
+            "UPDATE gtarp_drugs_processes SET status = 'collecting' WHERE id = ? AND status = 'running'",
             { row.id }) or 0
     end)
     if claimed == 0 then return end
@@ -1104,7 +1104,7 @@ RegisterNetEvent('gtarp_drugs:dryCollect', function(stationId)
     local effects = cloneEffects(input.effects)
     if not drug then
         -- Config drifted out from under a stored strain — free the slot, no grant.
-        pcall(function() MySQL.query.await('DELETE FROM drugs_processes WHERE id = ?', { row.id }) end)
+        pcall(function() MySQL.query.await('DELETE FROM gtarp_drugs_processes WHERE id = ?', { row.id }) end)
         Bridge.Notify(src, Config.Dry.label, 'The rack could not resolve those buds.', 'error')
         return
     end
@@ -1124,13 +1124,13 @@ RegisterNetEvent('gtarp_drugs:dryCollect', function(stationId)
     if not Bridge.CanCarry(src, Config.Items.bud, count) or not Bridge.GiveItem(src, Config.Items.bud, count, meta) then
         -- No room — put the process back so nothing is lost.
         pcall(function()
-            MySQL.update.await("UPDATE drugs_processes SET status = 'running' WHERE id = ?", { row.id })
+            MySQL.update.await("UPDATE gtarp_drugs_processes SET status = 'running' WHERE id = ?", { row.id })
         end)
         Bridge.Notify(src, Config.Dry.label, 'Your hands are full — collect again with room.', 'error')
         return
     end
 
-    pcall(function() MySQL.query.await('DELETE FROM drugs_processes WHERE id = ?', { row.id }) end)
+    pcall(function() MySQL.query.await('DELETE FROM gtarp_drugs_processes WHERE id = ?', { row.id }) end)
     addXp(cid, Config.Dry.xp)
 
     Bridge.Notify(src, Config.Dry.label,
@@ -1194,21 +1194,21 @@ AddEventHandler('onResourceStart', function(resource)
 
     -- A crash mid-harvest can strand a plant at 'harvested'; free those plots.
     pcall(function()
-        MySQL.query.await("DELETE FROM drugs_plants WHERE stage = 'harvested'")
+        MySQL.query.await("DELETE FROM gtarp_drugs_plants WHERE stage = 'harvested'")
     end)
 
     -- A crash mid-collect can strand a dry process at 'collecting' (its buds
     -- were consumed at load time but never handed back); revert to 'running'
     -- so the owner can collect their Heavenly buds again — never delete these.
     pcall(function()
-        MySQL.query.await("UPDATE drugs_processes SET status = 'running' WHERE status = 'collecting'")
+        MySQL.query.await("UPDATE gtarp_drugs_processes SET status = 'running' WHERE status = 'collecting'")
     end)
 
     booted = true
     local sales, dirty = 0, 0
     pcall(function()
         local r = MySQL.single.await(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(net_dirty),0) AS s FROM drugs_sales')
+            'SELECT COUNT(*) AS c, COALESCE(SUM(net_dirty),0) AS s FROM gtarp_drugs_sales')
         sales = r and tonumber(r.c) or 0
         dirty = r and tonumber(r.s) or 0
     end)
@@ -1222,16 +1222,16 @@ exports('GetSummary', function()
     local out = { totalSales = 0, totalDirtyEarned = 0, flaggedSales = 0, activePlants = 0, activeDries = 0 }
     pcall(function()
         local r = MySQL.single.await(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(net_dirty),0) AS s, COALESCE(SUM(flagged),0) AS f FROM drugs_sales')
+            'SELECT COUNT(*) AS c, COALESCE(SUM(net_dirty),0) AS s, COALESCE(SUM(flagged),0) AS f FROM gtarp_drugs_sales')
         if r then
             out.totalSales = tonumber(r.c) or 0
             out.totalDirtyEarned = tonumber(r.s) or 0
             out.flaggedSales = tonumber(r.f) or 0
         end
-        local p = MySQL.single.await("SELECT COUNT(*) AS c FROM drugs_plants WHERE stage = 'growing'")
+        local p = MySQL.single.await("SELECT COUNT(*) AS c FROM gtarp_drugs_plants WHERE stage = 'growing'")
         out.activePlants = p and tonumber(p.c) or 0
         local dr = MySQL.single.await(
-            "SELECT COUNT(*) AS c FROM drugs_processes WHERE kind = 'dry' AND status IN ('running','collecting')")
+            "SELECT COUNT(*) AS c FROM gtarp_drugs_processes WHERE kind = 'dry' AND status IN ('running','collecting')")
         out.activeDries = dr and tonumber(dr.c) or 0
     end)
     return out

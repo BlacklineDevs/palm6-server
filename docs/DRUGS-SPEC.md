@@ -108,7 +108,7 @@ rating, effect chips.
 → **server** resolves effects (transform-or-append, 8-cap, order preserved), recomputes
 quality + unit_value → on final step prompt to **brand** (sanitize/length/profanity) →
 server writes finished item, consumes inputs, logs `batch_id`. Wrap in an `ox_lib`
-progress/skill-check; failure risks a junk effect. Save named recipes (`drugs_recipes`)
+progress/skill-check; failure risks a junk effect. Save named recipes (`gtarp_drugs_recipes`)
 for one-click repeat.
 
 ## 8. NPC dealers & customers (Phase 2, server-authoritative)
@@ -143,11 +143,11 @@ body-search minigame (→ server roll), the 55-tier grind (→ ~8–10 unlock br
 
 ## 11. SQL tables
 
-`drugs_plants` (owner_cid, coords, strain, soil_tier, planted_at, ready_at,
-water_level, additives JSON, stage), `drugs_processes` (cook/dry/mix timers),
-`drugs_recipes` (owner_cid, brand, base, steps_json, effects_json), `drugs_progression`
+`gtarp_drugs_plants` (owner_cid, coords, strain, soil_tier, planted_at, ready_at,
+water_level, additives JSON, stage), `gtarp_drugs_processes` (cook/dry/mix timers),
+`gtarp_drugs_recipes` (owner_cid, brand, base, steps_json, effects_json), `gtarp_drugs_progression`
 (owner_cid, xp, rank_tier), `drugs_dealers`, `drugs_customers` (addiction, trust,
-assigned_dealer), `drugs_sales` (ledger: channel, brand, quality, units, gross,
+assigned_dealer), `gtarp_drugs_sales` (ledger: channel, brand, quality, units, gross,
 cut_paid, net_dirty, region). Finished-product state lives in ox_inventory metadata,
 not a table. Use wall-clock epoch timers resolved on demand (restart-safe, no client tick).
 
@@ -157,7 +157,7 @@ Never trust client price/effects/quality — recompute from config+metadata ever
 Consume inputs before granting output; server-owned DB timers (relog-dupe resistant).
 Caps: 8 effects, per-unit price ceiling, per-tick dealer throughput, per-day NPC-demand
 faucet, mixing concurrency per player. Brand names sanitized/rate-limited. Every unit
-carries batch_id+producer for dupe/laundering audit via drugs_sales + gtarp_evidence.
+carries batch_id+producer for dupe/laundering audit via gtarp_drugs_sales + gtarp_evidence.
 
 ---
 
