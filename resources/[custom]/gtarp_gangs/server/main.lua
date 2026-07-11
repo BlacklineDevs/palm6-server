@@ -256,6 +256,76 @@ RegisterNetEvent('gtarp_gangs:create', function(payload)
     pushMenu(src)
 end)
 
+RegisterNetEvent('gtarp_gangs:rename', function(payload)
+    local src = source
+    local cid = Bridge.GetCitizenId(src)
+    if not cid then return end
+    local mr = memberRow(cid)
+    if not mr then Bridge.Notify(src, 'Gangs', 'You are not in a gang.', 'error'); return end
+    -- Leader-only, re-derived from the DB (never trust the client). Rank gate
+    -- like disband, then the ACTUAL-leader identity check for defence-in-depth
+    -- against a stale/misranked row (leadership is never granted via promote).
+    if mr.rank < Config.Rank.Leader then
+        Bridge.Notify(src, 'Gangs', 'Only the leader can rename the gang.', 'error'); return
+    end
+    local g = gangRow(mr.gang_id)
+    if not g then
+        pcall(function() MySQL.update.await('DELETE FROM gtarp_gang_members WHERE citizenid = ?', { cid }) end)
+        return
+    end
+    if g.leader_cid ~= cid then
+        Bridge.Notify(src, 'Gangs', 'Only the leader can rename the gang.', 'error'); return
+    end
+
+    payload = type(payload) == 'table' and payload or {}
+    local name, nerr = sanitizeName(payload.name)
+    if not name then Bridge.Notify(src, 'Gangs', nerr, 'error'); return end
+    local tag, terr = sanitizeTag(payload.tag)
+    if not tag then Bridge.Notify(src, 'Gangs', terr, 'error'); return end
+
+    -- Nothing changed after sanitising — reject BEFORE charging so a leader is
+    -- never billed for a no-op (and an identical UPDATE yields affected==0).
+    if name == g.name and tag == g.tag then
+        Bridge.Notify(src, 'Gangs', 'That is already the gang name and tag — nothing to change.', 'error'); return
+    end
+
+    -- Uniqueness, excluding OUR OWN gang so re-saving one unchanged field isn't
+    -- a false collision against ourselves.
+    local clash
+    pcall(function()
+        clash = MySQL.single.await(
+            'SELECT id FROM gtarp_gangs WHERE (name = ? OR tag = ?) AND id <> ? LIMIT 1', { name, tag, mr.gang_id })
+    end)
+    if clash then Bridge.Notify(src, 'Gangs', 'That name or tag is already taken.', 'error'); return end
+
+    if Config.RenameCost > 0 and not Bridge.ChargeBank(src, Config.RenameCost, 'gang-rename') then
+        Bridge.Notify(src, 'Gangs',
+            ('Renaming your gang costs $%d from your bank.'):format(Config.RenameCost), 'error')
+        return
+    end
+
+    local affected = 0
+    local ok = pcall(function()
+        affected = MySQL.update.await('UPDATE gtarp_gangs SET name = ?, tag = ? WHERE id = ?', { name, tag, mr.gang_id })
+    end)
+    if not ok or affected ~= 1 then
+        if Config.RenameCost > 0 then Bridge.CreditBankByCitizenId(cid, Config.RenameCost, 'gang-rename-refund') end
+        Bridge.Notify(src, 'Gangs', 'That name or tag was just taken — try another.', 'error')
+        return
+    end
+
+    -- Re-mirror EVERY online member so their PlayerData.gang reflects the new
+    -- name (create only mirrors the founder, but a rename changes it for all).
+    -- No-op unless Config.MirrorToQbxGang; pcall-guarded in the bridge.
+    for _, m in ipairs(gangMembers(mr.gang_id)) do
+        local msrc = Bridge.GetSourceByCitizenId(m.citizenid)
+        if msrc then Bridge.MirrorQbxGang(msrc, name, m.rank) end
+    end
+    Bridge.Notify(src, 'Gangs', ('Renamed to [%s] %s.'):format(tag, name), 'success')
+    dbg(('%s renamed gang %d to [%s] %s'):format(cid, mr.gang_id, tag, name))
+    pushMenu(src)
+end)
+
 RegisterNetEvent('gtarp_gangs:disband', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)

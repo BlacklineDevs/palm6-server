@@ -34,7 +34,15 @@ function Bridge.GetPlayerName(src)
     local p = getPlayer(src)
     if p and p.PlayerData and p.PlayerData.charinfo then
         local ci = p.PlayerData.charinfo
-        return ('%s %s'):format(ci.firstname or '', ci.lastname or ''):gsub('^%s+', ''):gsub('%s+$', '')
+        -- NB: :gsub returns (string, count); assigning to a local truncates to
+        -- the string. Returning the gsub expression directly would leak the
+        -- count as a 2nd return value, which expands inside a
+        -- `{ ..., Bridge.GetPlayerName(src) }` insert-params table into an extra
+        -- element (5 values for 4 columns) and fails the INSERT — this broke
+        -- gang create AND join.
+        local name = ('%s %s'):format(ci.firstname or '', ci.lastname or '')
+        name = name:gsub('^%s+', ''):gsub('%s+$', '')
+        return name
     end
     return GetPlayerName(src) or ('player %d'):format(src)
 end

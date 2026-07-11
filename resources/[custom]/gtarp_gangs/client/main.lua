@@ -8,7 +8,7 @@
 -- ============================================================================
 
 -- Forward-declared so the menu builders can reference each other in any order.
-local promptCreate, promptDeposit, promptWithdraw
+local promptCreate, promptDeposit, promptWithdraw, promptRename
 local openMemberActions, openMembersMenu, openGangMenu
 
 function promptCreate()
@@ -40,6 +40,19 @@ function promptWithdraw()
     })
     if not v or not v[1] then return end
     TriggerServerEvent('gtarp_gangs:withdraw', math.floor(tonumber(v[1]) or 0))
+end
+
+function promptRename(g)
+    local input = Game.InputDialog('Rename gang', {
+        { type = 'input', label = 'Gang name',
+          description = ('%d-%d letters/numbers'):format(Config.NameMinLen, Config.NameMaxLen),
+          required = true, min = 1, max = Config.NameMaxLen, default = g.name },
+        { type = 'input', label = 'Tag',
+          description = ('%d-%d letters/numbers'):format(Config.TagMinLen, Config.TagMaxLen),
+          required = true, min = 1, max = Config.TagMaxLen, default = g.tag },
+    })
+    if not input then return end
+    TriggerServerEvent('gtarp_gangs:rename', { name = input[1], tag = input[2] })
 end
 
 function openMemberActions(data, m)
@@ -119,6 +132,11 @@ function openGangMenu(data)
     end
     opts[#opts + 1] = { title = ('Members (%d)'):format(#(data.members or {})), icon = 'list',
         onSelect = function() openMembersMenu(data) end }
+
+    if rank >= Config.Rank.Leader then
+        opts[#opts + 1] = { title = 'Rename gang', icon = 'pen',
+            onSelect = function() promptRename(g) end }
+    end
 
     if rank >= (mr.disband or 3) then
         opts[#opts + 1] = { title = 'Disband gang', icon = 'trash',

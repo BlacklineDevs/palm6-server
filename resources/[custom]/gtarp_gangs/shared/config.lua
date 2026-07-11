@@ -29,6 +29,11 @@ Config.Command = 'gang'
 -- affordability before creating). Set 0 to make creation free.
 Config.CreationCost = 50000
 
+-- Cost to rename a gang, charged from the leader's BANK (refunded on failure).
+-- Set 0 to make renaming free. Leader-only; server re-validates affordability
+-- before applying the new name/tag.
+Config.RenameCost = 25000
+
 -- Name: 3-24 chars after sanitising to letters/digits/spaces (collapsed).
 Config.NameMinLen = 3
 Config.NameMaxLen = 24
