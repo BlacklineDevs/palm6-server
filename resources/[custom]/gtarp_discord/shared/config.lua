@@ -24,17 +24,17 @@ Config.Debug = false
 Config.Feeds = {
     drops = {
         convar = 'gtarp:discord_drops',
-        username = 'Horizon Drops',
+        username = 'Palm6 Drops',
         color = 15844367,   -- gold — flashdrop releases
     },
     market = {
         convar = 'gtarp:discord_market',
-        username = 'Horizon Exchange',
+        username = 'Palm6 Exchange',
         color = 5763719,    -- green — pumpcoin listings/rugs
     },
     live = {
         convar = 'gtarp:discord_live',
-        username = 'Horizon Live',
+        username = 'Palm6 Live',
         color = 10181046,   -- purple — clout streams on air
     },
     police = {

@@ -15,7 +15,7 @@ local function money(v) return ('$%d'):format(n(v)) end
 local function tally()
     local L = {}
     local minted, removed = 0, 0
-    L[#L + 1] = '=== Horizon crime economy ==='
+    L[#L + 1] = '=== Palm6 crime economy ==='
 
     local la = Bridge.Summary('gtarp_laundering')
     if la then

@@ -19,7 +19,7 @@ balance the economy — by watching real numbers, not guessing.
 Example readout:
 
 ```
-=== Horizon crime economy ===
+=== Palm6 crime economy ===
 laundering:  $412,000 washed clean  (58 run(s), 6 flagged)
 seizure:     $84,500 forfeited by police  (19 seizure(s))
 numbers:     140 draw(s), $220,000 staked (clean), $96,000 paid (dirty)

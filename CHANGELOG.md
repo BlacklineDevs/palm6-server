@@ -1,6 +1,6 @@
-# Changelog — Horizon (gtarp server)
+# Changelog - Palm6 (gtarp server)
 
-All notable changes to the Horizon RP server's custom layer. **This is the
+All notable changes to the Palm6 RP server's custom layer. **This is the
 source of truth we post from** — every entry has an internal/technical list for
 tracking *and* a ready-to-post **📣 Public** blurb (player-facing, no jargon) for
 the Discord `#「📝」updates` channel, the website, and public announcements.

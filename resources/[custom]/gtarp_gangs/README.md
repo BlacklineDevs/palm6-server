@@ -1,6 +1,6 @@
 # gtarp_gangs
 
-Player-run **gang management + shared cash vault + reputation** for the Horizon
+Player-run **gang management + shared cash vault + reputation** for the Palm6
 Qbox server. This is the layer Qbox does **not** ship.
 
 ## What Qbox already provides (and what we do NOT duplicate)

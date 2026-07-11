@@ -64,7 +64,7 @@ local function buildBody(feed, payload)
             description = tostring(payload.description or ''):sub(1, 2048),
             color       = payload.color or def.color,
             fields      = fields,
-            footer      = { text = 'Horizon Roleplay' },
+            footer      = { text = 'Palm6 Roleplay' },
         } },
     })
 end
