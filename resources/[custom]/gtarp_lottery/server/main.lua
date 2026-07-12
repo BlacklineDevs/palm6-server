@@ -421,14 +421,17 @@ end)
 -- ---------------------------------------------------------------------------
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
+    -- Register synchronously at boot so the commands exist immediately, matching
+    -- the proven siblings (gtarp_mdt/citations/legal). The handlers are all
+    -- DB-pcall-guarded, so an ultra-early call before the schema thread runs just
+    -- replies 'no draw is open right now' - visible output, no crash.
+    Bridge.RegisterCommand('lottery', function(source, args) cmdLottery(source, args) end)
+    Bridge.RegisterCommand('lotterydraw', function(source) cmdDraw(source) end)
     CreateThread(function()
         Wait(3000) -- let oxmysql establish its connection first
         math.randomseed(GetGameTimer() + os.time())
         ensureSchema()
         ensureOpenDraw()
-
-        Bridge.RegisterCommand('lottery', function(source, args) cmdLottery(source, args) end)
-        Bridge.RegisterCommand('lotterydraw', function(source) cmdDraw(source) end)
 
         local draw = currentOpenDraw()
         local pot = draw and drawPot(draw.id) or 0

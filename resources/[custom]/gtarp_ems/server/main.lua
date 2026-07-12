@@ -399,19 +399,25 @@ end
 -- Boot: create tables, register commands, print banner. Uses the
 -- gtarp_dbmigrate Wait(3000) pattern so oxmysql's connection is up first.
 -- ---------------------------------------------------------------------------
+-- Commands register at load (matching gtarp_citations), NOT behind the
+-- Wait(3000). RegisterCommand is a pure native that needs no DB, so holding it
+-- behind the oxmysql-connect delay left a ~3s window after `restart gtarp_ems`
+-- where typing a command silently did nothing (command unregistered -> chat
+-- swallows it -> works only on the retype). Only the DDL needs the DB-connect
+-- wait, so ensureSchema stays inside the thread.
+Bridge.RegisterCommand('emsbill', function(source, args) cmdEmsBill(source, args) end)
+Bridge.RegisterCommand('medbills', function(source) cmdMedBills(source) end)
+Bridge.RegisterCommand('paymedbill', function(source, args) cmdPayMedBill(source, args) end)
+Bridge.RegisterCommand('emscalls', function(source, args) cmdEmsCalls(source, args) end)
+if Config.LogTreatments then
+    Bridge.RegisterCommand('treat', function(source, args) cmdTreat(source, args) end)
+end
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     CreateThread(function()
         Wait(3000) -- let oxmysql establish its connection first
         ensureSchema()
-
-        Bridge.RegisterCommand('emsbill', function(source, args) cmdEmsBill(source, args) end)
-        Bridge.RegisterCommand('medbills', function(source) cmdMedBills(source) end)
-        Bridge.RegisterCommand('paymedbill', function(source, args) cmdPayMedBill(source, args) end)
-        Bridge.RegisterCommand('emscalls', function(source, args) cmdEmsCalls(source, args) end)
-        if Config.LogTreatments then
-            Bridge.RegisterCommand('treat', function(source, args) cmdTreat(source, args) end)
-        end
 
         print(('[gtarp_ems] billing open - %d unpaid bill(s), $%d outstanding; dispatch reader %s')
             :format(unpaidCount(), outstandingSum(),
