@@ -17,18 +17,19 @@ Config = {}
 -- CHANGEME values with real identifiers (license:..., discord:..., fivem:...).
 Config.Allowed = {
     police = {
-        -- 'license:CHANGEME_OFFICER_1',
-        -- 'discord:000000000000000000',
+        'discord:872820240139046952',  -- David (owner), first officer
+        -- add real officers here: 'license:...' or 'discord:...'
     },
     ambulance = {
-        -- 'license:CHANGEME_EMT_1',
+        'discord:872820240139046952',  -- David (owner), first EMT
+        -- add real EMTs here: 'license:...' or 'discord:...'
     },
 }
 
 -- Staff override: identifiers in this list bypass the whitelist for ANY
 -- job (used by admins for test/setup). Keep tight.
 Config.StaffOverride = {
-    -- 'license:CHANGEME_OWNER',
+    'discord:872820240139046952',  -- David (owner) — bypass for setup/testing
 }
 
 -- Friendly message returned when a setjob is denied.
