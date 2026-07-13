@@ -515,6 +515,20 @@ local function cmdBook(src, args)
             })
         end)
     end
+    -- In-world civic bulletin (public facts only) via the palm6-bot feed. The
+    -- bot narrates this into #pbpd-bulletin; complementary to the case-desk
+    -- webhook above. Soft-dep: never breaks a booking if cityfeed is absent.
+    if Bridge.ResourceStarted('gtarp_cityfeed') then
+        pcall(function()
+            exports.gtarp_cityfeed:Emit({
+                type = 'arrest',
+                case_ref = ('Booking #%d'):format(bookingId),
+                charge = charges,
+                character_name = citizenName,
+                agency = 'Palm6 Bay Police Department',
+            })
+        end)
+    end
     Bridge.Notify(src, 'MDT',
         ('Booking #%d filed on %s%s.'):format(bookingId, citizenName,
             served > 0 and (', %d warrant(s) served'):format(served) or ''), 'success')
