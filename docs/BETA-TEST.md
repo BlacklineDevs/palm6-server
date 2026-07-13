@@ -144,6 +144,24 @@ Low-severity notes (documented, **not** exploitable — no code change made):
 - [x] No confirmed findings requiring a fix
 - [ ] (optional) apply fightclub charge-first + protection finally-release hardening in a future pass
 
+### §4b — Systematic beta-readiness sweep (2026-07-13, 5 lenses × adversarial verify)
+
+Second pass covering the WHOLE custom layer along 5 orthogonal lenses (boot/items, money-remaining-16, cross-resource contracts, new-player path, coords). 6 CONFIRMED findings, 10 UNCERTAIN (mostly coords needing in-game verify).
+
+**FIXED (committed `d1509cf`, local):**
+- **[HIGH] gtarp_insurance theft-claim faucet** — `insure → file theft/total-loss claim → policy retires → re-insure same plate` was a strictly net-positive loop (~54% of vehicle value payout vs 5% premium, every 15 min; theft claims also bypass the forensic deny gate because `vehCoords` is nil in the theft branch; vehicle never consumed). **Fix: a written-off plate (prior theft/total_loss claim) is no longer re-insurable** — kills the repeatable loop. Repairable minor damage stays insurable.
+- **[LOW] gtarp_dbmigrate** — fxmanifest `lua54 'yes'` added; scope comments corrected (0040/0042/0043/0044 → 0040 + 0042-0047; code already applies 0045-0047).
+- **[LOW] gtarp_help** — `/lottery` (real public command) added to the City menu (was missing).
+
+**CLEARED during triage:** gtarp_yard's `xt-prison` dependency — confirmed **xt-prison IS running on prod** (base-recipe resource, correctly not in our custom.cfg). Not a blocker.
+
+**David decisions / actions still open (from the sweep):**
+- **Insurance theft semantics (deeper):** the repeatable faucet is closed, but manufactured theft (car state=0 + not in synced world, no real theft event) still pays once with no forensic gate. Decide: gate theft on a gtarp_replay scene or a real reported-stolen event, and/or consume the vehicle in `player_vehicles` on a theft/total-loss payout. *(my call: worth doing before a big beta, but not a repeatable exploit anymore)*
+- **eventguard budgets:** counterfeit/flashdrop/pumpcoin/grind/witnesses money events + `gtarp_mechanic:acceptInvoice` have no eventguard rate-cap (defense-in-depth only — each resource's own cooldown already prevents dupes; not exploitable). Plus a stale gtarp_mechanic eventguard comment. *(I can add these; sizing needs each resource's cooldown read first — say the word.)*
+- **evidence table-payload renders as raw JSON** to officers in `/mdtcase`/`/evidence case` — cosmetic UX (touches gtarp_mdt, currently owned by the Discord terminal — left to avoid collision).
+- **gtarp_devtest** is convar-gated OFF in prod, so contract drift ships silently — consider enabling briefly on a staging boot.
+- Coords: market exchange/refinery, yard stations, smuggling nodes remain Tier-3 placeholders (see §3).
+
 ---
 
 ## §5 — Owed item-icon PNG manifest (David generates in ChatGPT)
