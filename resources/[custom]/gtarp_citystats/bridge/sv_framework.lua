@@ -47,14 +47,12 @@ end
 
 -- Reply to a command invoker: console gets prints, players get chat lines.
 function Bridge.Reply(src, lines)
-    for _, line in ipairs(lines) do
-        if src == 0 then
-            print('[gtarp_citystats] ' .. line)
-        else
-            TriggerClientEvent('chat:addMessage', src,
-                { color = { 120, 200, 255 }, args = { 'CITY', line } })
-        end
+    if src == 0 then
+        for _, line in ipairs(lines) do print('[gtarp_citystats] ' .. line) end
+        return
     end
+    -- One gtarp_ui panel instead of dumping lines into the chat feed.
+    TriggerClientEvent('gtarp_ui:show', src, { tag = 'CITY', color = { 120, 200, 255 }, lines = lines })
 end
 
 -- Is a given resource currently started? Used to soft-skip sections whose

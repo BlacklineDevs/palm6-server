@@ -18,12 +18,14 @@ local lastRun = {}                           -- [src] = ts (public-command coold
 
 local function now() return os.time() end
 
--- Console prints, players get a chat line.
+-- Console prints; players get a single-line toast. Multi-line scoreboard
+-- output goes through Bridge.Reply (one gtarp_ui panel) instead, so these
+-- single informational/error lines are the only thing echo handles now.
 local function echo(src, line)
     if not src or src == 0 then
         print('[gtarp_season] ' .. line)
     else
-        Bridge.ChatEcho(src, 'Season', line)
+        Bridge.Notify(src, 'Season', line, 'inform')
     end
 end
 
@@ -327,33 +329,37 @@ local function cmdSeason(src)
         Bridge.Notify(src, 'Season', 'Give it a moment.', 'error')
         return
     end
-    echo(src, ('%s (running since %s)'):format(s.name, tostring(s.starts_at)))
+    local lines = {
+        ('=== %s ==='):format(s.name),
+        ('Running since %s'):format(tostring(s.starts_at)),
+    }
 
     local cid = Bridge.GetCitizenId(src)
-    if not cid then return end
+    if not cid then Bridge.Reply(src, lines); return end
     local startsAt = s.starts_at
 
     local dRank, dScore = drugsStanding(cid, startsAt)
-    echo(src, dScore > 0
+    lines[#lines + 1] = dScore > 0
         and ('Drug Empire: #%s ($%d dirty)'):format(tostring(dRank or '?'), dScore)
-        or  'Drug Empire: no activity yet')
+        or  'Drug Empire: no activity yet'
 
     local xRank, xScore = dirtyStanding(cid, startsAt)
-    echo(src, xScore > 0
+    lines[#lines + 1] = xScore > 0
         and ('Dirtiest Hustler: #%s ($%d)'):format(tostring(xRank or '?'), xScore)
-        or  'Dirtiest Hustler: no activity yet')
+        or  'Dirtiest Hustler: no activity yet'
 
     local crew = Bridge.GetCrew(cid)
     if crew and crew.name then
         local rRank, rScore = repStanding(crew.name)
-        echo(src, rScore > 0
+        lines[#lines + 1] = rScore > 0
             and ('%s reputation: #%s (%d rep)'):format(crew.name, tostring(rRank or '?'), rScore)
-            or  (crew.name .. ' reputation: unranked'))
+            or  (crew.name .. ' reputation: unranked')
         local tRank, tScore = turfStanding(crew.name)
-        echo(src, tScore > 0
+        lines[#lines + 1] = tScore > 0
             and ('%s turf: #%s (%d zones)'):format(crew.name, tostring(tRank or '?'), tScore)
-            or  (crew.name .. ' turf: no zones held'))
+            or  (crew.name .. ' turf: no zones held')
     end
+    Bridge.Reply(src, lines)
 end
 
 -- /seasontop <ladder> [n]: the top N of one ladder.
@@ -377,16 +383,17 @@ local function cmdSeasonTop(src, args)
     end
 
     local rows = getLadder(key, s)
-    echo(src, ('%s (%s)'):format(s.name, Config.Ladders[key].title))
     if #rows == 0 then
-        echo(src, 'No entries yet.')
+        echo(src, ('%s: no entries yet.'):format(Config.Ladders[key].title))
         return
     end
+    local lines = { ('=== %s: %s ==='):format(s.name, Config.Ladders[key].title) }
     local shown = math.min(n, #rows)
     for i = 1, shown do
         local r = rows[i]
-        echo(src, ('%d. %s (%s)'):format(i, r.label, r.display))
+        lines[#lines + 1] = ('%d. %s (%s)'):format(i, r.label, r.display)
     end
+    Bridge.Reply(src, lines)
 end
 
 -- /seasonopen <name> (admin): opens a season; refuses if one is already open.

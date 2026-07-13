@@ -39,14 +39,12 @@ end
 
 -- Reply to a command invoker: console gets prints, players get chat lines.
 function Bridge.Reply(src, lines)
-    for _, line in ipairs(lines) do
-        if src == 0 then
-            print('[gtarp_ganginfo] ' .. line)
-        else
-            TriggerClientEvent('chat:addMessage', src,
-                { color = { 170, 130, 255 }, args = { 'Gangs', line } })
-        end
+    if src == 0 then
+        for _, line in ipairs(lines) do print('[gtarp_ganginfo] ' .. line) end
+        return
     end
+    -- One gtarp_ui panel instead of dumping lines into the chat feed.
+    TriggerClientEvent('gtarp_ui:show', src, { tag = 'Gangs', color = { 170, 130, 255 }, lines = lines })
 end
 
 -- Notify a player (used only for rate-limit / not-found feedback).

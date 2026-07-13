@@ -40,6 +40,16 @@ function Bridge.ChatEcho(src, prefix, line)
     })
 end
 
+-- Multi-line scoreboard output as ONE gtarp_ui panel instead of chat spam.
+-- Console falls back to prints since NUI cannot target src 0.
+function Bridge.Reply(src, lines)
+    if not src or src == 0 then
+        for _, line in ipairs(lines) do print('[gtarp_season] ' .. line) end
+        return
+    end
+    TriggerClientEvent('gtarp_ui:show', src, { tag = 'Season', color = { 120, 200, 255 }, lines = lines })
+end
+
 -- Console / ace check for the admin season-control commands.
 function Bridge.IsAdmin(src)
     if not src or src == 0 then return true end  -- server console

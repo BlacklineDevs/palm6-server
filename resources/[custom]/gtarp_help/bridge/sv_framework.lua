@@ -47,15 +47,13 @@ end
 
 -- Reply to a command invoker: console gets prints, players get chat lines.
 function Bridge.Reply(src, lines)
-    local c = Config.ChatColor or { 130, 205, 140 }
-    for _, line in ipairs(lines) do
-        if src == 0 then
-            print('[gtarp_help] ' .. line)
-        else
-            TriggerClientEvent('chat:addMessage', src,
-                { color = { c[1], c[2], c[3] }, args = { 'HELP', line } })
-        end
+    if src == 0 then
+        for _, line in ipairs(lines) do print('[gtarp_help] ' .. line) end
+        return
     end
+    -- One gtarp_ui panel instead of dumping lines into the chat feed.
+    local c = Config.ChatColor or { 130, 205, 140 }
+    TriggerClientEvent('gtarp_ui:show', src, { tag = 'HELP', color = { c[1], c[2], c[3] }, lines = lines })
 end
 
 -- Unrestricted chat command (all gating, if any, happens server-side in the

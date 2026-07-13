@@ -66,14 +66,12 @@ end
 
 -- Reply to a command invoker: console gets prints, players get chat lines.
 function Bridge.Reply(src, lines)
-    for _, line in ipairs(lines) do
-        if src == 0 then
-            print('[gtarp_ems] ' .. line)
-        else
-            TriggerClientEvent('chat:addMessage', src,
-                { color = { 255, 195, 100 }, args = { 'EMS', line } })
-        end
+    if src == 0 then
+        for _, line in ipairs(lines) do print('[gtarp_ems] ' .. line) end
+        return
     end
+    -- One gtarp_ui panel instead of dumping lines into the chat feed.
+    TriggerClientEvent('gtarp_ui:show', src, { tag = 'EMS', color = { 255, 195, 100 }, lines = lines })
 end
 
 -- Caller position as {x,y,z}, or nil.
