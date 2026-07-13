@@ -179,6 +179,26 @@ local function cmdInsure(src, args)
         return
     end
 
+    -- A vehicle that has already been written off (theft or total loss) is not
+    -- re-insurable. Without this gate, insure -> file theft/total-loss claim ->
+    -- policy retires to 'claimed' -> re-insure the same plate is a strictly
+    -- net-positive money loop (premium 5% vs payout ~54% of value). Repairable
+    -- minor-damage claims do NOT write the vehicle off, so they stay insurable.
+    local writeOff
+    pcall(function()
+        writeOff = MySQL.single.await([[
+            SELECT id FROM gtarp_insurance_claims
+            WHERE REPLACE(UPPER(plate), ' ', '') = ?
+              AND kind IN ('theft', 'total_loss')
+              AND status IN ('processing', 'paid', 'flagged_paid')
+            LIMIT 1
+        ]], { plate })
+    end)
+    if writeOff then
+        Bridge.Notify(src, 'Mors Mutual', 'That vehicle is on record as a total loss / theft and can no longer be insured.', 'error')
+        return
+    end
+
     local U = Config.Underwriting
     local value = Bridge.GetVehicleValue(veh.vehicle) or U.MinValue
     if value < U.MinValue then value = U.MinValue end

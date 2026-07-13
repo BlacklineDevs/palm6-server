@@ -2,7 +2,7 @@
 -- gtarp_dbmigrate — ONE-SHOT idempotent migration applier
 -- ---------------------------------------------------------------------------
 -- The prod DB (db-dtx-06) is not reachable from outside the panel network and
--- CI never touches the DB, so migrations 0040/0042/0043/0044 are applied here
+-- CI never touches the DB, so migrations 0040 + 0042-0047 are applied here
 -- using the game server's own oxmysql connection on boot. Every statement is
 -- IF NOT EXISTS, so re-running is a harmless no-op. Each runs independently
 -- (pcall-guarded) so one failure never blocks the rest. REMOVE this resource

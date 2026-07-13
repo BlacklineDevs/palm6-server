@@ -56,7 +56,7 @@ Config.ChatColor = { 130, 205, 140 }
 --                 gtarp_clout ('golive', 'endstream', 'clout', 'streamers')
 --   EMS        -> gtarp_ems ('medbills', 'paymedbill', 'emsbill', 'emscalls', 'treat')
 --   City       -> gtarp_citystats ('citystats'), gtarp_season ('season',
---                 'seasontop'), gtarp_onboarding ('rules')
+--                 'seasontop'), gtarp_lottery ('lottery'), gtarp_onboarding ('rules')
 --   Justice    -> gtarp_rapsheet ('rapsheet'), gtarp_wanted ('wanted', 'amiwanted'),
 --                 gtarp_citations ('fines', 'payfine'),
 --                 gtarp_insurance ('insure', 'fileclaim', 'policy'),
@@ -133,11 +133,12 @@ Config.Categories = {
     {
         key = 'city',
         label = 'City Info',
-        blurb = 'Public read-outs on the city and the season.',
+        blurb = 'Public read-outs on the city, the season and the lottery.',
         commands = {
             { cmd = '/citystats', blurb = 'Live city stats: gangs, economy, warrants: /citystats [hours].' },
             { cmd = '/season',    blurb = 'See the current season and its theme.' },
             { cmd = '/seasontop', blurb = 'Season leaderboard: /seasontop [board].' },
+            { cmd = '/lottery',   blurb = 'Buy into the city lottery: /lottery [tickets].' },
             { cmd = '/rules',     blurb = 'Re-read the server rules at any time.' },
         },
     },
