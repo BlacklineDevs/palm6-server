@@ -35,13 +35,15 @@ Config.Events = {
     ['gtarp_robbery:complete'] = { calls = 10, window_seconds = 60 },
     ['gtarp_robbery:cancel']   = { calls = 10, window_seconds = 60 },
 
-    -- gtarp_mechanic — repair-invoice two-phase flow. `complete` charges the
-    -- customer's bank and credits the mechanic (Bridge.ChargeBank /
-    -- Bridge.CreditBank). Budget sized generously so a busy on-duty
-    -- mechanic working multiple vehicles isn't throttled.
-    ['gtarp_mechanic:start']    = { calls = 20, window_seconds = 60 },
-    ['gtarp_mechanic:complete'] = { calls = 20, window_seconds = 60 },
-    ['gtarp_mechanic:cancel']   = { calls = 10, window_seconds = 60 },
+    -- gtarp_mechanic — repair-invoice flow. `complete`/`confirmInvoice` SEND the
+    -- invoice offer to the customer; the MONEY-touching event is `acceptInvoice`
+    -- (Bridge.ChargeBank customer / Bridge.CreditBank mechanic), gated in-resource
+    -- by an atomic offer-consume + per-customer cooldown. Budgets sized generously
+    -- so a busy on-duty mechanic working multiple vehicles isn't throttled.
+    ['gtarp_mechanic:start']         = { calls = 20, window_seconds = 60 },
+    ['gtarp_mechanic:complete']      = { calls = 20, window_seconds = 60 },
+    ['gtarp_mechanic:acceptInvoice'] = { calls = 20, window_seconds = 60 },
+    ['gtarp_mechanic:cancel']        = { calls = 10, window_seconds = 60 },
 
     -- gtarp_turf — territory capture two-phase flow. `complete` writes
     -- gtarp_turf (owner_gang flip = the reputation payout). `requestSync`
@@ -143,6 +145,39 @@ Config.Events = {
     ['gtarp_yard:server:doLabor']       = { calls = 20, window_seconds = 60 },
     ['gtarp_yard:server:buyCommissary'] = { calls = 20, window_seconds = 60 },
     ['gtarp_yard:server:postBail']      = { calls = 6,  window_seconds = 60 },
+
+    -- gtarp_grind — resource gathering + sale. `sell` pays clean cash for raw
+    -- goods; `gather` grants the raw item. Both are server-priced/validated and
+    -- carry their own per-player cooldown; these blunt budgets are defense-in-depth
+    -- against a modified-client flood (gtarp_eventguard ensures before gtarp_grind).
+    ['gtarp_grind:gather'] = { calls = 30, window_seconds = 60 },
+    ['gtarp_grind:sell']   = { calls = 20, window_seconds = 60 },
+
+    -- gtarp_pumpcoin — memecoin exchange. `buy`/`sell` move bank cash against the
+    -- bonding curve; `mint` creates a new coin (rare, charges a mint fee). Each is
+    -- server-priced with its own cooldown/lock; budgets are defense-in-depth. `mint`
+    -- is a one-off creation so a tighter budget still never clips legit use.
+    ['gtarp_pumpcoin:buy']  = { calls = 20, window_seconds = 60 },
+    ['gtarp_pumpcoin:sell'] = { calls = 20, window_seconds = 60 },
+    ['gtarp_pumpcoin:mint'] = { calls = 5,  window_seconds = 60 },
+
+    -- gtarp_flashdrop — hype-drop sneaker market. `finishCheckout` (primary buy),
+    -- `consign:buy` (secondary-market buy) and `fence:sell` (fence payout) all move
+    -- money; each is server-priced + consume-before-grant with its own cooldown.
+    ['gtarp_flashdrop:finishCheckout'] = { calls = 15, window_seconds = 60 },
+    ['gtarp_flashdrop:consign:buy']    = { calls = 15, window_seconds = 60 },
+    ['gtarp_flashdrop:fence:sell']     = { calls = 15, window_seconds = 60 },
+
+    -- gtarp_counterfeit — counterfeit-cash chain. `printer:finish` collects a
+    -- printed run, `sink:spend` launders/spends fake bills, `fence:pass` passes to
+    -- a fence; each moves item/money and is server-validated with its own cooldown.
+    ['gtarp_counterfeit:printer:finish'] = { calls = 15, window_seconds = 60 },
+    ['gtarp_counterfeit:sink:spend']     = { calls = 20, window_seconds = 60 },
+    ['gtarp_counterfeit:fence:pass']     = { calls = 20, window_seconds = 60 },
+
+    -- gtarp_witnesses — `payoff` pays a witness to recant (bank cash out),
+    -- server-validated with its own cooldown. Blunt budget as defense-in-depth.
+    ['gtarp_witnesses:payoff'] = { calls = 15, window_seconds = 60 },
 
     -- ox_inventory shop purchase fan-out — recipe-shipped net event.
     -- ox_inventory does its own per-event data validation (Utils.LogExploit);
