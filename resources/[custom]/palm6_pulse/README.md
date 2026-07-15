@@ -13,14 +13,17 @@ city-wide, transparent **payout modifier** — and announces it.
   points** and extends your streak (the daily-return hook). Points have **no cash
   value** — they feed the season scoreboard.
 
-## Windows
-| Kind | Domain | Effect (a multiplier consumers read) | Fires when |
-|------|--------|--------------------------------------|-----------|
-| Boomtown | `grind` | legal fish/mine/hunt sale value ↑ | low online / early |
-| Hot Exchange | `market` | one commodity's price spikes | population gate |
-| Bounty Surge | `bounty` | posted bounty payouts ↑ | population gate |
-| Crackdown | `police` | arrest/citation rewards ↑ | more online |
-| Turf War | `gang` | turf/rep gains ↑ | ≥2 gangs online |
+## Windows (only those with a LIVE consumer are enabled)
+| Kind | Domain | Effect (a multiplier consumers read) | Consumer | Status |
+|------|--------|--------------------------------------|----------|--------|
+| Boomtown | `grind` | legal fish/mine/hunt sale value ↑ | palm6_grind sell | ✅ live |
+| Hot Exchange | `market` | one commodity's price spikes | palm6_market currentPrice | ✅ live |
+| Bounty Surge | `bounty` | posted bounty payouts ↑ (deliberate capped stimulus faucet) | palm6_bounty capture | ✅ live |
+| Crackdown | `police` | arrest/citation rewards ↑ | — none (police salaried) | ⏸ deferred |
+| Turf War | `gang` | turf/rep gains ↑ | — none (rep = zone count) | ⏸ deferred |
+
+Crackdown + Turf War are commented out in `shared/config.lua` until they have a
+real consumer — pulse never announces a boost that does nothing.
 
 ## Money-safety
 Pulse **never grants money/items** except the check-in reward, which is gated by
@@ -36,10 +39,11 @@ exports.palm6_pulse:GetActive()   -- table|nil { kind,label,domain,modifier,targ
 exports.palm6_pulse:GetMeter()    -- 0..100 city activity index
 exports.palm6_pulse:GetSummary()  -- { activeKind, windowsToday, checkinsToday, meter }
 ```
-Wired consumer (Phase 1): **palm6_market** multiplies `currentPrice(item)` by
-`GetActiveModifier('market', item)` during a Hot Exchange window (one pcall'd
-line; market runs standalone if pulse is absent). Bounty/citations/turf can adopt
-the same one-liner to honor `bounty`/`police`/`gang` windows.
+Wired consumers: **palm6_market** (`currentPrice` × `GetActiveModifier('market', item)`),
+**palm6_grind** (sell `total` × `GetActiveModifier('grind')`), **palm6_bounty**
+(capture `amount` × `GetActiveModifier('bounty')`) — each one pcall+ResourceState-
+gated line, so every consumer runs standalone if pulse is absent. Any resource
+adopts a window with the same one-liner in its payout path.
 
 ## Composition / soft deps
 All sibling reads (`palm6_gangs:GetGang`, discord webhook, market) are pcall-

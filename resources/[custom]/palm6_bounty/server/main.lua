@@ -306,6 +306,17 @@ local function cmdCapture(src, args)
 
     lastCapture[hunterCid] = t
     local amount = tonumber(contract.amount) or 0
+    -- palm6_pulse "Bounty Surge" window boosts the hunter's payout. NOTE: this is
+    -- a DELIBERATE, capped (<=Config.MaxModifier=2.0), time-windowed, cooldowned
+    -- economic-stimulus faucet — the amount above the poster's escrow is minted,
+    -- matching the shipped Pulse design ("posted bounty payouts up"). Server-read +
+    -- pcall+ResourceState-gated (bounty runs standalone if pulse is absent).
+    pcall(function()
+        if GetResourceState('palm6_pulse') == 'started' then
+            local m = exports.palm6_pulse:GetActiveModifier('bounty')
+            if type(m) == 'number' and m > 1 then amount = math.floor(amount * m) end
+        end
+    end)
     Bridge.CreditBankByCitizenId(hunterCid, amount, 'bounty-capture')
     Bridge.Notify(src, 'Bounty Board',
         ('Contract #%d claimed: %s. $%d landed in your bank.'):format(id, contract.target_name, amount), 'success')

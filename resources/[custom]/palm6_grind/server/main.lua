@@ -123,6 +123,17 @@ RegisterNetEvent('palm6_grind:sell', function(activityKey)
     local price = math.floor(sell.price * (1 + level * Config.PriceBonusPerLevel))
     local total = count * price
 
+    -- palm6_pulse "Boomtown" window boosts legal-grind sale value. Server-read +
+    -- capped (a client can't assert a multiplier); pcall+ResourceState-gated so
+    -- grind runs standalone if pulse is absent. This is an NPC-buyer faucet — the
+    -- exact reward loop the Boomtown window is meant to amplify.
+    pcall(function()
+        if GetResourceState('palm6_pulse') == 'started' then
+            local m = exports.palm6_pulse:GetActiveModifier('grind')
+            if type(m) == 'number' and m > 1 then total = math.floor(total * m) end
+        end
+    end)
+
     if not Bridge.RemoveItem(src, sell.item, count) then
         Bridge.Notify(src, sell.label, 'Sale failed.', 'error')
         return

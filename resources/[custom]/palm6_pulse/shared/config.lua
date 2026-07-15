@@ -62,14 +62,20 @@ Config.Windows = {
         label = 'Bounty Surge', domain = 'bounty', modifier = 1.75, weight = 3, minOnline = Config.MinOnline,
         blurb = 'Skip-tracers are cashing in — posted bounty payouts are surging.',
     },
-    crackdown = {
-        label = 'Crackdown', domain = 'police', modifier = 1.6, weight = 3, minOnline = Config.MinOnline + 2,
-        blurb = 'The brass ordered a crackdown — arrests and citations pay extra while it lasts.',
-    },
-    turf_war = {
-        label = 'Turf War', domain = 'gang', modifier = 1.6, weight = 4, minOnline = Config.MinOnline + 1,
-        blurb = 'Tensions are high — turf and rep gains are amplified across the sets.',
-    },
+    -- Only windows whose domain has a LIVE consumer are listed here, so pulse
+    -- never announces a boost that does nothing. Live consumers:
+    --   grind  -> palm6_grind sell (Boomtown)
+    --   market -> palm6_market currentPrice (Hot Exchange)
+    --   bounty -> palm6_bounty capture payout (Bounty Surge)
+    -- TODO(David): crackdown (police) and turf_war (gang) are DEFERRED — the game
+    -- has no cop arrest-reward (police are salaried) and turf reputation is a zone
+    -- COUNT (no numeric rep grant to boost). Re-enable each here once it has a real
+    -- consumer (e.g. a per-arrest reward, or a numeric gang-rep grant on turf
+    -- capture that reads GetActiveModifier('gang')).
+    -- crackdown = { label = 'Crackdown', domain = 'police', modifier = 1.6, weight = 3, minOnline = Config.MinOnline + 2,
+    --     blurb = 'The brass ordered a crackdown — arrests and citations pay extra while it lasts.' },
+    -- turf_war  = { label = 'Turf War', domain = 'gang', modifier = 1.6, weight = 4, minOnline = Config.MinOnline + 1,
+    --     blurb = 'Tensions are high — turf and rep gains are amplified across the sets.' },
 }
 
 -- Commodities Hot Exchange may spike (must match palm6_market commodity keys).
