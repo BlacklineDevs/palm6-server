@@ -8,6 +8,16 @@
 
 Palm6 is a premium, cinematic GTA roleplay experience built with long-term vision, strong brand identity, and professional creative governance.
 
+> ## ⚠️ Repository State (Phase 1)
+> This repo is at **Phase 1 (Foundation)** of the Creative System rollout. Only
+> `00-FOUNDATION/`, `19-RFC/`, `15-VAULT/`, and the root docs
+> (`00-START-HERE.md`, `HANDOFF-TO-CLAUDE.md`, `MASTER-INDEX.md`, `README.md`) exist
+> so far. The reading order below is the *intended* full-system trail; some items
+> (`EXECUTIVE-SUMMARY.md`, `PHILOSOPHY-WHY-THIS-MATTERS.md`, `01-BRAND/`) are **not yet
+> present** and arrive in later phases via the RFC process — their absence is expected,
+> not an error. **Start at `MASTER-INDEX.md`** for the accurate current map, then read
+> what exists in `00-FOUNDATION/`.
+
 ## Quick Start Reading Order
 
 1. **EXECUTIVE-SUMMARY.md** — High-level overview of the entire system

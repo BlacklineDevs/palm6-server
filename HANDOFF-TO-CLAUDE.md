@@ -4,12 +4,18 @@
 **Status:** Candidate  
 **Purpose:** Instructions for future Claude sessions working with this system
 
+> ## ⚠️ Repository State (Phase 1)
+> This repo is at **Phase 1 (Foundation)**. `19-RFC/` and `15-VAULT/` exist (see their
+> READMEs). `EXECUTIVE-SUMMARY.md` and `01-BRAND/` are **not yet present** — they arrive
+> in later phases via RFC; their absence is expected. Read `MASTER-INDEX.md` for the
+> accurate current map before following the trail below.
+
 ## Required Reading Order
 
 1. `00-START-HERE.md`
-2. `EXECUTIVE-SUMMARY.md`
-3. `MASTER-INDEX.md`
-4. Relevant documents in `00-FOUNDATION/` and `01-BRAND/`
+2. `MASTER-INDEX.md` — accurate current map (read this first)
+3. Relevant documents in `00-FOUNDATION/`
+4. *(Later phases)* `EXECUTIVE-SUMMARY.md`, `01-BRAND/` — when they exist
 
 ## Core Rules for Claude
 
