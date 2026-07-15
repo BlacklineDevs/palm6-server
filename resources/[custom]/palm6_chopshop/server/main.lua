@@ -154,27 +154,12 @@ local function cmdSellStolen(src)
         return
     end
 
-    -- Consume the asset BEFORE paying: if this is a registered player vehicle,
-    -- durably retire the ownership row so the car cannot be recovered from a
-    -- garage/impound and chopped again. Closes the collusion faucet where an
-    -- owner hands a car to a chopper, collects the payout, then re-summons the
-    -- same car for another payout. A given owned plate can now only ever be
-    -- chopped once (the car is permanently gone — the intended stolen-vehicle
-    -- economy outcome). Stolen-but-unowned cars have no recoverable row to
-    -- retire, so they skip this. Pay only if the retire affected exactly 1 row.
-    if ownRow then
-        local removed = 0
-        pcall(function()
-            removed = MySQL.update.await(
-                'DELETE FROM player_vehicles WHERE plate = ? AND citizenid = ?',
-                { plate, ownRow.citizenid }) or 0
-        end)
-        if removed ~= 1 then
-            Bridge.Notify(src, 'Chop Shop', 'That vehicle is no longer choppable.', 'error')
-            return
-        end
-    end
-
+    -- Record the sale FIRST (durable audit trail), THEN retire the asset, THEN
+    -- pay. Ordering matters: if we destroyed the victim's registration before the
+    -- sale row existed and the INSERT then failed, an innocent owner's car would be
+    -- wiped with no sale/payout/trail. So: INSERT sale -> retire owned vehicle
+    -- (void the sale if the retire fails) -> pay. Consume (retire) still precedes
+    -- the payout, so the collusion faucet stays closed.
     local saleId
     local ok = pcall(function()
         saleId = MySQL.insert.await(
@@ -186,6 +171,27 @@ local function cmdSellStolen(src)
     if not ok or not saleId then
         Bridge.Notify(src, 'Chop Shop', 'Could not process the sale — try again.', 'error')
         return
+    end
+
+    -- Retire a registered player vehicle so it can't be recovered from a garage/
+    -- impound and chopped again (closes the owner-collusion faucet — a given owned
+    -- plate can only ever be chopped once; the car is permanently gone). Stolen-but-
+    -- unowned cars have no recoverable row, so they skip this. If the retire fails,
+    -- VOID the just-recorded sale so a failed retire never leaves an orphan sale.
+    if ownRow then
+        local removed = 0
+        pcall(function()
+            removed = MySQL.update.await(
+                'DELETE FROM player_vehicles WHERE plate = ? AND citizenid = ?',
+                { plate, ownRow.citizenid }) or 0
+        end)
+        if removed ~= 1 then
+            pcall(function()
+                MySQL.update.await('DELETE FROM palm6_chopshop_sales WHERE id = ?', { saleId })
+            end)
+            Bridge.Notify(src, 'Chop Shop', 'That vehicle is no longer choppable.', 'error')
+            return
+        end
     end
 
     Bridge.CreditBank(src, payout, 'chopshop-sale')

@@ -248,7 +248,7 @@ RegisterNetEvent('palm6_drugs:plotMenu', function(plotIndex)
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if not cooldownOk(src, 'menu', 1) then return end  -- throttle menu-spam DB fan-out (DoS)
+    if not cooldownOk(src, 'menu:plot', 1) then return end  -- per-menu throttle (DoS); distinct key so moving between stations isn't blocked
     local plot = validPlot(src, plotIndex)
     if not plot then
         Bridge.Notify(src, 'Grow', 'You are not at a grow plot.', 'error')
@@ -681,7 +681,7 @@ RegisterNetEvent('palm6_drugs:mixMenu', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if not cooldownOk(src, 'menu', 1) then return end  -- throttle menu-spam DB fan-out (DoS)
+    if not cooldownOk(src, 'menu:mix', 1) then return end  -- per-menu throttle (DoS)
     if not near(src, Config.Mix.coords, Config.Mix.radius + Config.Mix.proximitySlack) then
         Bridge.Notify(src, 'Mixing', 'You are not at the mixing station.', 'error')
         return
@@ -814,7 +814,7 @@ RegisterNetEvent('palm6_drugs:sellMenu', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if not cooldownOk(src, 'menu', 1) then return end  -- throttle menu-spam DB fan-out (DoS)
+    if not cooldownOk(src, 'menu:sell', 1) then return end  -- per-menu throttle (DoS)
     if not near(src, Config.Sell.coords, Config.Sell.radius + Config.Sell.proximitySlack) then
         Bridge.Notify(src, Config.Sell.label, 'The buyer is not here.', 'error')
         return
@@ -969,7 +969,7 @@ RegisterNetEvent('palm6_drugs:dryMenu', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if not cooldownOk(src, 'menu', 1) then return end  -- throttle menu-spam DB fan-out (DoS)
+    if not cooldownOk(src, 'menu:dry', 1) then return end  -- per-menu throttle (DoS)
     if not near(src, Config.Dry.coords, Config.Dry.radius + Config.Dry.proximitySlack) then
         Bridge.Notify(src, Config.Dry.label, 'You are not at the drying rack.', 'error')
         return
@@ -1244,7 +1244,7 @@ RegisterNetEvent('palm6_drugs:cookMenu', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if not cooldownOk(src, 'menu', 1) then return end  -- throttle menu-spam DB fan-out (DoS)
+    if not cooldownOk(src, 'menu:cook', 1) then return end  -- per-menu throttle (DoS)
     if not Config.Cook.enabled then
         Bridge.Notify(src, Config.Cook.label, 'The lab is not operational.', 'error'); return
     end
@@ -1634,7 +1634,7 @@ RegisterNetEvent('palm6_drugs:dealerMenu', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if not cooldownOk(src, 'menu', 1) then return end  -- throttle menu-spam DB fan-out (DoS)
+    if not cooldownOk(src, 'menu:dealer', 1) then return end  -- per-menu throttle (DoS)
     if not dealerProx(src) then
         Bridge.Notify(src, Config.Dealer.label, 'The dealer is not here.', 'error'); return
     end

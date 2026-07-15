@@ -56,3 +56,28 @@ Config.PlayerCap       = 48   -- advertised capacity, shown in the open embed
 -- detailed "LSPD Case Desk" webhook post. Turn off here if the two read as
 -- redundant for your community.
 Config.EmitArrests = true
+
+-- ---------------------------------------------------------------------------
+-- Sibling-resource producers (added by other resources, gated by CONVAR).
+--
+-- These producers live in OTHER resources (their in-game hook data — patient
+-- name, petition #, ATM label — is only in scope there), so they cannot read
+-- THIS Config table (separate Lua VMs). They gate on a global convar instead,
+-- which is settable live in server.cfg / txAdmin without touching code:
+--
+--   set palm6:cityfeed_ems    "false"   # palm6_ems  /emsbill  -> ems
+--   set palm6:cityfeed_court  "true"    # palm6_legal /expunge  -> court_date
+--   set palm6:cityfeed_heist  "false"   # palm6_robbery finish  -> heist
+--
+-- Defaults (when the convar is unset) are baked into each producer:
+--   * court is ON  — its payload shape is documented below and stable.
+--   * ems / heist are OFF — their payload field names are a best-effort guess
+--     until confirmed against palm6-bot/src/events/types.ts. Flip the convar
+--     to "true" once the bot side is verified; a wrong shape only drops the
+--     post (fail-soft), it never breaks gameplay.
+--
+-- Known/assumed payloads (public facts only — no citizenid/license/take):
+--   court_date : { type='court_date', case_ref='Petition #N', hearing_date='today' }
+--   ems        : { type='ems', character_name=<patient>, agency='Palm Medical' }
+--   heist      : { type='heist', location=<ATM label>, agency='Palm6 Bay Police Department' }
+-- ---------------------------------------------------------------------------

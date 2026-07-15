@@ -106,19 +106,23 @@ RegisterNetEvent('palm6_courier:accept', function(id)
     acceptPosting(source, id)
 end)
 
+local lastComplete = {}  -- [src] = ts — per-source rate limit on :complete (anti-DoS)
+
 RegisterNetEvent('palm6_courier:complete', function(id)
     local src = source
     local citizenid = Bridge.GetCitizenId(src)
     if not citizenid then return end
-    -- Validate + cache-first (mirror accept/cancel): reject non-numeric ids and
-    -- deliveries this player doesn't hold BEFORE any DB read, so a modified client
-    -- can't flood the shared DB pool by looping this event with junk ids (DoS).
+    -- Reject non-numeric ids + rate-limit BEFORE the DB read so a modified client
+    -- can't flood the shared DB pool by looping this event (DoS). NOTE: we must NOT
+    -- cache-gate here — the Postings cache holds only status='open' rows, but a
+    -- deliverable is status='taken' (purged from the cache on accept), so a
+    -- cache-first check rejects EVERY legitimate delivery. The DB read + the
+    -- WHERE status='taken' AND courier_citizenid=? guard below are authoritative.
     local nid = tonumber(id)
     if not nid then return end
-    local cached = Postings[nid]
-    if not cached or cached.status ~= 'taken' or cached.courier_citizenid ~= citizenid then
-        return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')
-    end
+    local ctNow = os.time()
+    if ctNow - (lastComplete[src] or 0) < 1 then return end
+    lastComplete[src] = ctNow
     local row = MySQL.single.await('SELECT * FROM courier_postings WHERE id=?', { nid })
     if not row or row.status ~= 'taken' or row.courier_citizenid ~= citizenid then
         return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')

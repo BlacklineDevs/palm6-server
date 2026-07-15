@@ -47,10 +47,18 @@ local function currentPrice(item)
     local elapsedMin = math.max(0, now() - st.ts) / 60
     local recovered = st.price + c.base * (Config.RecoverPctPerMin / 100) * elapsedMin
     if recovered > c.base then recovered = c.base end
-    -- palm6_pulse modifier bus: a "Hot Exchange" Pulse Window can spike ONE
-    -- commodity's price. Read server-side (a client can never assert a multiplier)
-    -- and pcall-wrapped so market runs standalone if pulse is absent. Applied last
-    -- so the /market display and the sell payout agree.
+    -- PURE base-scale price: this feeds the marginal-crash walk AND the persisted
+    -- State, so it must NOT include the pulse multiplier (folding the boost into
+    -- persisted state would defeat the anti-dump crash sink and reset the commodity
+    -- to full price). The pulse boost is applied to the PAYOUT + display only.
+    return recovered
+end
+
+-- palm6_pulse "Hot Exchange" multiplier for ONE spiked commodity. Server-read
+-- (a client can never assert a multiplier), pcall+ResourceState-gated so market
+-- runs standalone if pulse is absent. Applied to the player payout + /market
+-- display only — never to the persisted price math.
+local function pulseMarketMult(item)
     local mult = 1.0
     pcall(function()
         if GetResourceState('palm6_pulse') == 'started' then
@@ -58,7 +66,7 @@ local function currentPrice(item)
             if type(m) == 'number' and m > 0 then mult = m end
         end
     end)
-    return recovered * mult
+    return mult
 end
 
 -- Persist a commodity's new price + timestamp. Memory is authoritative during
@@ -130,14 +138,19 @@ RegisterNetEvent('palm6_market:sell', function()
             if total > 0 then
                 -- consume BEFORE grant; only move the market on a real sale.
                 if Bridge.RemoveItem(src, item, count) then
-                    Bridge.AddCash(src, total, 'market-sell')
-                    persist(item, price)                 -- new depressed price
+                    -- palm6_pulse Hot Exchange boosts the PAYOUT only; the marginal
+                    -- walk + persisted `price` stay on the base scale (above), so the
+                    -- anti-dump crash sink is modifier-independent (the boost can't
+                    -- reset the commodity to full price or defeat the sink).
+                    local payout = math.floor(total * pulseMarketMult(item))
+                    Bridge.AddCash(src, payout, 'market-sell')
+                    persist(item, price)                 -- new depressed price (base scale)
                     Stats.unitsSold = Stats.unitsSold + count
-                    Stats.totalPaid = Stats.totalPaid + total
-                    grandTotal      = grandTotal + total
+                    Stats.totalPaid = Stats.totalPaid + payout
+                    grandTotal      = grandTotal + payout
                     anySold         = true
-                    soldLines[#soldLines + 1] = ('%dx %s -> $%d'):format(count, c.label, total)
-                    logTrade(cid, item, count, total)
+                    soldLines[#soldLines + 1] = ('%dx %s -> $%d'):format(count, c.label, payout)
+                    logTrade(cid, item, count, payout)
                 end
             end
         end
@@ -222,11 +235,14 @@ local function boardLines()
     L[#L + 1] = '=== Palm6 Commodity Exchange ==='
     L[#L + 1] = 'Live buy prices. Sell at the exchange counter (E). Prices fall as goods flood the market and recover over time.'
     for _, c in ipairs(Config.Commodities) do
-        local p   = math.floor(currentPrice(c.item))
-        local pct = math.floor((p / c.base) * 100 + 0.5)
+        local base = math.floor(currentPrice(c.item))
+        local mult = pulseMarketMult(c.item)
+        local p    = math.floor(base * mult)               -- boosted buy price shown
+        local pct  = math.floor((base / c.base) * 100 + 0.5)  -- pct on the base scale (<=100)
+        local hot  = mult > 1 and (' [HOT x%.2f]'):format(mult) or ''
         local cmp = c.grindFloor and (' | grind buyer pays $' .. c.grindFloor)
                                   or ' | exchange is the only buyer'
-        L[#L + 1] = ('%s: $%d  (%d%% of rested $%d)%s'):format(c.label, p, pct, c.base, cmp)
+        L[#L + 1] = ('%s: $%d  (%d%% of rested $%d)%s%s'):format(c.label, p, pct, c.base, cmp, hot)
     end
     return L
 end

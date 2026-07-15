@@ -127,20 +127,26 @@ RegisterNetEvent('palm6_grind:sell', function(activityKey)
     -- capped (a client can't assert a multiplier); pcall+ResourceState-gated so
     -- grind runs standalone if pulse is absent. This is an NPC-buyer faucet — the
     -- exact reward loop the Boomtown window is meant to amplify.
+    local boomMult = 1.0
     pcall(function()
         if GetResourceState('palm6_pulse') == 'started' then
             local m = exports.palm6_pulse:GetActiveModifier('grind')
-            if type(m) == 'number' and m > 1 then total = math.floor(total * m) end
+            if type(m) == 'number' and m > 1 then boomMult = m end
         end
     end)
+    total = math.floor(total * boomMult)
 
     if not Bridge.RemoveItem(src, sell.item, count) then
         Bridge.Notify(src, sell.label, 'Sale failed.', 'error')
         return
     end
     Bridge.AddCash(src, total, 'grind-sell')
+    -- Derive the each-price from the (possibly boosted) total so the numbers agree,
+    -- and tag the Boomtown boost so it's legible.
+    local each = count > 0 and math.floor(total / count) or total
+    local boom = boomMult > 1 and (' [Boomtown x%.2f]'):format(boomMult) or ''
     Bridge.Notify(src, sell.label,
-        ('Sold %dx %s for $%d ($%d each).'):format(count, sell.item:gsub('_', ' '), total, price), 'success')
+        ('Sold %dx %s for $%d ($%d each).%s'):format(count, sell.item:gsub('_', ' '), total, each, boom), 'success')
 end)
 
 AddEventHandler('playerDropped', function()

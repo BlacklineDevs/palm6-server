@@ -39,14 +39,26 @@ check.
 
 ## Producers
 
-| Producer | Config flag | Event | Bot channel |
-|---|---|---|---|
-| Server open/close | `Config.EmitServerState` | `server_state` | `#announcements` |
-| Booking recorded | `Config.EmitArrests` | `arrest` | `#pbpd-bulletin` |
+| Producer | Gate | Event | Bot channel | Fires from |
+|---|---|---|---|---|
+| Server open/close | `Config.EmitServerState` | `server_state` | `#announcements` | this resource start/stop |
+| Booking recorded | `Config.EmitArrests` | `arrest` | `#pbpd-bulletin` | **palm6_mdt** `/book` |
+| Expungement filed | convar `palm6:cityfeed_court` (default **on**) | `court_date` | `#doj-notices` | **palm6_legal** `/expunge` |
+| Medical encounter | convar `palm6:cityfeed_ems` (default **off**) | `ems` | `#palm-medical-ems` | **palm6_ems** `/emsbill` |
+| ATM robbery | convar `palm6:cityfeed_heist` (default **off**) | `heist` | heist channel | **palm6_robbery** completion |
 
 `server_state` is self-contained (fires on this resource's start/stop).
 `arrest` is emitted by **palm6_mdt** on a successful `/book` through the soft
 export below.
+
+The last three producers live in **other** resources (their hook data is only
+in scope there) and gate on a global **convar**, not this resource's `Config`
+(separate Lua VMs cannot read it). `court_date`'s payload shape is documented
+below, so it defaults ON. `ems` and `heist` use best-effort field names that
+must be reconciled with `palm6-bot/src/events/types.ts` before enabling — they
+default OFF; flip `set palm6:cityfeed_ems "true"` / `set palm6:cityfeed_heist
+"true"` once the bot side is verified. A wrong shape only drops the post
+(fail-soft); it never breaks the booking/billing/robbery path.
 
 ## Adding a producer
 

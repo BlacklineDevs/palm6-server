@@ -79,6 +79,26 @@ RegisterNetEvent('palm6_robbery:complete', function(index)
     Bridge.AddCash(src, reward, 'robbery')
 
     Bridge.Notify(src, 'Robbery', ('You got away with $%d.'):format(reward), 'success')
+
+    -- In-world civic bulletin (public facts only) via the palm6-bot feed. The
+    -- bot narrates a reported robbery into its heist channel. This fires only
+    -- AFTER every completion gate above passed (real pending reservation, hold
+    -- served, still at the ATM), so a forged completion can't post. Soft-dep +
+    -- pcall so a missing/broken cityfeed never touches the payout path.
+    -- PUBLIC FACTS ONLY: the location label. Never the robber's identity and
+    -- never the take (a figure the bot rejects). Convar-gated, default OFF
+    -- until the bot-side `heist` payload shape is confirmed against
+    -- palm6-bot/src/events/types.ts (see palm6_cityfeed README).
+    if GetResourceState('palm6_cityfeed') == 'started'
+        and GetConvar('palm6:cityfeed_heist', 'false') == 'true' then
+        pcall(function()
+            exports.palm6_cityfeed:Emit({
+                type = 'heist',
+                location = loc.label,
+                agency = 'Palm6 Bay Police Department',
+            })
+        end)
+    end
 end)
 
 RegisterNetEvent('palm6_robbery:cancel', function()

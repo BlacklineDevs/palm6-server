@@ -231,6 +231,24 @@ local function cmdExpunge(src, args)
             })
         end)
     end
+
+    -- In-world civic bulletin (public facts only) via the palm6-bot feed. The
+    -- bot narrates the court docket into #doj-notices. Soft-dep + pcall so a
+    -- missing/broken cityfeed never breaks a filing. PUBLIC FACTS ONLY: a case
+    -- reference + a hearing phrase, never a citizenid/booking-subject id.
+    -- Shape is documented in the palm6_cityfeed README (court_date example), so
+    -- this is convar-gated ON by default. `hearing_date` is a narration phrase,
+    -- not a raw timestamp — the petition rules ~ProcessingSec after filing.
+    if GetResourceState('palm6_cityfeed') == 'started'
+        and GetConvar('palm6:cityfeed_court', 'true') == 'true' then
+        pcall(function()
+            exports.palm6_cityfeed:Emit({
+                type = 'court_date',
+                case_ref = ('Petition #%d'):format(petitionId),
+                hearing_date = 'today',
+            })
+        end)
+    end
     dbg(('petition #%d by %s on booking %d'):format(petitionId, filerCid, bookingId))
 end
 

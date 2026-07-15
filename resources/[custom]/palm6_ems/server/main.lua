@@ -210,6 +210,26 @@ local function cmdEmsBill(src, args)
     end
 
     announceBill(billId, patientName, medicName, amount, reason)
+
+    -- In-world civic bulletin (public facts only) via the palm6-bot feed. The
+    -- bot narrates an on-scene medical encounter into #palm-medical-ems. Soft-
+    -- dep + pcall: a missing/broken cityfeed never touches the billing path.
+    -- Payload shape matches EmsEventSchema (palm6-bot/src/events/types.ts):
+    -- incident_type (required), outcome + case_ref (optional). The router
+    -- hardcodes the "Palm Medical EMS" label and never renders a patient name,
+    -- so NO character_name/agency/amount/citizenid is sent. Convar-gated (OFF
+    -- by default; enable in-game after verifying a 200 {received:true}).
+    if GetResourceState('palm6_cityfeed') == 'started'
+        and GetConvar('palm6:cityfeed_ems', 'false') == 'true' then
+        pcall(function()
+            exports.palm6_cityfeed:Emit({
+                type = 'ems',
+                incident_type = 'medical call',
+                outcome = 'patient treated',
+                case_ref = ('EMS-%d'):format(billId),
+            })
+        end)
+    end
     dbg(('bill #%d on %s by %s ($%d)'):format(billId, patientCid, medicCid, amount))
 end
 
