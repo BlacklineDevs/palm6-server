@@ -21,6 +21,7 @@
 -- ============================================================================
 
 local lastAccept = {} -- [src] = ts — accept-event rate limit
+local lastCheck = {}  -- [src] = ts — checkStatus rate limit (it runs a DB query)
 
 local function now() return os.time() end
 
@@ -49,6 +50,9 @@ end)
 -- Bridge.OnPlayerLoaded event won't refire, but this will).
 RegisterNetEvent('palm6_onboarding:checkStatus', function()
     local src = source
+    local ct = os.time()
+    if ct - (lastCheck[src] or 0) < 3 then return end  -- rate-limit: runs a DB query
+    lastCheck[src] = ct
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
     if alreadyOnboarded(cid) then return end

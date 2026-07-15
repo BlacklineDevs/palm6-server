@@ -153,18 +153,23 @@ local function senderQuotaOk(src)
     return true
 end
 
+-- Cheap predicate the bridge checks FIRST (before any native entity resolution)
+-- so a no-stream server pays a single table lookup per gunshot/explosion instead
+-- of NetworkGetEntityFromNetworkId + GetEntityCoords on every combat event.
+local function anyLive() return next(Streams) ~= nil end
+
 Bridge.OnWeaponDamage(function(ev)
     -- Only buffer while someone is live — otherwise this is a no-op server.
     if not next(Streams) or not ev.coords or not ev.src then return end
     if #GunshotBuf >= BUF_HARD_CAP or not senderQuotaOk(ev.src) then return end
     GunshotBuf[#GunshotBuf + 1] = { ts = now(), src = ev.src, coords = ev.coords }
-end)
+end, anyLive)
 
 Bridge.OnExplosion(function(ev)
     if not next(Streams) or not ev.coords or not ev.src then return end
     if #ExplosionBuf >= BUF_HARD_CAP or not senderQuotaOk(ev.src) then return end
     ExplosionBuf[#ExplosionBuf + 1] = { ts = now(), src = ev.src, coords = ev.coords }
-end)
+end, anyLive)
 
 -- Drop buffer entries older than two ticks (already consumed or unwitnessed)
 -- and reopen every sender's ingest quota for the next window.

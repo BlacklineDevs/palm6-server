@@ -110,7 +110,16 @@ RegisterNetEvent('palm6_courier:complete', function(id)
     local src = source
     local citizenid = Bridge.GetCitizenId(src)
     if not citizenid then return end
-    local row = MySQL.single.await('SELECT * FROM courier_postings WHERE id=?', { id })
+    -- Validate + cache-first (mirror accept/cancel): reject non-numeric ids and
+    -- deliveries this player doesn't hold BEFORE any DB read, so a modified client
+    -- can't flood the shared DB pool by looping this event with junk ids (DoS).
+    local nid = tonumber(id)
+    if not nid then return end
+    local cached = Postings[nid]
+    if not cached or cached.status ~= 'taken' or cached.courier_citizenid ~= citizenid then
+        return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')
+    end
+    local row = MySQL.single.await('SELECT * FROM courier_postings WHERE id=?', { nid })
     if not row or row.status ~= 'taken' or row.courier_citizenid ~= citizenid then
         return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')
     end
@@ -128,7 +137,7 @@ RegisterNetEvent('palm6_courier:complete', function(id)
 
     local paid = MySQL.update.await(
         "UPDATE courier_postings SET status='complete', completed_at=NOW() WHERE id=? AND status='taken' AND courier_citizenid=?",
-        { id, citizenid }
+        { nid, citizenid }
     ) == 1
     if not paid then
         return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')

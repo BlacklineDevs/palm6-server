@@ -24,6 +24,8 @@ local function dbg(m) if Config.Debug then print('[palm6_gangs] ' .. m) end end
 local webCooldown = {}    -- [src] = ts of last /gangweb (anti-spam)
 local inviteCooldown = {} -- [src] = ts of last invite (anti-spam; stops forcing
                           -- repeated confirm-dialogs onto a nearby player)
+local menuCooldown = {}   -- [src] = ts of last requestMenu (anti-spam: pushMenu
+                          -- runs 1-3 DB reads; any client can spam this event)
 local WEB_TOKEN_CHARS = '0123456789abcdefghijklmnopqrstuvwxyz'
 local function makeWebToken()
     math.randomseed(os.time() + os.clock() * 1000)
@@ -213,7 +215,11 @@ end
 -- Net events — every handler re-derives citizenid + rank server-side.
 -- ---------------------------------------------------------------------------
 RegisterNetEvent('palm6_gangs:requestMenu', function()
-    pushMenu(source)
+    local src = source
+    local mt = now()
+    if mt - (menuCooldown[src] or 0) < 1 then return end  -- throttle DB-read spam
+    menuCooldown[src] = mt
+    pushMenu(src)
 end)
 
 RegisterNetEvent('palm6_gangs:create', function(payload)
@@ -373,6 +379,15 @@ RegisterNetEvent('palm6_gangs:invite', function()
     if mr.rank < Config.MinRank.Invite then
         Bridge.Notify(src, 'Gangs', 'You do not have permission to invite.', 'error'); return
     end
+    -- Throttle BEFORE the O(players) proximity scan below (which runs a memberRow()
+    -- DB query per online player) — an unthrottled invite could be spammed to hammer
+    -- the DB pool on every packet, and to spam confirm-dialogs at the target. Set
+    -- unconditionally here so even the "no target nearby" path is rate-limited.
+    local it = now()
+    if it - (inviteCooldown[src] or 0) < (Config.InviteCooldownSec or 10) then
+        Bridge.Notify(src, 'Gangs', 'Slow down before inviting again.', 'error'); return
+    end
+    inviteCooldown[src] = it
     local g = gangRow(mr.gang_id)
     if not g then return end
     if memberCount(g.id) >= Config.MaxMembers then
@@ -401,14 +416,6 @@ RegisterNetEvent('palm6_gangs:invite', function()
     if not bestSrc then
         Bridge.Notify(src, 'Gangs', 'No eligible player nearby to invite.', 'error'); return
     end
-
-    -- Throttle actual invites (each pops a blocking confirm dialog on the target).
-    -- Checked only once a target is found, so "nobody nearby" never burns the cd.
-    local it = now()
-    if it - (inviteCooldown[src] or 0) < (Config.InviteCooldownSec or 10) then
-        Bridge.Notify(src, 'Gangs', 'Slow down — you just sent an invite.', 'error'); return
-    end
-    inviteCooldown[src] = it
 
     pendingInvites[bestCid] = {
         gangId = g.id, gangName = g.name, gangTag = g.tag,

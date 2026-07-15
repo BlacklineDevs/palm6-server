@@ -150,8 +150,11 @@ local EVENT_POS_TOLERANCE = 120.0
 -- Server authority: coords come from the sender's server-side ped (never the
 -- payload), and the claimed victim must resolve to a real networked entity —
 -- a fabricated packet with no actual victim scores nothing.
-function Bridge.OnWeaponDamage(cb)
+function Bridge.OnWeaponDamage(cb, isActive)
     AddEventHandler('weaponDamageEvent', function(sender, data)
+        -- Cheapest possible early-out: if nobody is streaming, do NO entity
+        -- resolution at all — weaponDamageEvent fires for every gunshot server-wide.
+        if isActive and not isActive() then return end
         local src = tonumber(sender)
         if not src or src <= 0 then return end
         local weapon = data and data.weaponType or 0
@@ -182,8 +185,10 @@ end
 -- valid sender and reads THAT ped's coords server-side; the payload posX/Y/Z
 -- is only kept (for VOD placement) when it agrees with the sender's actual
 -- position within tolerance, otherwise the event is dropped as spoofed.
-function Bridge.OnExplosion(cb)
+function Bridge.OnExplosion(cb, isActive)
     AddEventHandler('explosionEvent', function(sender, ev)
+        -- Cheapest early-out: no streamers live => skip all coord work.
+        if isActive and not isActive() then return end
         local src = tonumber(sender)
         if not src or src <= 0 or not ev then return end
         local senderCoords = Bridge.GetCoords(src)

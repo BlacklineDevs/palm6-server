@@ -22,6 +22,16 @@ RegisterNetEvent('palm6_robbery:start', function(index)
     if not loc then return end
     if not Bridge.GetCitizenId(src) then return end
 
+    -- Cheap gates FIRST so start-spam can't force the O(players) CountOnDutyPolice
+    -- scan on every packet (DoS): reject a cooling-down spot and a caller who isn't
+    -- actually at the ATM before any expensive work.
+    local now = os.time()
+    if (cd[index] or 0) > now then
+        Bridge.Notify(src, 'Robbery', 'This spot was hit recently. Come back later.', 'error')
+        return
+    end
+    if not nearby(src, loc.coords) then return end
+
     if Bridge.CountOnDutyPolice() < (Config.MinPolice or 0) then
         Bridge.Notify(src, 'Robbery', 'It is too quiet — not enough police around.', 'error')
         return
@@ -31,13 +41,6 @@ RegisterNetEvent('palm6_robbery:start', function(index)
         Bridge.Notify(src, 'Robbery', 'You need a weapon out for this.', 'error')
         return
     end
-
-    local now = os.time()
-    if (cd[index] or 0) > now then
-        Bridge.Notify(src, 'Robbery', 'This spot was hit recently. Come back later.', 'error')
-        return
-    end
-    if not nearby(src, loc.coords) then return end
 
     -- Reserve immediately so it can't be double-started or spammed.
     cd[index] = now + Config.ATMs.cooldown_secs
