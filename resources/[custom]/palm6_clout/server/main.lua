@@ -36,6 +36,12 @@ local SyncLast = {}       -- per-source throttle for live-list sync requests
 local HOUR = 3600
 local tickSec = math.max(1, math.floor(Config.TickIntervalMs / 1000))
 
+-- Forward-declared: the boot-reconcile payout recovery is defined down in the
+-- brand-deal cashout section (next to settleDeal, which it shares), but is
+-- CALLED from onResourceStart above it. Declaring the local here lets that
+-- handler's closure capture it as an upvalue so the later assignment is seen.
+local reconcileUnpaidDeals
+
 local function now() return os.time() end
 
 -- Soft dependency: going-live posts go out iff palm6_discord is running
@@ -218,6 +224,15 @@ AddEventHandler('onResourceStart', function(resource)
 
     print(('[palm6_clout] on air — %d milestones, donations capped at $%d/hr')
         :format(#Config.Milestones, Config.DonationHourlyCap))
+
+    -- Recover any brand-deal payout interrupted by the last restart (claimed at
+    -- the broker but never credited). Delayed so oxmysql + palm6_dbmigrate's
+    -- 0060 `paid` column are up before the paid = 0 predicate runs. Idempotent —
+    -- re-crediting an already-paid deal is impossible (settleDeal claims first).
+    CreateThread(function()
+        Wait(8000)
+        reconcileUnpaidDeals()
+    end)
 end)
 
 -- ---------------------------------------------------------------------------
@@ -517,10 +532,14 @@ local function tickStream(s, ctx)
                         -- if the row actually persisted — on a DB hiccup the
                         -- sustain counter is still over threshold next tick,
                         -- so the unlock retries instead of evaporating.
+                        -- `paid = 0` is EXPLICIT: the column defaults to 1 so
+                        -- the 0060 migration marks legacy rows already-paid; a
+                        -- fresh, uncredited deal must start at 0 or the broker
+                        -- claim-before-credit (settleDeal) could never pay it.
                         local wrote = pcall(function()
                             MySQL.insert.await([[
-                                INSERT IGNORE INTO palm6_clout_deals (citizenid, milestone, payout)
-                                VALUES (?, ?, ?)
+                                INSERT IGNORE INTO palm6_clout_deals (citizenid, milestone, payout, paid)
+                                VALUES (?, ?, ?, 0)
                             ]], { s.cid, m.viewers, m.payout })
                         end)
                         if wrote then
@@ -596,8 +615,89 @@ CreateThread(function()
 end)
 
 -- ---------------------------------------------------------------------------
--- Brand-deal cashout (pawnshop broker)
+-- Brand-deal cashout (pawnshop broker) — recoverable, idempotent settlement.
+--
+-- Two flags gate a deal's money:
+--   * claimed_at — the broker-claim slot. Set once when a deal is cashed;
+--                  /clout and the broker read it as "claimed". The conditional
+--                  UPDATE ... WHERE claimed_at IS NULL is the double-fire guard.
+--   * paid       — the claim-before-credit idempotency flag for the ACTUAL
+--                  bank credit (sql/0060). Claimed 0->1 BEFORE the money moves.
+--
+-- settleDeal() is the single claim-before-credit payout, called from BOTH the
+-- live broker path (credit the online source) AND the boot reconcile (credit
+-- by citizenid, possibly offline). It claims paid 0->1 first and credits ONLY
+-- if it won that claim, so a replay can never double-pay an already-paid deal.
+-- If the credit does NOT land (player offline mid-loop, or a lying framework),
+-- it reverts BOTH paid and claimed_at so the deal returns to fully claimable —
+-- palm6_season's revert idiom. Bias (same as palm6_fightclub): a crash in the
+-- tiny window between claiming paid and the credit costs at most that one
+-- payout — a rare shortfall, never a mint; the common crash (before the paid
+-- claim) is fully recovered on the next boot by reconcileUnpaidDeals().
 -- ---------------------------------------------------------------------------
+
+-- Pay ONE deal exactly once. `creditFn(amount)` returns true iff the money
+-- landed. Returns the amount actually credited (0 if skipped or reverted).
+local function settleDeal(deal, creditFn)
+    local payout = tonumber(deal.payout) or 0
+
+    -- Claim the credit BEFORE moving money (never credit-then-mark). Exactly
+    -- one settlement run — live or boot-recovery — can flip paid 0->1.
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            'UPDATE palm6_clout_deals SET paid = 1 WHERE id = ? AND paid = 0', { deal.id }) == 1
+    end)
+    if not claimed then return 0 end -- another run already owns this credit
+
+    if payout <= 0 then return 0 end -- claimed a $0 deal; nothing to credit
+
+    if creditFn(payout) then return payout end
+
+    -- Credit did not land — revert BOTH flags so the deal stays claimable and
+    -- is re-driven at the broker or on the next boot (palm6_season's revert).
+    pcall(function()
+        MySQL.update.await(
+            'UPDATE palm6_clout_deals SET paid = 0, claimed_at = NULL WHERE id = ? AND paid = 1',
+            { deal.id })
+    end)
+    return 0
+end
+
+-- Boot reconcile — re-drive any deal left claimed_at IS NOT NULL but paid = 0
+-- (server died between the broker claim and the credit, or an offline-mid-loop
+-- CreditBank-false stranded it). Idempotent: settleDeal skips anything already
+-- paid=1. Delayed in onResourceStart so palm6_dbmigrate's 0060 ALTER (the
+-- `paid` column) has landed first — before that the paid = 0 predicate would
+-- error (pcall-swallowed) and recover nothing.
+reconcileUnpaidDeals = function()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await(
+            'SELECT id, citizenid, payout FROM palm6_clout_deals WHERE claimed_at IS NOT NULL AND paid = 0') or {}
+    end)
+    local recovered, total = 0, 0
+    for _, deal in ipairs(pending) do
+        local paid = settleDeal(deal, function(amount)
+            return Bridge.CreditBankByCitizenId(deal.citizenid, amount, 'clout-brand-deal-recovered')
+        end)
+        if paid > 0 then
+            recovered = recovered + 1
+            total = total + paid
+            local s = Bridge.GetSourceByCitizenId(deal.citizenid)
+            if s then
+                Bridge.Notify(s, 'Broker',
+                    ('A brand deal that got stuck mid-payout just cleared — $%d to your bank.'):format(paid),
+                    'success')
+            end
+        end
+    end
+    if recovered > 0 then
+        print(('[palm6_clout] boot reconcile paid %d stranded brand deal(s) ($%d)')
+            :format(recovered, total))
+    end
+end
+
 RegisterNetEvent('palm6_clout:requestClaimDeals', function()
     local src = source
     local cid = Bridge.GetCitizenId(src)
@@ -626,8 +726,10 @@ RegisterNetEvent('palm6_clout:requestClaimDeals', function()
         return
     end
 
-    -- Claim row-by-row: the conditional UPDATE is the authority, so a
-    -- double-fired event can never pay the same deal twice.
+    -- Claim row-by-row: the conditional UPDATE on claimed_at is the double-fire
+    -- authority (a re-fired event can't re-enter a deal), then settleDeal does
+    -- the claim-before-credit payout. On a credit that doesn't land, settleDeal
+    -- reverts claimed_at back to NULL so the deal stays claimable — no strand.
     local total, n = 0, 0
     for _, deal in ipairs(rows) do
         local claimed = 0
@@ -637,9 +739,11 @@ RegisterNetEvent('palm6_clout:requestClaimDeals', function()
                 { deal.id }) or 0
         end)
         if claimed == 1 then
-            local payout = tonumber(deal.payout) or 0
-            if payout > 0 and Bridge.CreditBank(src, payout, 'clout-brand-deal') then
-                total = total + payout
+            local paid = settleDeal(deal, function(amount)
+                return Bridge.CreditBank(src, amount, 'clout-brand-deal')
+            end)
+            if paid > 0 then
+                total = total + paid
                 n = n + 1
             end
         end

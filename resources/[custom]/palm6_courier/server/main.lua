@@ -28,6 +28,57 @@ local function countActiveByCitizen(citizenid)
 end
 
 -- ---------------------------------------------------------------------------
+-- Recoverable settlement (claim-before-credit).
+--
+-- Every bank move in this resource (the courier payout + all three poster
+-- refunds) runs through settlePosting so it is crash-recoverable and callable
+-- from BOTH the live path (right after the terminal status flip) AND the boot
+-- reconcile. The `settled` idempotency flag is CLAIMED atomically BEFORE the
+-- money moves — UPDATE ... SET settled=1 WHERE id=? AND status='<terminal>'
+-- AND settled=0 returns 1 to exactly one caller — so a replay can NEVER
+-- double-pay: an already-settled row has settled=1 and is skipped. The payee
+-- is recomputed from the row itself, so a boot replay is deterministic:
+--   status='complete'            -> pay the courier (bounty -> courier_citizenid)
+--   status='cancelled'/'expired' -> refund the poster (bounty -> poster_citizenid)
+--
+-- Bias (matching palm6_fightclub's settleMatch / palm6_courier's escrow model):
+-- a crash in the tiny window between claiming the flag and the bank credit costs
+-- that one payout — a rare self-inflicted shortfall, never a mint — while the
+-- common crash (after the status flip, before settle ran) is fully recovered on
+-- the next boot. Credits go through CreditBankByCitizenId so an offline courier
+-- or poster is still paid on recovery.
+--
+-- Returns true iff WE claimed this row (and therefore issued its credit).
+local function settlePosting(row, refundReason)
+    if not row or not row.id or not row.status then return false end
+    local status = row.status
+    -- Claim BEFORE credit: this UPDATE is the atomic idempotency gate. If it
+    -- doesn't return 1 (someone else settled it, or the status changed under
+    -- us), we pay nothing.
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE courier_postings SET settled=1 WHERE id=? AND status=? AND settled=0",
+            { row.id, status }) == 1
+    end)
+    if not claimed then return false end
+
+    if status == 'complete' then
+        -- Only a truly-completed delivery pays the courier. A 'complete' row
+        -- with no courier_citizenid is anomalous (a delivery is only ever
+        -- flipped to 'complete' with the courier set) — we claim it so the
+        -- reconcile won't reconsider it, but pay no one.
+        if row.courier_citizenid and row.courier_citizenid ~= '' then
+            Bridge.CreditBankByCitizenId(row.courier_citizenid, row.bounty, 'courier-payout')
+        end
+    else
+        -- 'cancelled' / 'expired' -> refund the poster's escrow.
+        Bridge.CreditBankByCitizenId(row.poster_citizenid, row.bounty, refundReason or 'courier-refund')
+    end
+    return true
+end
+
+-- ---------------------------------------------------------------------------
 -- Net events
 -- ---------------------------------------------------------------------------
 
@@ -185,13 +236,22 @@ RegisterNetEvent('palm6_courier:complete', function(id)
     end
 
     local paid = MySQL.update.await(
-        "UPDATE courier_postings SET status='complete', completed_at=NOW() WHERE id=? AND status='taken' AND courier_citizenid=? AND picked_up=1",
+        "UPDATE courier_postings SET status='complete', settled=0, completed_at=NOW() WHERE id=? AND status='taken' AND courier_citizenid=? AND picked_up=1",
         { nid, citizenid }
     ) == 1
     if not paid then
         return Bridge.Notify(src, 'Courier', 'Not your active delivery', 'error')
     end
-    Bridge.CreditBank(src, row.bounty, 'courier-payout')
+    -- Claim-before-credit: the terminal flip above already landed, so the row is
+    -- status='complete' AND settled=0; settlePosting claims settled=1 and pays
+    -- the courier by citizenid. On a crash before this ran, the boot reconcile
+    -- re-drives it. (settled was just added to the table, so the live claim
+    -- always wins here.)
+    settlePosting({
+        id = nid, status = 'complete',
+        courier_citizenid = citizenid, poster_citizenid = row.poster_citizenid,
+        bounty = row.bounty,
+    })
     loadPostings()
     Bridge.Notify(src, 'Courier', ('Delivered. +$%d'):format(row.bounty), 'success')
 end)
@@ -205,14 +265,15 @@ RegisterNetEvent('palm6_courier:cancel', function(id)
         return Bridge.Notify(src, 'Courier', 'Cannot cancel that posting', 'error')
     end
     local refunded = MySQL.update.await(
-        "UPDATE courier_postings SET status='cancelled' WHERE id=? AND status='open' AND poster_citizenid=?",
+        "UPDATE courier_postings SET status='cancelled', settled=0 WHERE id=? AND status='open' AND poster_citizenid=?",
         { id, citizenid }
     ) == 1
     if not refunded then
         loadPostings()
         return Bridge.Notify(src, 'Courier', 'Cannot cancel that posting', 'error')
     end
-    Bridge.CreditBankByCitizenId(citizenid, row.bounty, 'courier-refund')
+    -- Claim-before-credit refund; recoverable on boot if we crash before it runs.
+    settlePosting({ id = id, status = 'cancelled', poster_citizenid = citizenid, bounty = row.bounty })
     loadPostings()
     Bridge.Notify(src, 'Courier', 'Posting cancelled, bounty refunded', 'success')
 end)
@@ -258,8 +319,9 @@ CreateThread(function()
         )
         if expired then
             for _, r in ipairs(expired) do
-                if MySQL.update.await("UPDATE courier_postings SET status='expired' WHERE id=? AND status='open'", { r.id }) == 1 then
-                    Bridge.CreditBankByCitizenId(r.poster_citizenid, r.bounty, 'courier-refund')
+                if MySQL.update.await("UPDATE courier_postings SET status='expired', settled=0 WHERE id=? AND status='open'", { r.id }) == 1 then
+                    -- Claim-before-credit refund; recoverable on boot.
+                    settlePosting({ id = r.id, status = 'expired', poster_citizenid = r.poster_citizenid, bounty = r.bounty }, 'courier-refund')
                 end
             end
             if #expired > 0 then loadPostings() end
@@ -274,13 +336,41 @@ CreateThread(function()
         )
         if abandoned then
             for _, r in ipairs(abandoned) do
-                if MySQL.update.await("UPDATE courier_postings SET status='expired' WHERE id=? AND status='taken'", { r.id }) == 1 then
-                    Bridge.CreditBankByCitizenId(r.poster_citizenid, r.bounty, 'courier-refund-abandoned')
+                if MySQL.update.await("UPDATE courier_postings SET status='expired', settled=0 WHERE id=? AND status='taken'", { r.id }) == 1 then
+                    -- Claim-before-credit refund; recoverable on boot. Keeps the
+                    -- distinct 'courier-refund-abandoned' money-log reason on the
+                    -- live path (a boot reconcile can't tell an abandoned expiry
+                    -- from a lifetime one — both are status='expired' — so it
+                    -- falls back to the generic 'courier-refund' label).
+                    settlePosting({ id = r.id, status = 'expired', poster_citizenid = r.poster_citizenid, bounty = r.bounty }, 'courier-refund-abandoned')
                 end
             end
         end
     end
 end)
+
+-- ---------------------------------------------------------------------------
+-- Boot reconcile — re-drive any terminal posting whose payout/refund never
+-- landed (server died in the window between the status flip and settlePosting).
+-- Idempotent: settlePosting claims settled=1 BEFORE crediting, so this only
+-- pays what a crash left owing and can never double-pay an already-settled row.
+-- A 'complete' row pays the courier only if courier_citizenid is set; every
+-- 'cancelled'/'expired' row refunds the poster.
+-- ---------------------------------------------------------------------------
+local function reconcileUnsettled()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await(
+            "SELECT id, status, poster_citizenid, courier_citizenid, bounty FROM courier_postings WHERE status IN ('complete','cancelled','expired') AND settled=0") or {}
+    end)
+    local n = 0
+    for _, row in ipairs(pending) do
+        if settlePosting(row) then n = n + 1 end
+    end
+    if n > 0 then
+        print(('[palm6_courier] boot reconcile settled %d interrupted payout(s)'):format(n))
+    end
+end
 
 -- ---------------------------------------------------------------------------
 -- Boot
@@ -289,6 +379,14 @@ end)
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     loadPostings()
+    -- Recover any terminal posting whose payout/refund was interrupted by the
+    -- last restart. Delayed so palm6_dbmigrate's 0056 ALTER (the `settled`
+    -- column) has landed first — before that the WHERE settled=0 query errors
+    -- (pcall-swallowed) and recovers nothing. Non-time-critical, so wait it out.
+    CreateThread(function()
+        Wait(8000)
+        reconcileUnsettled()
+    end)
 end)
 
 exports('GetOpenPostings', function() return Postings end)

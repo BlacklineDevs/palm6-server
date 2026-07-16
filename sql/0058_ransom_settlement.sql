@@ -1,0 +1,34 @@
+-- ============================================================================
+-- 0058_ransom_settlement.sql — crash-recoverable ransom payout for palm6_ransom.
+--
+-- /payransom resolves a case by (1) charging the payer, (2) an atomic guarded
+-- UPDATE flipping the case to status='paid', then (3) crediting the kidnapper
+-- via Bridge.CreditBankByCitizenId — an offline-safe credit that yields (MySQL
+-- UPDATE for an offline kidnapper). Before this migration, a server crash/
+-- restart in the window between (2) and (3) left the case 'paid' (payer already
+-- charged) but the kidnapper never credited — the payer's money stranded
+-- forever, no recovery on the next boot. This server restarts on every deploy,
+-- so that window is a real latent bug.
+--
+-- This flag makes the payout RECOVERABLE and IDEMPOTENT:
+--   palm6_ransom_cases.payout_credited — the kidnapper's payout was credited.
+-- The flag is CLAIMED (UPDATE ... WHERE status='paid' AND payout_credited=0
+-- returns 1) BEFORE the money moves, so a boot reconcile that re-drives a case
+-- with status='paid' AND payout_credited=0 can never double-pay: an already-
+-- credited case has payout_credited=1 and is skipped. The ALTER is IF NOT
+-- EXISTS — safe to re-run every boot (palm6_dbmigrate has no ledger).
+-- See resources/[custom]/palm6_ransom/server/main.lua settleRansomPayout.
+--
+-- FIRST-BOOT SAFETY — the ADD COLUMN default is 1, NOT 0. Every case that
+-- already exists when this column is first added (i.e. all pre-deploy 'paid'
+-- cases, whose kidnappers were already credited under the old code) is
+-- backfilled payout_credited=1, so the boot reconcile (WHERE status='paid'
+-- AND payout_credited=0) skips them and never re-pays payment history. The
+-- ADD COLUMN IF NOT EXISTS runs this backfill exactly once; later boots are a
+-- no-op and never clobber a genuine post-deploy crash row. cmdPayRansom's
+-- 'active'->'paid' UPDATE sets payout_credited=0 at the transition, so cases
+-- resolved AFTER this deploy stay recoverable until settled.
+-- ============================================================================
+
+ALTER TABLE `palm6_ransom_cases`
+    ADD COLUMN IF NOT EXISTS `payout_credited` TINYINT NOT NULL DEFAULT 1;

@@ -430,6 +430,65 @@ local function cmdPolicy(src)
 end
 
 -- ---------------------------------------------------------------------------
+-- Recoverable claim credit.
+--
+-- creditClaim() is the RECOVERABLE, IDEMPOTENT bank payout, callable from BOTH
+-- the live sweep AND the boot reconcile. It CLAIMS the credited_at flag BEFORE
+-- the money moves (UPDATE ... WHERE credited_at = 0 returns 1), and credits ONLY
+-- if the claim succeeded. This makes the payout re-drivable from a clean boot
+-- (see reconcileUncredited) with NO double-pay — an already-credited claim has
+-- credited_at > 0 and is skipped.
+--
+-- Bias (matching /insure's charge-before-issue): a crash in the tiny window
+-- between claiming credited_at and the bank credit costs that one payout — a
+-- rare self-inflicted shortfall, never a mint — while the common crash (before
+-- the credit started, or after the status flip) is fully recovered on the next
+-- boot. Only bank money is reconciled here; the write-off DELETE of
+-- player_vehicles happens at file time, not payout, so it is untouched.
+-- ---------------------------------------------------------------------------
+local function creditClaim(c)
+    -- Atomic claim: flip credited_at 0 -> now exactly once. Only the run that
+    -- flips it (live sweep OR boot recovery) proceeds to the bank credit.
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE palm6_insurance_claims SET credited_at = ? WHERE id = ? AND credited_at = 0",
+            { now(), c.id }) == 1
+    end)
+    if not claimed then return end
+
+    Bridge.CreditBankByCitizenId(c.citizenid, tonumber(c.assessed) or 0, 'insurance-claim')
+    local s = Bridge.GetSourceByCitizenId(c.citizenid)
+    if s then
+        Bridge.Notify(s, 'Mors Mutual',
+            ('Claim #%d paid out: $%d landed in your bank.'):format(c.id, c.assessed), 'success')
+    end
+    dbg(('claim #%d paid %d to %s'):format(c.id, c.assessed, c.citizenid))
+end
+
+-- Boot reconcile — re-drive any claim already flipped to a terminal paid status
+-- whose bank credit never landed (server died between the status flip and the
+-- credit, or between the credited_at claim and the credit). Idempotent:
+-- creditClaim only credits a claim whose credited_at is still 0, so this pays
+-- exactly what a crash left owing and never double-pays. Delayed so
+-- palm6_dbmigrate's 0057 ALTER (the credited_at column) has landed first —
+-- before that the WHERE credited_at = 0 query would error (pcall-swallowed) and
+-- recover nothing.
+local function reconcileUncredited()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await(
+            "SELECT id, citizenid, assessed FROM palm6_insurance_claims WHERE status IN ('paid', 'flagged_paid') AND credited_at = 0") or {}
+    end)
+    for _, c in ipairs(pending) do
+        creditClaim(c)
+    end
+    if #pending > 0 then
+        print(('[palm6_insurance] boot reconcile credited %d interrupted claim payout(s)'):format(#pending))
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Sweeps: payout release + policy lapse
 -- ---------------------------------------------------------------------------
 CreateThread(function()
@@ -441,24 +500,27 @@ CreateThread(function()
                 "SELECT id, citizenid, assessed, risk_score FROM palm6_insurance_claims WHERE status = 'processing' AND resolved_at IS NULL AND due_at <= NOW()") or {}
         end)
         for _, c in ipairs(due) do
-            -- Mark resolved BEFORE paying: a payout that double-fires costs
-            -- the city money, an unpaid marked row is visible in the table
-            -- and fixable — the cheap failure is the recoverable one.
+            -- Flip to the terminal paid status BEFORE paying (guarded WHERE
+            -- resolved_at IS NULL so exactly one sweep flips it), then hand off
+            -- to creditClaim, which CLAIMS credited_at before the bank credit.
+            -- A payout that double-fires costs the city money; an unpaid marked
+            -- row (credited_at=0) is visible and recovered by the boot reconcile
+            -- — the cheap failure is the recoverable one.
+            -- Reset credited_at=0 in this SAME guarded flip so a NEWLY-paid claim
+            -- is uncredited until creditClaim stamps it. The migration backfills
+            -- pre-existing terminal rows to credited_at=1 (already settled); the
+            -- WHERE resolved_at IS NULL guard means only a genuine new transition
+            -- resets it, so those historical rows are never re-flipped to 0 and
+            -- stay skipped by the reconcile.
             local marked = false
             pcall(function()
                 marked = MySQL.update.await(
-                    "UPDATE palm6_insurance_claims SET status = ?, resolved_at = NOW() WHERE id = ? AND resolved_at IS NULL",
+                    "UPDATE palm6_insurance_claims SET status = ?, resolved_at = NOW(), credited_at = 0 WHERE id = ? AND resolved_at IS NULL",
                     { (tonumber(c.risk_score) or 0) >= Config.Risk.FlagThreshold and 'flagged_paid' or 'paid',
                       c.id }) == 1
             end)
             if marked then
-                Bridge.CreditBankByCitizenId(c.citizenid, tonumber(c.assessed) or 0, 'insurance-claim')
-                local s = Bridge.GetSourceByCitizenId(c.citizenid)
-                if s then
-                    Bridge.Notify(s, 'Mors Mutual',
-                        ('Claim #%d paid out: $%d landed in your bank.'):format(c.id, c.assessed), 'success')
-                end
-                dbg(('claim #%d paid %d to %s'):format(c.id, c.assessed, c.citizenid))
+                creditClaim(c)
             end
         end
 
@@ -490,6 +552,13 @@ AddEventHandler('onResourceStart', function(resource)
     print(('[palm6_insurance] Mors Mutual open — %d active policy(ies), %d claim(s) processing; replay forensics %s')
         :format(active, pending,
             Bridge.ResourceStarted('palm6_replay') and 'ONLINE' or 'offline (no-scene signal disabled)'))
+    -- Recover any claim payout interrupted by the last restart, once oxmysql +
+    -- palm6_dbmigrate (0057 credited_at column) are up. Non-time-critical, so
+    -- wait it out before the WHERE credited_at = 0 query runs.
+    CreateThread(function()
+        Wait(8000)
+        reconcileUncredited()
+    end)
 end)
 
 ---Claim/policy counts for devtest and future consumers.

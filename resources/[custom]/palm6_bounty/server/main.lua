@@ -77,6 +77,27 @@ local function activeContract(id)
     return row
 end
 
+-- Claim a terminal contract's payout flag atomically; true iff WE flipped
+-- settled 0->1 for a row still in the expected terminal status. This is the
+-- load-bearing CLAIM-BEFORE-CREDIT guard: every bank credit/refund below (live
+-- /capture, /cancelbounty, the TTL sweep, and the boot reconcile) claims it
+-- BEFORE the money moves, so exactly one settlement run ever pays a contract —
+-- an already-credited row has settled=1 and is skipped. NEVER credit-then-mark
+-- (that would re-mint on a boot replay); the worst a crash between the claim and
+-- the credit can do is a rare one-payout shortfall (visible, fixable), never a
+-- mint. Mirrors palm6_fightclub's claimBet / purse_paid idiom. Requires the
+-- 0055 `settled` column (added by palm6_dbmigrate) — if it is missing the UPDATE
+-- errors, the pcall swallows it, claimed stays false, and no credit fires.
+local function claimSettled(id, terminalStatus)
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE palm6_bounty_contracts SET settled = 1 WHERE id = ? AND status = ? AND settled = 0",
+            { id, terminalStatus }) == 1
+    end)
+    return claimed
+end
+
 -- ---------------------------------------------------------------------------
 -- /postbounty <citizenid> <amount> <reason...> — private contract
 -- ---------------------------------------------------------------------------
@@ -181,7 +202,7 @@ local function cmdCancelBounty(src, args)
     local marked = false
     pcall(function()
         marked = MySQL.update.await(
-            "UPDATE palm6_bounty_contracts SET status = 'cancelled' WHERE id = ? AND status = 'active'",
+            "UPDATE palm6_bounty_contracts SET status = 'cancelled', settled = 0 WHERE id = ? AND status = 'active'",
             { id }) == 1
     end)
     if not marked then
@@ -192,7 +213,21 @@ local function cmdCancelBounty(src, args)
     local amount = tonumber(row.amount) or 0
     local fee = math.floor(amount * Config.Private.CancelFeePct)
     local refund = amount - fee
-    if refund > 0 then Bridge.CreditBankByCitizenId(cid, refund, 'bounty-cancel-refund') end
+    -- Claim the settle flag BEFORE refunding so a crash between the 'cancelled'
+    -- flip and this credit is re-driven by the boot reconcile exactly once,
+    -- never double-refunding the poster. If we lost the claim, the reconcile
+    -- (or a racing path) already handled the refund — don't credit again.
+    if not claimSettled(id, 'cancelled') then
+        Bridge.Notify(src, 'Bounty Board', ('Contract #%d cancelled.'):format(id), 'success')
+        dbg(('contract #%d cancel: already settled, refund skipped'):format(id))
+        return
+    end
+    if refund > 0 and not Bridge.CreditBankByCitizenId(cid, refund, 'bounty-cancel-refund') then
+        -- settled is already 1; per the house shortfall-over-mint bias we do NOT
+        -- roll it back (a false return can't be trusted to mean "money didn't
+        -- move"). The cancelled row is visible and fixable.
+        dbg(('contract #%d cancel: refund credit returned false — $%d shortfall'):format(id, refund))
+    end
     Bridge.Notify(src, 'Bounty Board',
         ('Contract #%d cancelled — $%d refunded ($%d posting fee kept).'):format(id, refund, fee), 'success')
     dbg(('contract #%d cancelled by %s'):format(id, cid))
@@ -296,7 +331,7 @@ local function cmdCapture(src, args)
     local marked = false
     pcall(function()
         marked = MySQL.update.await(
-            "UPDATE palm6_bounty_contracts SET status = 'claimed', claimed_by_citizenid = ?, claimed_by_name = ?, claimed_at = NOW() WHERE id = ? AND status = 'active'",
+            "UPDATE palm6_bounty_contracts SET status = 'claimed', claimed_by_citizenid = ?, claimed_by_name = ?, claimed_at = NOW(), settled = 0 WHERE id = ? AND status = 'active'",
             { hunterCid, hunterName, id }) == 1
     end)
     if not marked then
@@ -317,7 +352,26 @@ local function cmdCapture(src, args)
             if type(m) == 'number' and m > 1 then amount = math.floor(amount * m) end
         end
     end)
-    Bridge.CreditBankByCitizenId(hunterCid, amount, 'bounty-capture')
+    -- Claim the settle flag BEFORE paying the hunter so a crash between the
+    -- 'claimed' flip and this credit is re-driven by the boot reconcile exactly
+    -- once, never double-paying. If we lost the claim, the reconcile (or a
+    -- racing path) already paid this contract — do not credit again.
+    if not claimSettled(id, 'claimed') then
+        Bridge.Notify(src, 'Bounty Board',
+            ('Contract #%d claimed: %s.'):format(id, contract.target_name), 'success')
+        dbg(('contract #%d capture: already settled, credit skipped'):format(id))
+        return
+    end
+    if not Bridge.CreditBankByCitizenId(hunterCid, amount, 'bounty-capture') then
+        -- settled is already 1; per the house shortfall-over-mint bias we do NOT
+        -- roll it back. Surface an honest message instead of claiming it landed.
+        dbg(('contract #%d capture: credit returned false — $%d shortfall'):format(id, amount))
+        Bridge.Notify(src, 'Bounty Board',
+            ('Contract #%d claimed — payout is delayed, contact an admin if $%d never lands.'):format(id, amount), 'error')
+        Bridge.Notify(targetSrc, 'Bounty Board',
+            ('%s just collected the bounty on your head.'):format(hunterName), 'error')
+        return
+    end
     Bridge.Notify(src, 'Bounty Board',
         ('Contract #%d claimed: %s. $%d landed in your bank.'):format(id, contract.target_name, amount), 'success')
     Bridge.Notify(targetSrc, 'Bounty Board',
@@ -407,21 +461,97 @@ local function sweepExpiredPrivate()
         local marked = false
         pcall(function()
             marked = MySQL.update.await(
-                "UPDATE palm6_bounty_contracts SET status = 'expired' WHERE id = ? AND status = 'active'",
+                "UPDATE palm6_bounty_contracts SET status = 'expired', settled = 0 WHERE id = ? AND status = 'active'",
                 { c.id }) == 1
         end)
         if marked then
             local amount = tonumber(c.amount) or 0
-            if amount > 0 and c.poster_citizenid then
-                Bridge.CreditBankByCitizenId(c.poster_citizenid, amount, 'bounty-expire-refund')
-                local s = Bridge.GetSourceByCitizenId(c.poster_citizenid)
-                if s then
-                    Bridge.Notify(s, 'Bounty Board',
-                        ('Contract #%d expired unclaimed — $%d refunded.'):format(c.id, amount), 'inform')
+            -- Claim-before-credit (same guard as /capture and /cancelbounty) so a
+            -- crash between the 'expired' flip and this refund is re-driven by the
+            -- boot reconcile exactly once, never double-refunding. This sweep only
+            -- ever selects kind='private' rows, so the escrow is real.
+            if amount > 0 and c.poster_citizenid and claimSettled(c.id, 'expired') then
+                if Bridge.CreditBankByCitizenId(c.poster_citizenid, amount, 'bounty-expire-refund') then
+                    local s = Bridge.GetSourceByCitizenId(c.poster_citizenid)
+                    if s then
+                        Bridge.Notify(s, 'Bounty Board',
+                            ('Contract #%d expired unclaimed — $%d refunded.'):format(c.id, amount), 'inform')
+                    end
+                else
+                    dbg(('contract #%d expire: refund credit returned false — $%d shortfall'):format(c.id, amount))
                 end
             end
             dbg(('contract #%d expired, refunded %d'):format(c.id, amount))
         end
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Boot reconcile — re-drive any terminal contract whose escrow payout never
+-- landed (the server died between the guarded status flip and the bank credit).
+-- Idempotent: claimSettled flips settled 0->1 BEFORE each credit, so an
+-- already-paid row (settled=1) is skipped and this only ever pays what a crash
+-- left owing. Deterministic — every amount is recomputed from the contract row.
+-- Delayed (see onResourceStart) so palm6_dbmigrate's 0055 `settled` column has
+-- landed first; before that the WHERE settled=0 query errors (pcall-swallowed)
+-- and recovers nothing.
+--
+-- Scope mirrors the live paths that hold escrow:
+--   claimed   — hunter payout (claimed_by_citizenid), BOTH kinds: a 'state'
+--               claim is city-funded, a 'private' claim is escrow-backed; both
+--               owe the hunter. Recovery pays the base contract amount (no
+--               palm6_pulse surge — that live-only faucet isn't replayed).
+--   cancelled — poster refund minus the cancel fee, PRIVATE only (a 'state'
+--               contract is never cancelled).
+--   expired   — poster full refund, PRIVATE only. A 'state' 'expired' row is a
+--               cleared warrant that never escrowed a cent — refunding it would
+--               MINT money, so it is excluded here exactly as the TTL sweep
+--               (kind='private') and syncStateContracts (no refund) intend.
+-- ---------------------------------------------------------------------------
+local function reconcileUnsettled()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await([[
+            SELECT id, kind, status, amount, poster_citizenid, claimed_by_citizenid
+            FROM palm6_bounty_contracts
+            WHERE settled = 0
+              AND ( status = 'claimed'
+                 OR (status = 'cancelled' AND kind = 'private')
+                 OR (status = 'expired'  AND kind = 'private') )
+        ]]) or {}
+    end)
+    local recovered = 0
+    for _, c in ipairs(pending) do
+        local amount = tonumber(c.amount) or 0
+        if c.status == 'claimed' then
+            if c.claimed_by_citizenid and claimSettled(c.id, 'claimed') then
+                if amount > 0 and not Bridge.CreditBankByCitizenId(c.claimed_by_citizenid, amount, 'bounty-capture-recovered') then
+                    dbg(('reconcile: contract #%d hunter credit returned false — $%d shortfall'):format(c.id, amount))
+                end
+                recovered = recovered + 1
+                dbg(('reconcile: contract #%d hunter payout $%d recovered'):format(c.id, amount))
+            end
+        elseif c.status == 'cancelled' then
+            if c.poster_citizenid and claimSettled(c.id, 'cancelled') then
+                local refund = amount - math.floor(amount * Config.Private.CancelFeePct)
+                if refund > 0 and not Bridge.CreditBankByCitizenId(c.poster_citizenid, refund, 'bounty-cancel-refund-recovered') then
+                    dbg(('reconcile: contract #%d cancel refund returned false — $%d shortfall'):format(c.id, refund))
+                end
+                recovered = recovered + 1
+                dbg(('reconcile: contract #%d cancel refund $%d recovered'):format(c.id, refund))
+            end
+        elseif c.status == 'expired' then
+            if c.poster_citizenid and claimSettled(c.id, 'expired') then
+                if amount > 0 and not Bridge.CreditBankByCitizenId(c.poster_citizenid, amount, 'bounty-expire-refund-recovered') then
+                    dbg(('reconcile: contract #%d expire refund returned false — $%d shortfall'):format(c.id, amount))
+                end
+                recovered = recovered + 1
+                dbg(('reconcile: contract #%d expire refund $%d recovered'):format(c.id, amount))
+            end
+        end
+    end
+    if recovered > 0 then
+        print(('[palm6_bounty] boot reconcile settled %d interrupted payout(s)'):format(recovered))
     end
 end
 
@@ -457,6 +587,15 @@ AddEventHandler('onResourceStart', function(resource)
     -- Sync once on boot so a restart doesn't wait a full SweepSec for the
     -- board to reflect the live warrant table.
     SetTimeout(2000, syncStateContracts)
+    -- Recover any escrow payout interrupted by the last restart, once oxmysql +
+    -- palm6_dbmigrate (the 0055 `settled` column) are up. Non-time-critical, so
+    -- wait the 8s out — matching palm6_fightclub's reconcile delay. Before the
+    -- column lands the reconcile's WHERE settled=0 query errors (pcall-swallowed)
+    -- and recovers nothing, so the wait is load-bearing.
+    CreateThread(function()
+        Wait(8000)
+        reconcileUnsettled()
+    end)
 end)
 
 ---Contract counts for devtest and future consumers.

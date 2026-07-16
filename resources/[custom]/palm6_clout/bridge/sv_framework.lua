@@ -65,6 +65,42 @@ function Bridge.CreditBank(src, amount, reason)
     return true
 end
 
+-- Credit `amount` to a character's bank BY citizenid — works whether or not
+-- they are online (mirrors palm6_fightclub's boot-reconcile credit). Online:
+-- go through qbx_core so live UI updates. Offline: a JSON_SET fallback on the
+-- players row so a brand deal stranded by a crash still lands next boot.
+-- Returns true iff the credit was applied.
+function Bridge.CreditBankByCitizenId(citizenid, amount, reason)
+    for _, src in ipairs(GetPlayers()) do
+        src = tonumber(src)
+        local p = getPlayer(src)
+        if p and p.PlayerData and p.PlayerData.citizenid == citizenid then
+            p.Functions.AddMoney('bank', amount, reason)
+            return true
+        end
+    end
+    local ok = pcall(function()
+        MySQL.update.await(
+            "UPDATE players SET money = JSON_SET(money, '$.bank', CAST(JSON_EXTRACT(money,'$.bank') AS UNSIGNED) + ?) WHERE citizenid = ?",
+            { amount, citizenid }
+        )
+    end)
+    return ok
+end
+
+-- Server source for an online character, or nil (used to notify a recovered
+-- streamer if they happen to be online at boot-reconcile time).
+function Bridge.GetSourceByCitizenId(citizenid)
+    for _, src in ipairs(GetPlayers()) do
+        src = tonumber(src)
+        local p = getPlayer(src)
+        if p and p.PlayerData and p.PlayerData.citizenid == citizenid then
+            return src
+        end
+    end
+    return nil
+end
+
 -- How many of `item` the player holds (0 on any failure). ox_inventory's
 -- documented count query — same call palm6_grind uses.
 function Bridge.CountItem(src, item)

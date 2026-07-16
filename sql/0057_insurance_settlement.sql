@@ -1,0 +1,40 @@
+-- ============================================================================
+-- 0057_insurance_settlement.sql — recoverable claim payout for palm6_insurance.
+--
+-- palm6_insurance releases a claim payout in the 30s sweep by (1) an atomic
+-- guarded UPDATE flipping the claim to its terminal status ('paid' or
+-- 'flagged_paid') and stamping resolved_at, then (2) a Bridge.CreditBankByCitizenId
+-- bank credit. Before this migration, a server crash/restart in the window
+-- between (1) and the credit left the claim marked paid but the money never
+-- landed — the sweep's re-select filters status='processing' AND resolved_at IS
+-- NULL, so a marked row is never revisited, and no boot reconcile re-drove it.
+-- The payout was stranded forever. This server restarts on every deploy, so
+-- that window is a real latent bug.
+--
+-- `credited_at` makes the credit RECOVERABLE and IDEMPOTENT:
+--   0            — the terminal status is set but the bank credit has NOT landed.
+--   <nonzero>    — the bank credit was claimed (and issued); a nonzero sentinel /
+--                  unix secs meaning "already credited". Only ever tested as
+--                  =0 / !=0 (a flag), never read as a real time.
+-- The flag is CLAIMED (UPDATE ... SET credited_at=<ts> WHERE id=? AND
+-- credited_at=0 returns 1) BEFORE the money moves, so a boot reconcile that
+-- re-drives claims with status IN ('paid','flagged_paid') AND credited_at=0 can
+-- never double-pay: an already-credited claim has credited_at>0 and is skipped.
+--
+-- FIRST-BOOT SAFETY — DEFAULT 1, NOT 0. This ADD COLUMN runs on an EXISTING
+-- table that (on prod) already holds terminal 'paid'/'flagged_paid' claims that
+-- were credited under the old code. DEFAULT 0 would backfill EVERY one of those
+-- historical rows to credited_at=0, and the very first boot reconcile
+-- (WHERE credited_at=0) would RE-PAY the entire payment history — a catastrophic
+-- money printer. DEFAULT 1 backfills all pre-existing rows as "already settled"
+-- so the reconcile skips them. New claims are set credited_at=0 at the moment
+-- they flip to a terminal status (the 30s sweep's guarded UPDATE), so genuine
+-- post-deploy crash rows stay recoverable. ADD COLUMN IF NOT EXISTS runs this
+-- backfill exactly once; later boots are a no-op and never clobber a real crash
+-- row. Do NOT add a blanket backfill UPDATE.
+-- The ALTER is IF NOT EXISTS — safe to re-run every boot (palm6_dbmigrate has no
+-- ledger). See resources/[custom]/palm6_insurance/server/main.lua creditClaim.
+-- ============================================================================
+
+ALTER TABLE `palm6_insurance_claims`
+    ADD COLUMN IF NOT EXISTS `credited_at` BIGINT NOT NULL DEFAULT 1;

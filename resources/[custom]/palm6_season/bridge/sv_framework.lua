@@ -78,6 +78,42 @@ function Bridge.AddBank(src, amount, reason)
     return ok and res ~= false
 end
 
+-- Credit CLEAN funds to a player's bank BY citizenid, online or offline — the
+-- offline-safe payout pattern (palm6_fightclub / pumpcoin / bounty). Used by
+-- the boot reconcile, where the prize's owner is often logged off after the
+-- restart that stranded the payout. Returns true iff the credit landed.
+function Bridge.CreditBankByCitizenId(citizenid, amount, reason)
+    if not citizenid or citizenid == '' then return false end
+    for _, src in ipairs(GetPlayers()) do
+        src = tonumber(src)
+        local p = getPlayer(src)
+        if p and p.PlayerData and p.PlayerData.citizenid == citizenid then
+            local ok, res = pcall(function() return p.Functions.AddMoney('bank', amount, reason or 'season-prize') end)
+            return ok and res ~= false
+        end
+    end
+    local ok = pcall(function()
+        MySQL.update.await(
+            "UPDATE players SET money = JSON_SET(money, '$.bank', CAST(JSON_EXTRACT(money,'$.bank') AS UNSIGNED) + ?) WHERE citizenid = ?",
+            { amount, citizenid })
+    end)
+    return ok
+end
+
+-- Server source for an online character, or nil (used only to toast a recovered
+-- prize to its owner if they happen to be back online at reconcile time).
+function Bridge.GetSourceByCitizenId(citizenid)
+    if not citizenid or citizenid == '' then return nil end
+    for _, src in ipairs(GetPlayers()) do
+        src = tonumber(src)
+        local p = getPlayer(src)
+        if p and p.PlayerData and p.PlayerData.citizenid == citizenid then
+            return src
+        end
+    end
+    return nil
+end
+
 -- Unrestricted chat command; all gating happens server-side in the handler.
 function Bridge.RegisterCommand(name, handler)
     RegisterCommand(name, handler, false)

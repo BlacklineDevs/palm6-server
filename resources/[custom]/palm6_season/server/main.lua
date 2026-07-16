@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS `palm6_season_rewards` (
     claimed TINYINT(1) NOT NULL DEFAULT 0,
     claimed_by VARCHAR(64) NULL,
     claimed_at TIMESTAMP NULL DEFAULT NULL,
+    paid TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_palm6_season_reward (season_id, ladder, rank_pos),
     INDEX idx_palm6_season_rewards_subject (subject_type, subject_id, claimed)
@@ -500,24 +501,17 @@ local function cmdSeasonClose(src)
     local startsAt = s.starts_at
     local recapFields = {}
 
-    -- Claim the close FIRST: flip active atomically before writing any archive
-    -- row. If this affects 0 rows (already closed, lost a concurrent race, or a
-    -- transient DB error), we bail without archiving, so a re-run or an
-    -- interleaved second /seasonclose can never duplicate the archive.
-    local affected = 0
-    pcall(function()
-        affected = MySQL.update.await(
-            'UPDATE palm6_seasons SET active = 0, ends_at = NOW() WHERE id = ? AND active = 1', { s.id })
-    end)
-    if affected ~= 1 then
-        invalidate()
-        echo(src, 'Could not close the season (already closed or DB write failed). Check palm6_seasons.')
-        return
-    end
-
-    -- The four ladders read from live tables that closing does not mutate, and
-    -- starts_at is unchanged, so capturing the snapshot AFTER the active flip
-    -- yields the same standings: the reorder is snapshot-safe.
+    -- Build ALL archive + claimable palm6_season_rewards rows BEFORE flipping the
+    -- season inactive. Crash-recoverability: the season stays active=1 for the
+    -- whole (yielding) build loop, so a crash/restart mid-loop leaves it OPEN and
+    -- /seasonclose simply re-runs — the reward rows' UNIQUE(season_id,ladder,
+    -- rank_pos) + INSERT IGNORE make that re-run dup-safe, so no ladder ever ends
+    -- up with a missing prize (the old order flipped active=0 FIRST, so a crash
+    -- mid-loop stranded later ladders' prizes with no way to re-run). The active=0
+    -- flip is the LAST step and stays an atomic guarded UPDATE (WHERE active=1),
+    -- so it is still the single terminal commit — two racing /seasonclose calls
+    -- can each rebuild (archive rows may duplicate; prizes cannot, via the UNIQUE)
+    -- but only ONE wins the flip and announces.
     for _, key in ipairs(Config.LadderOrder) do
         local meta = Config.Ladders[key]
         local L = Ladders[key]
@@ -548,10 +542,15 @@ local function cmdSeasonClose(src)
                     end
                     if subjType then
                         pcall(function()
+                            -- paid=0 EXPLICIT (overrides the 0061 ADD COLUMN
+                            -- DEFAULT 1 that backfills pre-deploy history as
+                            -- already-settled): a freshly-minted prize is unpaid,
+                            -- so the boot reconcile can recover it if a crash
+                            -- strikes between /seasonclaim's claim and the credit.
                             MySQL.insert.await(
                                 'INSERT IGNORE INTO palm6_season_rewards '
-                                .. '(season_id, ladder, rank_pos, subject_type, subject_id, amount) '
-                                .. 'VALUES (?, ?, ?, ?, ?, ?)',
+                                .. '(season_id, ladder, rank_pos, subject_type, subject_id, amount, paid) '
+                                .. 'VALUES (?, ?, ?, ?, ?, ?, 0)',
                                 { s.id, key, pos, subjType, subjId, prize })
                         end)
                     end
@@ -567,16 +566,83 @@ local function cmdSeasonClose(src)
         end
     end
 
+    -- Terminal commit: flip the season inactive exactly once, atomically. If this
+    -- affects 0 rows (already closed, a concurrent /seasonclose won the flip, or a
+    -- transient DB error), we bail WITHOUT double-announcing. The archive/reward
+    -- rows built above are already idempotent (prizes via UNIQUE + INSERT IGNORE),
+    -- so a lost race or a re-run never mints a duplicate prize.
+    local affected = 0
+    pcall(function()
+        affected = MySQL.update.await(
+            'UPDATE palm6_seasons SET active = 0, ends_at = NOW() WHERE id = ? AND active = 1', { s.id })
+    end)
+    if affected ~= 1 then
+        invalidate()
+        echo(src, 'Could not close the season (already closed or DB write failed). Check palm6_seasons.')
+        return
+    end
+
     invalidate()
     echo(src, ('Season "%s" closed and archived.'):format(s.name))
     announceSeason(('Season "%s" closed'):format(s.name), 'Final standings archived.', recapFields)
 end
 
+-- ---------------------------------------------------------------------------
+-- Recoverable prize settlement (claim-before-credit).
+--
+-- settleReward() is the ONE idempotent payout, called from BOTH the live
+-- /seasonclaim path AND the boot reconcile. It CLAIMS the `paid` flag (flips
+-- 0->1) BEFORE the bank credit, so a replay can NEVER double-pay: an
+-- already-credited prize has paid=1 and this returns early. The credit is
+-- offline-safe (CreditBankByCitizenId) because at reconcile time the owner is
+-- usually logged off after the restart that stranded the payout.
+--
+-- Bias (matching palm6_fightclub's settle + /fcbet's consume-before-grant): a
+-- crash in the tiny window AFTER claiming paid=1 but BEFORE the credit lands
+-- costs that one prize — a rare self-inflicted shortfall, never a mint. On a
+-- credit that fails outright (no crash) we release the paid claim so the prize
+-- stays payable and a later /seasonclaim or the next boot reconcile retries.
+--
+-- NOTE: we intentionally CLAIM paid=1 BEFORE crediting (not "set paid=1 after a
+-- confirmed AddBank"): marking after the credit would leave a crash window where
+-- the money landed but paid=0, which the boot reconcile would then re-credit —
+-- exactly the double-pay the claim-before-credit rule forbids. Correctness over
+-- the (already tiny) shortfall bias.
+local function settleReward(rewardId, citizenId, amount)
+    local amt = tonumber(amount) or 0
+    -- Atomic claim: only the run that flips paid 0->1 proceeds to the credit.
+    local claimedPaid = false
+    pcall(function()
+        claimedPaid = MySQL.update.await(
+            'UPDATE palm6_season_rewards SET paid = 1 WHERE id = ? AND paid = 0', { rewardId }) == 1
+    end)
+    if not claimedPaid then return false end  -- already paid by another run
+
+    local credited = false
+    if amt > 0 and citizenId and citizenId ~= '' then
+        credited = Bridge.CreditBankByCitizenId(citizenId, amt, 'season-prize')
+    end
+    if not credited then
+        -- Credit failed outright (not a crash) — release the paid claim so the
+        -- prize stays payable for a retry. On an actual crash between the claim
+        -- and here this line never runs, and reconcile skips paid=1 (the bias).
+        pcall(function()
+            MySQL.update.await(
+                'UPDATE palm6_season_rewards SET paid = 0 WHERE id = ? AND paid = 1', { rewardId })
+        end)
+        return false
+    end
+    return true
+end
+
 -- /seasonclaim — bank any unclaimed season prizes the caller is owed. Every
 -- prize is keyed to a citizenid (gang prizes are paid to the leader's citizenid,
 -- resolved at close), so a prize matches its owner by an immutable identity.
--- Each pays exactly once — an atomic claimed-flag flip gates the bank credit,
--- and a failed credit reverts the flip so nothing is ever marked paid-but-unpaid.
+-- Each pays exactly once — an atomic claimed-flag flip marks it consumed for the
+-- claimed=0 filter, then settleReward's paid-before-credit claim gates the bank
+-- credit; a failed credit reverts BOTH flags so nothing is ever left claimed but
+-- unpaid, and a hard crash between the claim and the credit is recovered on the
+-- next boot (reconcileUnpaid re-drives claimed=1 AND paid=0 rows idempotently).
 local function cmdSeasonClaim(src)
     if not cooldown(src) then return end
     local cid = Bridge.GetCitizenId(src)
@@ -594,7 +660,7 @@ local function cmdSeasonClaim(src)
 
     local paid, total = 0, 0
     for _, row in ipairs(rows) do
-        -- Atomically claim THIS row before paying (rows == 1 guard prevents a
+        -- Atomically claim THIS row before paying (the == 1 guard prevents a
         -- concurrent second claim from double-paying).
         local claimedOk = false
         pcall(function()
@@ -603,11 +669,12 @@ local function cmdSeasonClaim(src)
                 .. 'WHERE id = ? AND claimed = 0', { cid, row.id }) == 1
         end)
         if claimedOk then
-            if Bridge.AddBank(src, row.amount, 'season-prize') then
+            if settleReward(row.id, cid, row.amount) then
                 paid = paid + 1
                 total = total + (tonumber(row.amount) or 0)
             else
-                -- Credit did not land — revert so the prize stays claimable.
+                -- Credit did not land — revert the claim so the prize stays
+                -- claimable (settleReward already released its own paid claim).
                 pcall(function()
                     MySQL.update.await(
                         'UPDATE palm6_season_rewards SET claimed = 0, claimed_by = NULL, claimed_at = NULL '
@@ -621,6 +688,36 @@ local function cmdSeasonClaim(src)
         Bridge.Notify(src, 'Season', ('Claimed %d season prize(s): $%s banked.'):format(paid, total), 'success')
     else
         Bridge.Notify(src, 'Season', 'You have no season prizes to claim.', 'inform')
+    end
+end
+
+-- Boot reconcile — re-drive any prize that was claimed (claimed=1) but whose
+-- bank credit never landed (paid=0), i.e. a hard crash struck between the
+-- claimed=1 commit and the credit. Idempotent: settleReward claims paid=1 before
+-- crediting, so this pays ONLY what a crash left owing and never double-pays an
+-- already-paid prize. Delayed in onResourceStart so palm6_dbmigrate's 0061 ALTER
+-- (the `paid` column) has landed before the WHERE paid=0 query runs — before
+-- that the query would error (pcall-swallowed) and recover nothing.
+local function reconcileUnpaid()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await(
+            "SELECT id, subject_id, amount FROM palm6_season_rewards "
+            .. "WHERE claimed = 1 AND paid = 0 AND subject_type = 'citizen'") or {}
+    end)
+    local recovered = 0
+    for _, row in ipairs(pending) do
+        if settleReward(row.id, row.subject_id, row.amount) then
+            recovered = recovered + 1
+            local s = Bridge.GetSourceByCitizenId(row.subject_id)
+            if s then
+                Bridge.Notify(s, 'Season',
+                    ('Recovered an unpaid season prize: $%s banked.'):format(tostring(row.amount)), 'success')
+            end
+        end
+    end
+    if recovered > 0 then
+        print(('[palm6_season] boot reconcile paid %d interrupted season prize(s)'):format(recovered))
     end
 end
 
@@ -657,6 +754,15 @@ AddEventHandler('onResourceStart', function(resource)
     print(('[palm6_season] online: %s'):format(
         s and ('season "%s" active since %s'):format(s.name, tostring(s.starts_at))
           or 'no active season (open one with /seasonopen <name>)'))
+
+    -- Recover any prize claimed=1 whose bank credit was interrupted by the last
+    -- restart. Delayed so oxmysql + palm6_dbmigrate's 0061 `paid` column are up
+    -- first (before that the WHERE paid=0 query errors and recovers nothing).
+    -- Non-time-critical, so wait it out.
+    CreateThread(function()
+        Wait(8000)
+        reconcileUnpaid()
+    end)
 end)
 
 -- ---------------------------------------------------------------------------

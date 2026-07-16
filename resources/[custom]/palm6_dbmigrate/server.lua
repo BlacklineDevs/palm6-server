@@ -36,6 +36,104 @@ CREATE TABLE IF NOT EXISTS `palm6_drugs_dealers` (
     day_dirty          INT UNSIGNED NOT NULL DEFAULT 0,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )]] },
+    -- 0039: base drugs tables (see sql/0039_drugs.sql). Registered here because
+    -- 0042 palm6_drugs_dealers (above) and the live palm6_drugs resource assume
+    -- these exist; without them a rebuild-from-dbmigrate DB would have no drugs
+    -- layer. IF NOT EXISTS -> no-op where prod already applied 0039.
+    { name = '0039 palm6_drugs_plants', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_plants` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_cid VARCHAR(64) NOT NULL,
+    coord_x DOUBLE NOT NULL,
+    coord_y DOUBLE NOT NULL,
+    coord_z DOUBLE NOT NULL,
+    strain VARCHAR(32) NOT NULL,
+    soil_tier TINYINT UNSIGNED NOT NULL DEFAULT 2,
+    planted_at BIGINT UNSIGNED NOT NULL,
+    ready_at BIGINT UNSIGNED NOT NULL,
+    water_level TINYINT UNSIGNED NOT NULL DEFAULT 100,
+    watered_at BIGINT UNSIGNED NOT NULL,
+    additives JSON NULL,
+    neglected TINYINT(1) NOT NULL DEFAULT 0,
+    stage VARCHAR(16) NOT NULL DEFAULT 'growing',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_drugs_plants_owner (owner_cid),
+    INDEX idx_drugs_plants_plot (coord_x, coord_y, coord_z)
+)]] },
+    { name = '0039 palm6_drugs_recipes', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_recipes` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_cid VARCHAR(64) NOT NULL,
+    brand VARCHAR(48) NOT NULL,
+    base VARCHAR(32) NOT NULL,
+    steps_json JSON NULL,
+    effects_json JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_drugs_recipes_owner_brand (owner_cid, brand)
+)]] },
+    { name = '0039 palm6_drugs_progression', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_progression` (
+    owner_cid VARCHAR(64) NOT NULL PRIMARY KEY,
+    xp INT UNSIGNED NOT NULL DEFAULT 0,
+    rank_tier INT UNSIGNED NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+)]] },
+    { name = '0039 palm6_drugs_sales', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_sales` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    channel VARCHAR(16) NOT NULL DEFAULT 'npc',
+    brand VARCHAR(48) NULL,
+    base VARCHAR(32) NULL,
+    quality TINYINT UNSIGNED NOT NULL DEFAULT 2,
+    units INT UNSIGNED NOT NULL,
+    gross INT UNSIGNED NOT NULL,
+    cut_paid INT UNSIGNED NOT NULL DEFAULT 0,
+    net_dirty INT UNSIGNED NOT NULL,
+    region VARCHAR(48) NULL,
+    flagged TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_drugs_sales_citizen_day (citizenid, created_at)
+)]] },
+    -- 0041: base gang tables (see sql/0041_gangs.sql). MUST be registered before
+    -- the 0043 ALTER/index and the 0049 UPDATE below, both of which reference
+    -- palm6_gangs — the palm6_gangs resource itself creates no tables. IF NOT
+    -- EXISTS -> no-op where prod already applied 0041.
+    { name = '0041 palm6_gangs', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_gangs` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(32) NOT NULL,
+    tag VARCHAR(8) NOT NULL,
+    leader_cid VARCHAR(64) NOT NULL,
+    vault_balance BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    rep INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_palm6_gang_name (name),
+    UNIQUE KEY uniq_palm6_gang_tag (tag),
+    INDEX idx_palm6_gang_leader (leader_cid)
+)]] },
+    { name = '0041 palm6_gang_members', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_gang_members` (
+    citizenid VARCHAR(64) NOT NULL PRIMARY KEY,
+    gang_id INT UNSIGNED NOT NULL,
+    rank TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    name VARCHAR(64) NULL DEFAULT NULL,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_gang_members_gang (gang_id)
+)]] },
+    { name = '0041 palm6_gang_vault_log', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_gang_vault_log` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    gang_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    action VARCHAR(16) NOT NULL,
+    amount BIGINT UNSIGNED NOT NULL,
+    balance_after BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_gang_vault_gang (gang_id, created_at)
+)]] },
     { name = '0043 palm6_gangs web columns', sql = [[
 ALTER TABLE `palm6_gangs`
     ADD COLUMN IF NOT EXISTS `logo_url`    VARCHAR(512) NULL AFTER `rep`,
@@ -174,6 +272,73 @@ CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_billboards` (
     `expires_at` BIGINT      NOT NULL,
     INDEX `idx_palm6_pumpcoin_billboards_exp` (`expires_at`)
 )]] },
+    -- 0054: recoverable fightclub settlement (see sql/0054). Idempotent ALTERs.
+    -- `paid` (per-bet) + `purse_paid` (per-match) are claim-before-credit
+    -- idempotency flags; `settled` marks a match whose payout fully completed.
+    -- A crash mid-payout leaves status='resolved' AND settled=0, which the
+    -- fightclub boot reconcile re-drives without ever double-paying.
+    { name = '0054 fightclub bets.paid', sql = [[
+ALTER TABLE `palm6_fightclub_bets` ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 0]] },
+    { name = '0054 fightclub matches.purse_paid', sql = [[
+ALTER TABLE `palm6_fightclub_matches` ADD COLUMN IF NOT EXISTS `purse_paid` TINYINT NOT NULL DEFAULT 0]] },
+    -- settled DEFAULT 1: backfills existing resolved matches as already-settled
+    -- so the boot reconcile never re-pays payment history on the first restart.
+    -- resolveMatch resets settled=0 at the live->resolved flip for new matches.
+    { name = '0054 fightclub matches.settled', sql = [[
+ALTER TABLE `palm6_fightclub_matches` ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1]] },
+    -- 0057: recoverable insurance claim payout (see palm6_insurance). `credited_at`
+    -- is a BIGINT used purely as a 0/nonzero claim flag (creditClaim claims it
+    -- WHERE credited_at = 0 before the bank credit). DEFAULT 1 backfills EXISTING
+    -- terminal (paid/flagged_paid) rows as already-credited so the boot reconcile
+    -- (WHERE credited_at = 0) never re-pays payment history on the first restart.
+    -- The 30s sweep's terminal-flip resets credited_at = 0 for each genuinely NEW
+    -- paid claim, keeping a post-deploy crash recoverable.
+    { name = '0057 insurance claims.credited_at', sql = [[
+ALTER TABLE `palm6_insurance_claims` ADD COLUMN IF NOT EXISTS `credited_at` BIGINT NOT NULL DEFAULT 1]] },
+    { name = '0057 insurance claims uncredited index', sql = [[
+CREATE INDEX IF NOT EXISTS `idx_insurance_claims_uncredited` ON `palm6_insurance_claims` (`credited_at`, `status`)]] },
+    -- 0062: recoverable flashdrop consignment settlement (see sql/0062).
+    -- Both DEFAULT 1 so existing sold listings are backfilled as paid+settled
+    -- (boot reconcile skips them); the buy path resets both to 0 at reserve.
+    { name = '0062 flashdrop listings.buyer_paid', sql = [[
+ALTER TABLE `palm6_flashdrop_listings` ADD COLUMN IF NOT EXISTS `buyer_paid` TINYINT NOT NULL DEFAULT 1]] },
+    { name = '0062 flashdrop listings.settled', sql = [[
+ALTER TABLE `palm6_flashdrop_listings` ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1]] },
+    -- 0063: recoverable pumpcoin delist settlement (see sql/0063).
+    { name = '0063 pumpcoin holdings.settled', sql = [[
+ALTER TABLE `palm6_pumpcoin_holdings` ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 0]] },
+    { name = '0063 pumpcoin coins.delist_pool', sql = [[
+ALTER TABLE `palm6_pumpcoin_coins` ADD COLUMN IF NOT EXISTS `delist_pool` BIGINT NULL DEFAULT NULL]] },
+    { name = '0063 pumpcoin coins.delist_supply', sql = [[
+ALTER TABLE `palm6_pumpcoin_coins` ADD COLUMN IF NOT EXISTS `delist_supply` INT UNSIGNED NULL DEFAULT NULL]] },
+    -- 0060: recoverable clout brand-deal cashout (see sql/0060). `paid` DEFAULT 1
+    -- backfills existing claimed deals as already-paid (boot reconcile skips them);
+    -- the milestone INSERT writes paid=0 explicitly so new deals stay recoverable.
+    { name = '0060 clout deals.paid', sql = [[
+ALTER TABLE `palm6_clout_deals` ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1]] },
+    { name = '0060 clout deals unpaid index', sql = [[
+CREATE INDEX IF NOT EXISTS `idx_clout_deals_unpaid` ON `palm6_clout_deals` (`paid`, `claimed_at`)]] },
+    -- 0055-0061: recoverable settlement flags for the bank-money payout resolvers
+    -- (bounty/courier/insurance/ransom/lottery/season). Each is DEFAULT 1 so
+    -- EXISTING terminal rows (already paid under the old code) are backfilled as
+    -- already-settled and the per-resource boot reconcile (WHERE flag=0) never
+    -- re-pays payment history on the first restart after deploy; each resource's
+    -- terminal-flip (or the season reward INSERT) resets the flag to 0 so records
+    -- reaching a terminal state AFTER deploy stay recoverable. ADD COLUMN IF NOT
+    -- EXISTS runs the backfill exactly once. See sql/0055-0061 + each resource's
+    -- settle*/reconcile* functions.
+    { name = '0055 bounty contracts.settled', sql = [[
+ALTER TABLE `palm6_bounty_contracts` ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1]] },
+    { name = '0056 courier postings.settled', sql = [[
+ALTER TABLE `courier_postings` ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1]] },
+    { name = '0057 insurance claims.credited_at', sql = [[
+ALTER TABLE `palm6_insurance_claims` ADD COLUMN IF NOT EXISTS `credited_at` BIGINT NOT NULL DEFAULT 1]] },
+    { name = '0058 ransom cases.payout_credited', sql = [[
+ALTER TABLE `palm6_ransom_cases` ADD COLUMN IF NOT EXISTS `payout_credited` TINYINT NOT NULL DEFAULT 1]] },
+    { name = '0059 lottery draws.paid', sql = [[
+ALTER TABLE `palm6_lottery_draws` ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1]] },
+    { name = '0061 season_rewards.paid', sql = [[
+ALTER TABLE `palm6_season_rewards` ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1]] },
 }
 
 CreateThread(function()

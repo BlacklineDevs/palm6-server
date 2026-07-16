@@ -1,0 +1,50 @@
+-- ============================================================================
+-- 0055_bounty_settlement.sql — crash-recoverable escrow payout for palm6_bounty.
+--
+-- palm6_bounty resolves a private contract by (1) an atomic guarded UPDATE that
+-- flips the contract to a terminal status ('claimed' on /capture, 'cancelled' on
+-- /cancelbounty, 'expired' on the TTL sweep), then (2) a bank credit/refund:
+--   claimed   -> Bridge.CreditBankByCitizenId(hunter, amount)   -- /capture
+--   cancelled -> Bridge.CreditBankByCitizenId(poster, refund)   -- /cancelbounty
+--   expired   -> Bridge.CreditBankByCitizenId(poster, amount)   -- TTL sweep
+-- Before this migration, a server crash/restart in the window between (1) and
+-- the credit left the contract terminal but the money never landed — the
+-- poster's escrow (or the hunter's payout) stranded forever with no recovery.
+-- This server restarts on every deploy, so that window is a real latent bug.
+--
+-- The `settled` flag makes settlement RECOVERABLE and IDEMPOTENT: it is CLAIMED
+-- (UPDATE ... SET settled=1 WHERE id=? AND status=? AND settled=0 returns 1)
+-- BEFORE the money moves, so a boot reconcile that re-drives a terminal contract
+-- with settled=0 can never double-pay — an already-credited row has settled=1
+-- and is skipped. The credit is claimed-before-credited (never credit-then-mark),
+-- matching palm6_fightclub's settleMatch and /capture's own consume-before-grant
+-- bias: the worst a crash between claim and credit can do is a rare one-payout
+-- shortfall (visible and fixable), never a mint.
+--
+-- Only PRIVATE contracts escrow real money, so the boot reconcile refunds
+-- cancelled/expired rows for kind='private' ONLY — a 'state' contract's
+-- 'expired' row (a cleared warrant) never held a cent and must never be
+-- "refunded". 'claimed' rows owe the hunter regardless of kind (state payouts
+-- are city-funded), so those are recovered for both kinds.
+--
+-- Idempotent ALTER — safe to re-run every boot (palm6_dbmigrate has no ledger).
+-- See resources/[custom]/palm6_bounty/server/main.lua reconcileUnsettled.
+--
+-- FIRST-BOOT SAFETY: this ADD COLUMN uses DEFAULT 1, so every row that exists at
+-- the moment the column is added (i.e. every PRE-EXISTING terminal contract
+-- already paid under the old code, live on prod) is backfilled settled=1 =
+-- "already settled". The boot reconcile (WHERE settled=0) therefore SKIPS all of
+-- payment history on the first restart — without this, DEFAULT 0 would mark every
+-- historical claimed/cancelled/expired row unsettled and the reconcile would
+-- RE-PAY the entire ledger (a catastrophic money printer). ADD COLUMN IF NOT
+-- EXISTS runs this backfill exactly once; later boots are a no-op and never
+-- clobber a genuine post-deploy crash row. NO separate blanket backfill UPDATE is
+-- used — DEFAULT 1 backfills exactly once at column-add, whereas a re-running
+-- UPDATE would also re-mark genuinely crash-stranded post-deploy rows and defeat
+-- recovery. New terminal contracts become recoverable because the guarded
+-- status-flip UPDATEs in main.lua (/capture, /cancelbounty, TTL sweep) reset
+-- settled=0 at the exact transition into the terminal state.
+-- ============================================================================
+
+ALTER TABLE `palm6_bounty_contracts`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1;

@@ -194,6 +194,72 @@ local function closeCaseEvidence(row, kind, payload)
 end
 
 -- ---------------------------------------------------------------------------
+-- Recoverable kidnapper payout (claim-before-credit).
+--
+-- Once a case is flipped status='paid' (payer already charged), the kidnapper's
+-- bank credit is the last, yielding step — and before this the crash window
+-- between the flip and that credit stranded the payer's money forever. This
+-- extracted settle does the payout IDEMPOTENTLY and is callable from BOTH the
+-- live /payransom path AND the boot reconcile: it re-reads the recorded case
+-- (kidnapper + amount) so a replay is deterministic, then CLAIMS
+-- payout_credited=1 (guarded WHERE status='paid' AND payout_credited=0) BEFORE
+-- the money moves and credits ONLY if it won the claim. A boot reconcile that
+-- re-drives an already-credited case sees payout_credited=1, loses the claim,
+-- and skips — no double-pay. The Bias (matching /fcbet's consume-before-grant
+-- and fightclub's settleMatch): a crash in the tiny window between claiming the
+-- flag and the credit costs that one payout — a rare self-inflicted shortfall,
+-- never a mint — while the common crash (before the credit started) is fully
+-- recovered on the next boot. Returns true iff WE credited this run.
+-- ---------------------------------------------------------------------------
+local function settleRansomPayout(caseId)
+    local row
+    pcall(function()
+        row = MySQL.single.await(
+            "SELECT kidnapper_citizenid, amount FROM palm6_ransom_cases WHERE id = ? AND status = 'paid'",
+            { caseId })
+    end)
+    -- No paid row (or the fetch failed): do NOT claim. A transient DB failure
+    -- here is retried by reconcileUncredited on the next boot.
+    if not row then
+        dbg(('settle #%d skipped — paid-row fetch failed; will retry on boot'):format(caseId))
+        return false
+    end
+
+    -- Atomic claim BEFORE the credit: exactly one settlement run (live or boot-
+    -- recovery) ever flips payout_credited 0->1, so exactly one ever credits.
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE palm6_ransom_cases SET payout_credited = 1 WHERE id = ? AND status = 'paid' AND payout_credited = 0",
+            { caseId }) == 1
+    end)
+    if not claimed then return false end
+
+    Bridge.CreditBankByCitizenId(row.kidnapper_citizenid, tonumber(row.amount) or 0, 'ransom-payout')
+    return true
+end
+
+-- Boot reconcile — re-drive any case flipped 'paid' whose kidnapper payout never
+-- landed (server died between the 'paid' flip and the credit). Idempotent:
+-- settleRansomPayout skips any already-credited (payout_credited=1) case, so this
+-- only pays what a crash left owing. Delayed so palm6_dbmigrate's 0058 ALTER (the
+-- payout_credited column) has landed first — before that the WHERE payout_credited=0
+-- query would error (pcall-swallowed) and recover nothing.
+local function reconcileUncredited()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await(
+            "SELECT id FROM palm6_ransom_cases WHERE status = 'paid' AND payout_credited = 0") or {}
+    end)
+    for _, r in ipairs(pending) do
+        settleRansomPayout(r.id)
+    end
+    if #pending > 0 then
+        print(('[palm6_ransom] boot reconcile credited %d interrupted ransom payout(s)'):format(#pending))
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- /payransom <caseId> — anyone can pay, from the drop point, in full.
 -- Guarded UPDATE ... WHERE status='active' so a race between two payers (or
 -- a payer and the expiry sweep) can only land once.
@@ -230,10 +296,15 @@ local function cmdPayRansom(src, args)
     -- Mark paid BEFORE crediting the kidnapper — the guarded WHERE stops a
     -- second payer (or the expiry sweep firing concurrently) from also
     -- landing on the same case. A lost race refunds the payer in full.
+    -- payout_credited = 0 resets the idempotency flag at the exact 'active'->
+    -- 'paid' transition, so this newly-resolved case is recoverable by the boot
+    -- reconcile until settleRansomPayout claims it. The WHERE status='active'
+    -- guard means only a genuine new transition resets it — pre-deploy 'paid'
+    -- rows (backfilled payout_credited=1 by migration 0058) are never re-flipped.
     local marked = false
     pcall(function()
         marked = MySQL.update.await(
-            "UPDATE palm6_ransom_cases SET status = 'paid', paid_by_citizenid = ?, resolved_at = NOW() WHERE id = ? AND status = 'active'",
+            "UPDATE palm6_ransom_cases SET status = 'paid', paid_by_citizenid = ?, resolved_at = NOW(), payout_credited = 0 WHERE id = ? AND status = 'active'",
             { payerCid, id }) == 1
     end)
     if not marked then
@@ -242,14 +313,21 @@ local function cmdPayRansom(src, args)
         return
     end
 
-    Bridge.CreditBankByCitizenId(row.kidnapper_citizenid, amount, 'ransom-payout')
+    -- Claim-before-credit kidnapper payout. In the live path the case was just
+    -- flipped 'paid' with payout_credited=0, so this wins the claim and credits
+    -- now; if the server dies before this line the boot reconcile drives it
+    -- instead. Idempotent either way — the payer's charged money can no longer
+    -- strand.
+    local credited = settleRansomPayout(id)
     closeCaseEvidence(row, 'ransom_paid', { amount = amount, payer_citizenid = payerCid })
     issueWarrantForCase(row)
 
     Bridge.Notify(src, 'Ransom', ('Ransom #%d paid — $%d.'):format(id, amount), 'success')
-    local kidnapperSrc = Bridge.GetSourceByCitizenId(row.kidnapper_citizenid)
-    if kidnapperSrc then
-        Bridge.Notify(kidnapperSrc, 'Ransom', ('Ransom #%d was paid — $%d landed in your bank.'):format(id, amount), 'success')
+    if credited then
+        local kidnapperSrc = Bridge.GetSourceByCitizenId(row.kidnapper_citizenid)
+        if kidnapperSrc then
+            Bridge.Notify(kidnapperSrc, 'Ransom', ('Ransom #%d was paid — $%d landed in your bank.'):format(id, amount), 'success')
+        end
     end
     local victimSrc = Bridge.GetSourceByCitizenId(row.victim_citizenid)
     if victimSrc then
@@ -307,6 +385,14 @@ AddEventHandler('onResourceStart', function(resource)
     end)
     print(('[palm6_ransom] ledger open — %d active case(s) ($%d demanded); mdt escalation %s')
         :format(activeN, totalAmount, Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline'))
+    -- Recover any kidnapper payout interrupted by the last restart, once oxmysql
+    -- + palm6_dbmigrate (0058 payout_credited column) are up. Non-time-critical,
+    -- so wait it out — before the column exists the WHERE payout_credited=0 query
+    -- would error (pcall-swallowed) and recover nothing.
+    CreateThread(function()
+        Wait(8000)
+        reconcileUncredited()
+    end)
 end)
 
 ---Case counts for devtest and future consumers.

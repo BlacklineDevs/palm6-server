@@ -294,60 +294,88 @@ local function cmdFcMatches(src)
 end
 
 -- ---------------------------------------------------------------------------
--- Resolution — guarded UPDATE before any money moves, exactly once per
--- match (the sweep thread is the only writer of 'live'->'resolved', but the
--- guard is kept regardless — cheap, and matches house style).
+-- Resolution + recoverable settlement.
+--
+-- resolveMatch() flips a LIVE match to 'resolved' via a guarded UPDATE exactly
+-- once (recording winner_citizenid; NULL means a draw), then hands off to
+-- settleMatch(). settleMatch() is the RECOVERABLE, IDEMPOTENT payout: every
+-- credit is claimed BEFORE the money moves via a per-step flag
+-- (palm6_fightclub_bets.paid / palm6_fightclub_matches.purse_paid), and the
+-- match is marked `settled=1` only once every payout landed. This makes the
+-- payout re-drivable from a clean boot (see reconcileUnsettled) with NO
+-- double-pay — an already-credited step's flag is 1 and is skipped.
+--
+-- Bias (matching /fcbet's consume-before-grant): a crash in the tiny window
+-- between claiming a flag and the bank credit costs that one payout — a rare
+-- self-inflicted shortfall, never a mint — while the common crash (before a
+-- payout started, or between payouts) is fully recovered on the next boot.
+-- The pool/share math is recomputed from the FULL bet set on every run, so a
+-- replay is deterministic; only unpaid (paid=0) bets are actually credited.
+-- Before this rework a crash after the 'resolved' flip stranded every
+-- unpaid bet forever (deferred in the 2026-07-16 integrity audit).
 -- ---------------------------------------------------------------------------
-local function resolveMatch(matchId, winnerCid, reasonLabel)
-    local marked = false
-    pcall(function()
-        marked = MySQL.update.await(
-            "UPDATE palm6_fightclub_matches SET status = 'resolved', winner_citizenid = ?, resolved_at = NOW() WHERE id = ? AND status = 'live'",
-            { winnerCid, matchId }) == 1
-    end)
-    if not marked then return end
 
+-- Claim one bet's payout flag atomically; true iff WE flipped it 0->1 (so
+-- exactly one settlement run — live or boot-recovery — ever credits it).
+local function claimBet(betId)
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE palm6_fightclub_bets SET paid = 1 WHERE id = ? AND paid = 0", { betId }) == 1
+    end)
+    return claimed
+end
+
+local function markSettled(matchId)
+    pcall(function()
+        MySQL.update.await(
+            "UPDATE palm6_fightclub_matches SET settled = 1 WHERE id = ? AND settled = 0", { matchId })
+    end)
+end
+
+local function settleMatch(matchId, reasonLabel)
     local match
     pcall(function()
-        match = MySQL.single.await(
-            "SELECT fighter1_citizenid, fighter1_name, fighter2_citizenid, fighter2_name FROM palm6_fightclub_matches WHERE id = ?",
+        match = MySQL.single.await([[
+            SELECT winner_citizenid, purse_paid,
+                   fighter1_citizenid, fighter1_name,
+                   fighter2_citizenid, fighter2_name
+              FROM palm6_fightclub_matches WHERE id = ? AND status = 'resolved']],
             { matchId })
     end)
-    local bets = {}
-    pcall(function()
-        bets = MySQL.query.await(
-            "SELECT citizenid, fighter, amount FROM palm6_fightclub_bets WHERE match_id = ?", { matchId }) or {}
-    end)
-
-    if not winnerCid then
-        -- Draw (mutual forfeit or timeout): full refund, no rake, no purse.
-        -- Doesn't need `match` at all, so this path is safe even if the
-        -- fighter-row fetch above failed.
-        for _, b in ipairs(bets) do
-            Bridge.CreditBankByCitizenId(b.citizenid, tonumber(b.amount) or 0, 'fightclub-draw-refund')
-            local s = Bridge.GetSourceByCitizenId(b.citizenid)
-            if s then Bridge.Notify(s, 'Fight Club', ('Match #%d ended in a draw — $%d refunded.'):format(matchId, b.amount), 'inform') end
-        end
-        dbg(('match #%d resolved DRAW (%s) — %d bet(s) refunded'):format(matchId, reasonLabel or '?', #bets))
+    -- No resolved row, or the fetch failed: do NOT mark settled. A transient
+    -- DB failure here is retried by reconcileUnsettled on the next boot.
+    if not match then
+        dbg(('settle #%d skipped — resolved-row fetch failed; will retry on boot'):format(matchId))
         return
     end
 
-    if not match then
-        -- The status flip to 'resolved' already landed (the guarded UPDATE
-        -- above succeeded), but the follow-up SELECT for fighter names
-        -- failed. Do NOT guess which slot the winner was — that would risk
-        -- crediting the purse/pool against the wrong fighter's bettors.
-        -- Bets are left untouched and unpaid; the match row (status,
-        -- winner_citizenid) is still correct and fixable by hand.
-        dbg(('match #%d resolved but fighter-row fetch failed — payout SKIPPED, fix manually')
-            :format(matchId))
+    local bets = {}
+    pcall(function()
+        bets = MySQL.query.await(
+            "SELECT id, citizenid, fighter, amount, paid FROM palm6_fightclub_bets WHERE match_id = ?", { matchId }) or {}
+    end)
+
+    local winnerCid = match.winner_citizenid  -- nil/NULL == draw
+
+    if not winnerCid then
+        -- Draw (mutual forfeit or timeout): full refund of every unpaid bet.
+        for _, b in ipairs(bets) do
+            if tonumber(b.paid) ~= 1 and claimBet(b.id) then
+                Bridge.CreditBankByCitizenId(b.citizenid, tonumber(b.amount) or 0, 'fightclub-draw-refund')
+                local s = Bridge.GetSourceByCitizenId(b.citizenid)
+                if s then Bridge.Notify(s, 'Fight Club', ('Match #%d ended in a draw — $%d refunded.'):format(matchId, b.amount), 'inform') end
+            end
+        end
+        markSettled(matchId)
+        dbg(('match #%d settled DRAW (%s) — %d bet(s)'):format(matchId, reasonLabel or '?', #bets))
         return
     end
 
     local winnerSlot = (match.fighter1_citizenid == winnerCid) and 1 or 2
-    local winnerName = (winnerSlot == 1 and match and match.fighter1_name)
-        or (match and match.fighter2_name) or 'the winner'
+    local winnerName = (winnerSlot == 1 and match.fighter1_name) or match.fighter2_name or 'the winner'
 
+    -- Pool math from the FULL bet set (deterministic on replay).
     local totalPool, winningSideTotal = 0, 0
     for _, b in ipairs(bets) do
         local amt = tonumber(b.amount) or 0
@@ -359,24 +387,33 @@ local function resolveMatch(matchId, winnerCid, reasonLabel)
     local purse = math.floor(totalPool * Config.Fight.WinnerPursePct)
     local forBettors = math.max(0, totalPool - rake - purse)
 
+    -- Winner purse — claimed once via matches.purse_paid so a replay never re-pays it.
     if purse > 0 then
-        Bridge.CreditBankByCitizenId(winnerCid, purse, 'fightclub-purse')
-        local ws = Bridge.GetSourceByCitizenId(winnerCid)
-        if ws then Bridge.Notify(ws, 'Fight Club', ('You won match #%d (%s) — $%d purse.'):format(matchId, reasonLabel or 'knockout', purse), 'success') end
+        local claimedPurse = false
+        pcall(function()
+            claimedPurse = MySQL.update.await(
+                "UPDATE palm6_fightclub_matches SET purse_paid = 1 WHERE id = ? AND purse_paid = 0", { matchId }) == 1
+        end)
+        if claimedPurse then
+            Bridge.CreditBankByCitizenId(winnerCid, purse, 'fightclub-purse')
+            local ws = Bridge.GetSourceByCitizenId(winnerCid)
+            if ws then Bridge.Notify(ws, 'Fight Club', ('You won match #%d (%s) — $%d purse.'):format(matchId, reasonLabel or 'knockout', purse), 'success') end
+        end
     end
 
-    local loserCid = (winnerSlot == 1) and (match and match.fighter2_citizenid) or (match and match.fighter1_citizenid)
+    local loserCid = (winnerSlot == 1) and match.fighter2_citizenid or match.fighter1_citizenid
     if loserCid then
         local ls = Bridge.GetSourceByCitizenId(loserCid)
         if ls then Bridge.Notify(ls, 'Fight Club', ('You lost match #%d (%s vs %s) — %s.'):format(matchId, match.fighter1_name, match.fighter2_name, reasonLabel or 'knockout'), 'error') end
     end
 
-    -- Parimutuel split: each winning bettor gets their proportional share,
-    -- rounded down. Losing-side bets and rounding remainder are the sink —
-    -- same "buys round up, payouts round down" honesty palm6_pumpcoin uses.
-    if winningSideTotal > 0 and forBettors > 0 then
-        for _, b in ipairs(bets) do
-            if tonumber(b.fighter) == winnerSlot then
+    -- Parimutuel split: each bet is claimed exactly once. Winning bets get
+    -- their proportional share (rounded down); losing bets are just flagged
+    -- paid — losing stakes + rounding remainder are the sink, the same
+    -- "buys round up, payouts round down" honesty palm6_pumpcoin uses.
+    for _, b in ipairs(bets) do
+        if tonumber(b.paid) ~= 1 and claimBet(b.id) then
+            if tonumber(b.fighter) == winnerSlot and winningSideTotal > 0 and forBettors > 0 then
                 local share = math.floor(forBettors * (tonumber(b.amount) or 0) / winningSideTotal)
                 if share > 0 then
                     Bridge.CreditBankByCitizenId(b.citizenid, share, 'fightclub-bet-win')
@@ -386,8 +423,44 @@ local function resolveMatch(matchId, winnerCid, reasonLabel)
             end
         end
     end
-    dbg(('match #%d resolved: winner=%s (%s), pool=%d rake=%d purse=%d forBettors=%d')
+
+    markSettled(matchId)
+    dbg(('match #%d settled: winner=%s (%s), pool=%d rake=%d purse=%d forBettors=%d')
         :format(matchId, winnerCid, reasonLabel or '?', totalPool, rake, purse, forBettors))
+end
+
+local function resolveMatch(matchId, winnerCid, reasonLabel)
+    local marked = false
+    pcall(function()
+        -- settled=0 here (the column defaults to 1 to protect pre-deploy
+        -- history) marks THIS newly-resolved match as needing settlement, so a
+        -- crash mid-payout is recovered by reconcileUnsettled.
+        marked = MySQL.update.await(
+            "UPDATE palm6_fightclub_matches SET status = 'resolved', winner_citizenid = ?, resolved_at = NOW(), settled = 0 WHERE id = ? AND status = 'live'",
+            { winnerCid, matchId }) == 1
+    end)
+    if not marked then return end
+    settleMatch(matchId, reasonLabel)
+end
+
+-- Boot reconcile — re-drive any match flipped 'resolved' whose payout never
+-- finished (server died mid-settlement). Idempotent: settleMatch skips every
+-- already-claimed (paid / purse_paid) step, so this only pays what a crash
+-- left owing. Delayed so palm6_dbmigrate's 0054 ALTERs (the settled/paid/
+-- purse_paid columns) have landed first — before that the WHERE settled=0
+-- query would error (pcall-swallowed) and recover nothing.
+local function reconcileUnsettled()
+    local pending = {}
+    pcall(function()
+        pending = MySQL.query.await(
+            "SELECT id FROM palm6_fightclub_matches WHERE status = 'resolved' AND settled = 0") or {}
+    end)
+    for _, row in ipairs(pending) do
+        settleMatch(row.id, 'recovered')
+    end
+    if #pending > 0 then
+        print(('[palm6_fightclub] boot reconcile settled %d interrupted payout(s)'):format(#pending))
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -501,6 +574,12 @@ AddEventHandler('onResourceStart', function(resource)
         openN = r and tonumber(r.n) or 0
     end)
     print(('[palm6_fightclub] ring open — %d match(es) in progress'):format(openN))
+    -- Recover any payout interrupted by the last restart, once oxmysql +
+    -- palm6_dbmigrate (0054 columns) are up. Non-time-critical, so wait it out.
+    CreateThread(function()
+        Wait(8000)
+        reconcileUnsettled()
+    end)
 end)
 
 ---Open-match / queue counts for devtest and future consumers.

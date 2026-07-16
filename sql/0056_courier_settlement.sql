@@ -1,0 +1,43 @@
+-- ============================================================================
+-- 0056_courier_settlement.sql — recoverable payout/refund settlement for
+-- palm6_courier.
+--
+-- palm6_courier moves bank money in four terminal transitions, each a guarded
+-- UPDATE that flips `status` and is then followed by a separate bank credit:
+--   :complete           status='taken'  -> 'complete'  then PAY the courier (bounty)
+--   :cancel             status='open'   -> 'cancelled' then REFUND the poster (escrow)
+--   lifetime sweep      status='open'   -> 'expired'   then REFUND the poster
+--   abandoned sweep     status='taken'  -> 'expired'   then REFUND the poster
+-- Before this migration, a server crash/restart in the window between the
+-- status flip and the credit left the posting in its terminal state but with
+-- the money never paid — stranded forever, no recovery on the next boot. This
+-- server restarts on every deploy, so that window is a real latent bug.
+--
+-- The `settled` flag makes settlement RECOVERABLE and IDEMPOTENT: it is CLAIMED
+-- (UPDATE ... SET settled=1 WHERE id=? AND status='<terminal>' AND settled=0
+-- returns 1) BEFORE the money moves, so a boot reconcile that re-drives a
+-- terminal posting with settled=0 can never double-pay — an already-credited
+-- posting has settled=1 and is skipped. A 'complete' row pays the courier only
+-- if courier_citizenid is set; 'cancelled'/'expired' refund the poster.
+--
+-- IDEMPOTENT (ADD COLUMN IF NOT EXISTS) — safe to re-run every boot, so it is
+-- also embedded in palm6_dbmigrate (which has no ledger). CI never touches the
+-- DB, so palm6_dbmigrate is the prod apply path. See
+-- resources/[custom]/palm6_courier/server/main.lua settlePosting/reconcileUnsettled.
+--
+-- DEFAULT 1 (NOT 0) is a first-boot money-safety requirement. This server
+-- restarts on every deploy, and prod already has terminal (complete/cancelled/
+-- expired) postings that were paid/refunded under the old code. The ADD COLUMN
+-- backfills every existing row with settled = the column default; DEFAULT 1
+-- marks all that payment history "already settled" so the boot reconcile
+-- (WHERE settled=0) SKIPS it. DEFAULT 0 would instead mark all of history
+-- unsettled and the first reconcile would RE-PAY the entire ledger — a
+-- catastrophic money printer. ADD COLUMN IF NOT EXISTS runs this backfill
+-- exactly once; later boots are a no-op and never clobber a genuine post-deploy
+-- crash row. Records that reach a terminal state AFTER this deploy are kept
+-- recoverable by main.lua explicitly setting settled=0 in each guarded terminal
+-- UPDATE (:complete, :cancel, lifetime sweep, abandoned sweep).
+-- ============================================================================
+
+ALTER TABLE `courier_postings`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1;

@@ -1,0 +1,34 @@
+-- ============================================================================
+-- 0059_lottery_settlement.sql — recoverable winner payout for palm6_lottery.
+--
+-- palm6_lottery resolves a draw by (1) an atomic guarded UPDATE flipping the
+-- draw to status='drawn' (recording pot/rake/winner_citizenid), then (2)
+-- crediting the winner via Bridge.CreditBankByCitizenId. Before this migration,
+-- a server crash/restart in the window between (1) and the credit left the draw
+-- 'drawn' with a recorded winner but the payout never landed — money stranded
+-- forever. The existing boot self-heal only reopened rows stuck in the transient
+-- 'drawing' state; it never re-drove an unpaid 'drawn' row. This server restarts
+-- on every deploy, so that window is a real latent bug.
+--
+-- The `paid` flag makes the winner payout RECOVERABLE and IDEMPOTENT:
+--   palm6_lottery_draws.paid — the winner's payout was credited for this draw.
+-- The flag is CLAIMED (UPDATE ... WHERE status='drawn' AND paid=0 returns 1)
+-- BEFORE the money moves, so a boot reconcile that re-drives a draw with
+-- status='drawn' AND paid=0 can never double-pay: an already-credited draw has
+-- paid=1 and is skipped. The ALTER is IF NOT EXISTS — safe to re-run every boot
+-- (palm6_dbmigrate has no ledger), and palm6_lottery's own ensureSchema() ALTERs
+-- the same column at boot so the unreachable prod DB gets it regardless.
+-- See resources/[custom]/palm6_lottery/server/main.lua settleDraw.
+--
+-- DEFAULT 1 (first-boot safety): this ADD COLUMN runs on an EXISTING table that
+-- already holds live prod 'drawn' rows paid under the old code. DEFAULT 1
+-- backfills every pre-existing row as already-settled so the FIRST boot reconcile
+-- (WHERE status='drawn' AND paid=0) skips all of payment history instead of
+-- re-paying it (a catastrophic money printer). IF NOT EXISTS runs the backfill
+-- exactly once; later boots are a no-op and never clobber a genuine post-deploy
+-- crash row. runDraw resets paid=0 at the drawing->drawn finalize so draws that
+-- resolve AFTER this deploy stay recoverable until settled.
+-- ============================================================================
+
+ALTER TABLE `palm6_lottery_draws`
+    ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1;

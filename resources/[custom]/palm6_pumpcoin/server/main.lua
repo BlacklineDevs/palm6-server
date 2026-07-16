@@ -154,6 +154,80 @@ local function shillDiscount()
 end
 
 -- ---------------------------------------------------------------------------
+-- Delist settlement (recoverable) — claim-before-credit per holder.
+--
+-- Pays each still-unsettled holder of a delisted coin their curve-reserve
+-- share, claiming holdings.settled 0 -> 1 BEFORE the bank credit so a boot
+-- reconcile can re-drive a crash-interrupted delist without ever paying a
+-- holder twice. `pool`/`supply` are the delist-time snapshot (stored on the
+-- coin row) so shares are identical on replay. Returns holders credited.
+-- ---------------------------------------------------------------------------
+local function settleDelistHolders(coinId, ticker, pool, supply, finalPrice)
+    if not supply or supply <= 0 then return 0 end
+    local holders = {}
+    pcall(function()
+        holders = MySQL.query.await(
+            'SELECT citizenid, units FROM palm6_pumpcoin_holdings WHERE coin_id = ? AND units > 0 AND settled = 0',
+            { coinId }) or {}
+    end)
+    local n = 0
+    for _, h in ipairs(holders) do
+        local claimed = false
+        pcall(function()
+            claimed = MySQL.update.await(
+                'UPDATE palm6_pumpcoin_holdings SET settled = 1 WHERE coin_id = ? AND citizenid = ? AND settled = 0',
+                { coinId, h.citizenid }) == 1
+        end)
+        if claimed then
+            n = n + 1
+            local share = math.floor(pool * (h.units / supply) * (1 - Config.TradeFeePct))
+            if share > 0 then
+                Bridge.CreditBankByCitizenId(h.citizenid, share, 'pumpcoin-delist-' .. ticker)
+            end
+            pcall(function()
+                MySQL.insert.await(
+                    'INSERT INTO palm6_pumpcoin_trades (coin_id, citizenid, side, units, unit_price, total) VALUES (?, ?, ?, ?, ?, ?)',
+                    { coinId, h.citizenid, 'delist', h.units, finalPrice, share })
+            end)
+            local s = Bridge.GetSourceByCitizenId(h.citizenid)
+            if s then
+                Bridge.Notify(s, 'Exchange',
+                    ('$%s hit end-of-life and was delisted. Your %d units settled for $%d.')
+                    :format(ticker, h.units, share), 'inform')
+            end
+        end
+    end
+    return n
+end
+
+-- Boot reconcile — finish paying any delist interrupted by the last restart.
+-- Delisted coins now keep their holdings (settled flag) + the pool/supply
+-- basis, so we re-settle only the still-unpaid holders idempotently.
+local function reconcileDelists()
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await([[
+            SELECT c.id AS id, c.ticker AS ticker, c.delist_pool AS delist_pool, c.delist_supply AS delist_supply
+              FROM palm6_pumpcoin_coins c
+             WHERE c.status = 'delisted' AND c.delist_pool IS NOT NULL AND c.delist_supply IS NOT NULL
+               AND EXISTS (SELECT 1 FROM palm6_pumpcoin_holdings h
+                            WHERE h.coin_id = c.id AND h.units > 0 AND h.settled = 0)
+        ]]) or {}
+    end)
+    local total = 0
+    for _, c in ipairs(rows) do
+        local supply = tonumber(c.delist_supply) or 0
+        local pool = tonumber(c.delist_pool) or 0
+        if supply > 0 then
+            total = total + settleDelistHolders(c.id, c.ticker, pool, supply, round2(pool / supply))
+        end
+    end
+    if total > 0 then
+        print(('[palm6_pumpcoin] boot reconcile settled %d interrupted delist holder(s)'):format(total))
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Boot: load live+rugged coins, sanity-check the premine economics
 -- ---------------------------------------------------------------------------
 AddEventHandler('onResourceStart', function(resource)
@@ -220,6 +294,13 @@ AddEventHandler('onResourceStart', function(resource)
                 2 * Config.TradeFeePct / (1 + Config.TradeFeePct) * 100,
                 shillDiscount() * 100))
     end
+
+    -- Finish any delist payout the last restart interrupted, once oxmysql +
+    -- palm6_dbmigrate (0063 settled/delist_pool/delist_supply columns) are up.
+    CreateThread(function()
+        Wait(8000)
+        reconcileDelists()
+    end)
 end)
 
 -- ---------------------------------------------------------------------------
@@ -887,51 +968,32 @@ local function delistCoin(coinId)
         local pool = supply > 0 and curveReserve(coin, supply) or 0
         local finalPrice = round2(supply > 0 and (pool / supply) or 0)
 
-        local holders = {}
-        pcall(function()
-            holders = MySQL.query.await(
-                'SELECT citizenid, units FROM palm6_pumpcoin_holdings WHERE coin_id = ? AND units > 0',
-                { coinId }) or {}
-        end)
-
-        -- Persist the delist BEFORE paying anyone. Paying first and
-        -- swallowing a failed status write would leave the coin 'live' with
-        -- its holdings intact in the DB, so the next resource restart would
-        -- settle every holder a second time (double-payout printer on a DB
-        -- hiccup). If this write fails, abort — the coin stays on the board
-        -- and the next sweep retries the whole delist.
+        -- Persist the delist BEFORE paying anyone, but KEEP the holdings rows
+        -- (each carries a `settled` flag) and SNAPSHOT the share basis
+        -- (delist_pool / delist_supply) onto the coin. This is what makes the
+        -- payout recoverable: a crash mid-payout leaves the coin 'delisted'
+        -- with unsettled holders, which the boot reconcile finishes using the
+        -- exact same pool/supply — and each holder is claimed (settled 0 -> 1)
+        -- before its credit, so no one is ever paid twice (the old design
+        -- deleted holdings first to avoid a double-pay, but that turned a crash
+        -- into a permanent strand). Guarded on status so a re-delist can't
+        -- overwrite the basis. If this write fails, abort — the coin stays on
+        -- the board and the next sweep retries the whole delist.
         local persisted = pcall(function()
             MySQL.update.await(
-                "UPDATE palm6_pumpcoin_coins SET status = 'delisted', supply_sold = 0, delisted_at = NOW() WHERE id = ?",
-                { coinId })
-            MySQL.update.await('DELETE FROM palm6_pumpcoin_holdings WHERE coin_id = ?', { coinId })
+                "UPDATE palm6_pumpcoin_coins SET status = 'delisted', delisted_at = NOW(), delist_pool = ?, delist_supply = ? WHERE id = ? AND status <> 'delisted'",
+                { pool, supply, coinId })
         end)
         if not persisted then
             print(('[palm6_pumpcoin] delist of $%s failed to persist — retrying next sweep'):format(coin.ticker))
             return
         end
 
-        for _, h in ipairs(holders) do
-            local share = math.floor(pool * (h.units / supply) * (1 - Config.TradeFeePct))
-            if share > 0 then
-                Bridge.CreditBankByCitizenId(h.citizenid, share, 'pumpcoin-delist-' .. coin.ticker)
-            end
-            pcall(function()
-                MySQL.insert.await(
-                    'INSERT INTO palm6_pumpcoin_trades (coin_id, citizenid, side, units, unit_price, total) VALUES (?, ?, ?, ?, ?, ?)',
-                    { coinId, h.citizenid, 'delist', h.units, finalPrice, share })
-            end)
-            local s = Bridge.GetSourceByCitizenId(h.citizenid)
-            if s then
-                Bridge.Notify(s, 'Exchange',
-                    ('$%s hit end-of-life and was delisted. Your %d units settled for $%d.')
-                    :format(coin.ticker, h.units, share), 'inform')
-            end
-        end
+        local settled = settleDelistHolders(coinId, coin.ticker, pool, supply, finalPrice)
 
         Coins[coinId] = nil
         Shills[coinId] = nil
-        print(('[palm6_pumpcoin] delisted $%s — settled %d holder(s)'):format(coin.ticker, #holders))
+        print(('[palm6_pumpcoin] delisted $%s — settled %d holder(s)'):format(coin.ticker, settled))
     end)
 end
 

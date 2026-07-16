@@ -1,0 +1,41 @@
+-- ============================================================================
+-- 0061_season_settlement.sql — recoverable prize payout for palm6_season.
+--
+-- palm6_season builds end-of-season prizes as claimable rows in
+-- palm6_season_rewards (one per top finish, keyed to a citizenid). A player
+-- banks them with /seasonclaim, which (1) atomically flips the row claimed=1,
+-- then (2) credits the bank. Before this migration a hard crash in the window
+-- between the claimed=1 commit and the bank credit stranded that prize forever
+-- (claimed=1 hid it from the claimed=0 filter, yet the money never landed).
+-- This server restarts on every deploy, so that window is a real latent bug.
+--
+-- The new `paid` flag makes the credit RECOVERABLE and IDEMPOTENT:
+--   palm6_season_rewards.paid — this prize's bank credit actually landed.
+-- The flag is CLAIMED (UPDATE ... WHERE paid=0 returns 1) BEFORE the money
+-- moves, so a boot reconcile that re-drives a reward with claimed=1 AND paid=0
+-- can never double-pay: an already-credited prize has paid=1 and is skipped.
+-- A crash in the tiny window between the claim and the credit costs that one
+-- payout (a rare shortfall, never a mint) — the same house-approved bias
+-- palm6_fightclub's settle and /fcbet's consume-before-grant take.
+--
+-- Fix (A) — cmdSeasonClose reorder (no schema change) — moves ALL archive +
+-- reward INSERTs BEFORE the active=0 flip so a crash mid-close leaves the
+-- season active=1 and re-runnable; the reward rows' existing
+-- UNIQUE(season_id,ladder,rank_pos) makes the INSERT IGNORE re-run dup-safe.
+--
+-- The ALTER is IF NOT EXISTS — safe to re-run every boot (palm6_dbmigrate has
+-- no ledger). See resources/[custom]/palm6_season/server/main.lua settleReward.
+--
+-- DEFAULT 1 (first-boot safety): every reward row that ALREADY EXISTS the moment
+-- this column is added was minted+claimed under the old code and its money has
+-- long since landed. Backfilling those rows paid=1 marks them "already settled"
+-- so the boot reconcile (WHERE claimed=1 AND paid=0) SKIPS them — without this,
+-- a DEFAULT 0 would flag all of payment history unsettled and the first reconcile
+-- would RE-PAY every historical prize (a mass-repay money printer). ADD COLUMN
+-- IF NOT EXISTS runs this backfill exactly once; later boots are a no-op. New
+-- prize rows are minted with paid=0 explicitly (cmdSeasonClose INSERT) so they
+-- override this DEFAULT and stay recoverable until settled.
+-- ============================================================================
+
+ALTER TABLE `palm6_season_rewards`
+    ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1;

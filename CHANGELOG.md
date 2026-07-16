@@ -9,6 +9,50 @@ Format: newest first. Dates are EDT.
 
 ---
 
+## 2026-07-16 - Payout recoverability: no money lost to a restart
+
+The server restarts on every deploy, so a payout that was mid-flight when the
+server went down could strand money forever. This pass makes every bank-money
+payout **crash-recoverable**: if the server dies partway through paying someone,
+the payout is finished automatically on the next boot — and, critically, it can
+**never pay anyone twice** (each payout is claimed before the money moves, so a
+replay skips anything already paid). A follow-up to the 2026-07-16 restart/
+persistence integrity audit, extended into a full sweep of every payout resolver.
+
+**Tracking (internal):**
+- 💰 **13 payout resolvers made recoverable** with the same claim-before-credit +
+  boot-reconcile idiom: `palm6_fightclub` (bets + purse), `palm6_flashdrop`
+  (consignment sale), `palm6_pumpcoin` (coin delist), `palm6_bounty` (capture +
+  cancel + TTL expiry escrow), `palm6_courier` (delivery payout + all refund
+  paths), `palm6_insurance` (claim payout), `palm6_ransom` (kidnapper payout),
+  `palm6_lottery` (winner payout), `palm6_clout` (brand-deal cashout, + the
+  missing revert-on-failure), `palm6_season` (prize claim + close reorder).
+  Each terminal payout now claims an idempotency flag **before** the credit and
+  a delayed `onResourceStart` reconcile re-drives anything a crash interrupted.
+- 🛡️ **First-boot-safe** — every new flag column is added `DEFAULT 1` so existing
+  (already-paid) history is backfilled as settled and the reconcile can never
+  re-pay the whole payment history on the first restart after deploy; the flag is
+  reset to 0 only when a record newly reaches its payout state.
+- 🧱 **`palm6_pumpcoin` delist** no longer deletes holdings before paying — it
+  keeps them behind a per-holder settled flag + a pool/supply snapshot, so an
+  interrupted delist finishes on boot instead of stranding holders.
+- 🗄️ **Migration integrity** — registered the base drugs (`0039`) and gang
+  (`0041`) table creates in `palm6_dbmigrate`, which the later `0043`/`0049`
+  statements depend on; closes a rebuild-from-migrate gap. New migrations
+  `0054`-`0063` (all idempotent `ADD COLUMN IF NOT EXISTS`).
+- ✅ Verified: all 13 files parse clean; three adversarial review passes
+  (find → implement → first-boot harden), each checking specifically for
+  newly-introduced double-pays. Deliberately **not** reconciled: item-delivery
+  payouts (`smuggling`/`numbers`) where an ox_inventory autosave replay could
+  double-give; and synchronous online-credit paths with no real crash window.
+
+**📣 Public:** Under-the-hood reliability pass — if the server ever restarts
+right as you're getting paid (a fight-club purse, a consignment sale, a bounty,
+an insurance claim, a lottery win, a season prize), the payout now always
+completes and you'll never lose what you earned to a restart.
+
+---
+
 ## 2026-07-15 - Economy coherence pass: crime unlocked, gangs unified, seasons pay out
 
 A big pass over the whole economy — turning on content that was built but

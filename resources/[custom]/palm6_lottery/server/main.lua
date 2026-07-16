@@ -66,12 +66,25 @@ CREATE TABLE IF NOT EXISTS `palm6_lottery_draws` (
     winner_citizenid VARCHAR(64) NULL DEFAULT NULL,
     ticket_count INT UNSIGNED NOT NULL DEFAULT 0,
     status ENUM('open','drawing','drawn') NOT NULL DEFAULT 'open',
+    paid TINYINT NOT NULL DEFAULT 0,
     draw_at TIMESTAMP NULL DEFAULT NULL,
     opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     drawn_at TIMESTAMP NULL DEFAULT NULL,
     INDEX idx_palm6_lottery_draws_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ]],
+        -- Idempotent self-heal for an existing draws table created before the
+        -- recoverable-payout rework: add the `paid` claim-before-credit flag so
+        -- the boot reconcile's `WHERE status='drawn' AND paid=0` query is valid
+        -- even on the unreachable prod DB (sql/0059 may never apply there). No-op
+        -- once the column exists. Runs BEFORE the reconcile below in this thread.
+        -- DEFAULT 1 (first-boot safety): on an EXISTING table full of live 'drawn'
+        -- rows already paid under the old code, this backfills them as settled so
+        -- the reconcile skips all of payment history on the first boot instead of
+        -- re-paying it. IF NOT EXISTS runs the backfill exactly once. runDraw's
+        -- finalize resets paid=0 for draws that resolve after this deploy. (The
+        -- fresh CREATE TABLE above keeps DEFAULT 0 — no pre-existing rows there.)
+        [[ALTER TABLE `palm6_lottery_draws` ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1;]],
         [[
 CREATE TABLE IF NOT EXISTS `palm6_lottery_tickets` (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -282,6 +295,67 @@ local function cmdStatus(src)
 end
 
 -- ---------------------------------------------------------------------------
+-- Recoverable winner payout (claim-before-credit). Callable from BOTH the live
+-- draw path AND the boot reconcile, so a crash between the 'drawn' finalize and
+-- the credit is re-drivable with NO double-pay.
+--
+-- The payout is recomputed deterministically from the FINALIZED draw row itself
+-- (pot - rake were written under the status lock at finalize), so a replay pays
+-- the exact same amount. The `paid` flag is CLAIMED (0->1) BEFORE the money
+-- moves: only the caller that flips it credits, so exactly one settlement run —
+-- live or boot-recovery — ever pays a given draw. Bias (matching /lottery buy's
+-- charge-before-record): a crash in the tiny window between claiming paid=1 and
+-- the credit costs that one payout — a rare shortfall staff can see via the
+-- '[CREDIT FAILED - settle manually]' log, never a mint.
+--
+-- Returns (claimed, credited): claimed=true iff WE flipped paid 0->1 this run;
+-- credited=Bridge's credit return (false => log a manual-settle fallback).
+-- ---------------------------------------------------------------------------
+local function settleDraw(drawId, triggeredBy)
+    local row
+    pcall(function()
+        row = MySQL.single.await(
+            "SELECT pot, rake, winner_citizenid FROM palm6_lottery_draws WHERE id = ? AND status = 'drawn' AND winner_citizenid IS NOT NULL",
+            { drawId })
+    end)
+    -- Not a drawn+winner row (or fetch failed): nothing to settle. A transient
+    -- DB failure here is retried by the boot reconcile on the next restart.
+    if not row or not row.winner_citizenid then return false, false end
+
+    local winnerCid = row.winner_citizenid
+    local payout = math.max(0, (tonumber(row.pot) or 0) - (tonumber(row.rake) or 0))
+
+    -- CLAIM BEFORE CREDIT: flip paid 0->1 atomically. Only the run that wins this
+    -- claim credits; a replay of an already-paid draw sees paid=1 and skips.
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE palm6_lottery_draws SET paid = 1 WHERE id = ? AND status = 'drawn' AND paid = 0",
+            { drawId }) == 1
+    end)
+    if not claimed then return false, false end
+
+    -- Pay the winner (offline-safe). The rake was never credited - that is the sink.
+    local paid = Bridge.CreditBankByCitizenId(winnerCid, payout, 'lottery-winnings')
+    local winnerName = Bridge.GetCitizenName(winnerCid) or winnerCid
+    local wSrc = Bridge.GetSourceByCitizenId(winnerCid)
+    if wSrc then
+        Bridge.Notify(wSrc, 'Lottery',
+            ('You won lottery draw #%d - $%d hit your bank!'):format(drawId, payout), 'success')
+    end
+    if not paid then
+        -- Claim-before-credit bias: the flag is already set, so this draw won't
+        -- auto-retry. Surface it for a manual settle (preserves the prior log).
+        print(('[palm6_lottery] draw #%d winner %s (%s) payout $%d [CREDIT FAILED - settle manually]')
+            :format(drawId, winnerName, winnerCid, payout))
+    end
+    dbg(('[%s] draw #%d settled: winner %s (%s) payout $%d%s'):format(
+        tostring(triggeredBy), drawId, winnerName, winnerCid, payout,
+        paid and '' or ' [CREDIT FAILED - settle manually]'))
+    return true, paid
+end
+
+-- ---------------------------------------------------------------------------
 -- The draw itself - server-side only. Returns ok, message.
 -- ---------------------------------------------------------------------------
 local function runDraw(triggeredBy)
@@ -339,10 +413,15 @@ local function runDraw(triggeredBy)
         -- FINALIZE BEFORE PAYING. Record the result under the status lock so a
         -- crash can never re-draw or double-pay. A failed credit after this is
         -- a recorded-but-unpaid draw staff can see and settle by hand.
+        -- paid = 0 here (first-boot safety): this is the point a draw NEWLY enters
+        -- the recoverable 'drawn' state, so reset the backfilled DEFAULT 1 to 0 so
+        -- settleDraw/boot reconcile can drive its payout. The WHERE status='drawing'
+        -- guard means only a genuine new transition resets it; pre-existing 'drawn'
+        -- rows are never re-flipped and keep their backfilled paid=1.
         local finalized = false
         pcall(function()
             finalized = MySQL.update.await(
-                "UPDATE palm6_lottery_draws SET status = 'drawn', pot = ?, rake = ?, winner_citizenid = ?, ticket_count = ?, drawn_at = NOW() WHERE id = ? AND status = 'drawing'",
+                "UPDATE palm6_lottery_draws SET status = 'drawn', pot = ?, rake = ?, winner_citizenid = ?, ticket_count = ?, paid = 0, drawn_at = NOW() WHERE id = ? AND status = 'drawing'",
                 { pot, rake, winnerCid, ticketCount, draw.id }) == 1
         end)
         if not finalized then
@@ -350,19 +429,16 @@ local function runDraw(triggeredBy)
             return
         end
 
-        -- Pay the winner (offline-safe). The rake is simply never credited
-        -- back - that is the sink.
-        local paid = Bridge.CreditBankByCitizenId(winnerCid, payout, 'lottery-winnings')
+        -- Pay the winner via the recoverable, claim-before-credit settle path.
+        -- The draw is now 'drawn' with paid=0, so settleDraw claims paid=1 then
+        -- credits; a crash before this (or before the credit lands) is re-driven
+        -- idempotently by the boot reconcile with no double-pay. settleDraw does
+        -- the winner notification, so we don't repeat it here.
+        local _claimed, paid = settleDraw(draw.id, triggeredBy)
         local winnerName = Bridge.GetCitizenName(winnerCid) or winnerCid
 
         -- Open the next draw so the game continues.
         openNewDraw()
-
-        local wSrc = Bridge.GetSourceByCitizenId(winnerCid)
-        if wSrc then
-            Bridge.Notify(wSrc, 'Lottery',
-                ('You won lottery draw #%d - $%d hit your bank!'):format(draw.id, payout), 'success')
-        end
 
         result = ('draw #%d DRAWN: pot $%d, rake $%d, %d ticket(s), winner %s (%s)%s'):format(
             draw.id, pot, rake, ticketCount, winnerName, winnerCid,
@@ -439,6 +515,28 @@ AddEventHandler('onResourceStart', function(resource)
             MySQL.update.await(
                 "UPDATE palm6_lottery_draws SET status = 'open' WHERE status = 'drawing'")
         end)
+
+        -- Recover a draw that finalized to 'drawn' with a recorded winner but
+        -- whose payout never landed (process died between the drawing->drawn
+        -- finalize and the winner credit). Idempotent: settleDraw claims paid=1
+        -- before crediting, so an already-paid draw (paid=1) is skipped and this
+        -- only pays what a crash left owing. The `paid` column is guaranteed
+        -- present by ensureSchema's ALTER above (and sql/0059 via palm6_dbmigrate);
+        -- every query is pcall-guarded, so a missing column recovers nothing
+        -- rather than crashing. This complements the 'drawing'->'open' self-heal
+        -- above, which only handled draws that never reached 'drawn'.
+        local unpaid = {}
+        pcall(function()
+            unpaid = MySQL.query.await(
+                "SELECT id FROM palm6_lottery_draws WHERE status = 'drawn' AND paid = 0 AND winner_citizenid IS NOT NULL") or {}
+        end)
+        for _, row in ipairs(unpaid) do
+            settleDraw(row.id, 'recovered')
+        end
+        if #unpaid > 0 then
+            print(('[palm6_lottery] boot reconcile settled %d interrupted payout(s)'):format(#unpaid))
+        end
+
         ensureOpenDraw()
 
         local draw = currentOpenDraw()

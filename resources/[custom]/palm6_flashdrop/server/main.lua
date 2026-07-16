@@ -693,6 +693,67 @@ RegisterNetEvent('palm6_flashdrop:consign:browse', function()
     TriggerClientEvent('palm6_flashdrop:menuData', src, 'browse', out)
 end)
 
+-- Settle the SELLER side of a consignment sale idempotently. Called from the
+-- live buy path (once the buyer has both paid and received the pair) and from
+-- the boot reconcile. Claim-before-credit: the seller is credited only if we
+-- win the settled=0 -> 1 claim, so a replay after a crash can never double-pay.
+-- It matches ONLY listings with buyer_paid=1, so it can never mint against a
+-- sale whose buyer was never charged. The buyer's item delivery is handled
+-- live and is deliberately NOT reconciled here (see sql/0062).
+local function settleConsignSale(listingId, buyerName)
+    local l
+    pcall(function()
+        l = MySQL.single.await(
+            "SELECT id, uid, seller_citizenid, buyer_citizenid, price FROM palm6_flashdrop_listings WHERE id = ? AND status = 'sold' AND buyer_paid = 1 AND settled = 0",
+            { listingId })
+    end)
+    if not l then return end
+
+    local claimed = false
+    pcall(function()
+        claimed = MySQL.update.await(
+            "UPDATE palm6_flashdrop_listings SET settled = 1 WHERE id = ? AND settled = 0", { listingId }) == 1
+    end)
+    if not claimed then return end
+
+    -- Seller payout (bank; survives them being offline). Fee is the sink.
+    local fee = math.floor(l.price * Config.Consignment.FeePct)
+    Bridge.CreditBankByCitizenId(l.seller_citizenid, l.price - fee, 'flashdrop-consign-sale')
+    pcall(function()
+        MySQL.update.await('UPDATE palm6_flashdrop_serials SET owner_citizenid = ? WHERE uid = ?', { l.buyer_citizenid, l.uid })
+    end)
+    provenance(l.uid, 'consign_sale', l.buyer_citizenid, buyerName, l.seller_citizenid, l.price, nil)
+end
+
+-- Boot reconcile — re-drive consignment sales interrupted by the last restart.
+-- buyer_paid=1 + settled=0: buyer was charged, seller never credited -> settle
+-- (credit seller idempotently). buyer_paid=0 while 'sold': the listing was
+-- reserved but the buyer was never charged (crash between the claim and the
+-- charge) -> release it back to 'active' so the pair can be sold again.
+local function reconcileConsignSales()
+    local paidUnsettled, reserved = {}, {}
+    pcall(function()
+        paidUnsettled = MySQL.query.await(
+            "SELECT id FROM palm6_flashdrop_listings WHERE status = 'sold' AND buyer_paid = 1 AND settled = 0") or {}
+    end)
+    for _, r in ipairs(paidUnsettled) do settleConsignSale(r.id, nil) end
+    pcall(function()
+        reserved = MySQL.query.await(
+            "SELECT id FROM palm6_flashdrop_listings WHERE status = 'sold' AND buyer_paid = 0") or {}
+    end)
+    for _, r in ipairs(reserved) do
+        pcall(function()
+            MySQL.update.await(
+                "UPDATE palm6_flashdrop_listings SET status = 'active', buyer_citizenid = NULL, resolved_at = NULL WHERE id = ? AND status = 'sold' AND buyer_paid = 0",
+                { r.id })
+        end)
+    end
+    if #paidUnsettled > 0 or #reserved > 0 then
+        print(('[palm6_flashdrop] boot reconcile: settled %d sale(s), released %d unpaid reservation(s)')
+            :format(#paidUnsettled, #reserved))
+    end
+end
+
 RegisterNetEvent('palm6_flashdrop:consign:buy', function(listingId)
     local src = source
     if not rl(src, 'action') then return end
@@ -720,9 +781,12 @@ RegisterNetEvent('palm6_flashdrop:consign:buy', function(listingId)
     local cat = getCatalog(row.catalog_code)
 
     -- Atomically claim the listing FIRST so two buyers can never both win.
+    -- buyer_paid=0 + settled=0 mark THIS new sale as needing settlement (the
+    -- columns default to 1 to protect pre-deploy history); buyer_paid flips to 1
+    -- only once the buyer's cash is actually taken, below.
     local okClaim, affected = pcall(function()
         return MySQL.update.await(
-            "UPDATE palm6_flashdrop_listings SET status = 'sold', buyer_citizenid = ?, resolved_at = NOW() WHERE id = ? AND status = 'active'",
+            "UPDATE palm6_flashdrop_listings SET status = 'sold', buyer_citizenid = ?, resolved_at = NOW(), buyer_paid = 0, settled = 0 WHERE id = ? AND status = 'active'",
             { cid, listingId })
     end)
     if not okClaim or (tonumber(affected) or 0) == 0 then
@@ -744,22 +808,30 @@ RegisterNetEvent('palm6_flashdrop:consign:buy', function(listingId)
         return
     end
 
+    -- Buyer's cash is now taken — mark the sale financially committed BEFORE the
+    -- pair hand-off / seller credit. This is the flag the boot reconcile keys on
+    -- to decide a crash is a recoverable seller-strand (buyer_paid=1) rather than
+    -- an un-charged reservation to release (buyer_paid=0), so the seller credit
+    -- can never mint against a buyer who was never charged.
+    pcall(function()
+        MySQL.update.await(
+            "UPDATE palm6_flashdrop_listings SET buyer_paid = 1 WHERE id = ? AND status = 'sold'", { listingId })
+    end)
+
     local meta = pairMetadata(cat or { label = row.catalog_code, cap = 0 }, row.serial, row.uid)
     if not Bridge.GivePair(src, Config.Item.name, meta) then
         Bridge.AddCash(src, l.price, 'flashdrop-consign-refund')
         revert()
+        pcall(function()
+            MySQL.update.await("UPDATE palm6_flashdrop_listings SET buyer_paid = 0 WHERE id = ?", { listingId })
+        end)
         Bridge.Notify(src, 'SoleWorth', 'Your hands are full — refunded.', 'error')
         return
     end
 
-    -- Seller payout (bank; survives them being offline). Fee is the sink.
-    local fee = math.floor(l.price * Config.Consignment.FeePct)
-    Bridge.CreditBankByCitizenId(l.seller_citizenid, l.price - fee, 'flashdrop-consign-sale')
-
-    pcall(function()
-        MySQL.update.await('UPDATE palm6_flashdrop_serials SET owner_citizenid = ? WHERE uid = ?', { cid, row.uid })
-    end)
-    provenance(row.uid, 'consign_sale', cid, Bridge.GetPlayerName(src), l.seller_citizenid, l.price, nil)
+    -- Seller payout + serial owner-flip, via the shared idempotent settler so a
+    -- crash here is re-driven identically on the next boot (claim-before-credit).
+    settleConsignSale(listingId, Bridge.GetPlayerName(src))
 
     Bridge.Notify(src, 'SoleWorth',
         ('%s [%s] — yours for $%d.'):format(cat and cat.label or row.catalog_code, row.serial, l.price), 'success')
@@ -1291,4 +1363,11 @@ AddEventHandler('onResourceStart', function(resource)
     if Config.Scheduler.Enabled then scheduleNextAuto() end
     print(('[palm6_flashdrop] ready — %d catalog entries, %d locations, scheduler %s')
         :format(#Config.Catalog, #Config.Locations, Config.Scheduler.Enabled and 'ON' or 'OFF'))
+
+    -- Recover consignment sales interrupted by the last restart, once oxmysql +
+    -- palm6_dbmigrate (0062 buyer_paid/settled columns) are up.
+    CreateThread(function()
+        Wait(8000)
+        reconcileConsignSales()
+    end)
 end)
