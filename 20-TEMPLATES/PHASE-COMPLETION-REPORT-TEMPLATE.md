@@ -4,6 +4,11 @@ Version: v0.9.0-rc.1 (Release Candidate)
 Status: Release Candidate template, ready for use by executors closing a phase.
 Owner: PALM6 Creative System governance.
 
+> Note: this is a verbatim copy of a system-package template. Its `RESTRUCTURING-PLANS/*`
+> references (MASTER-RESTRUCTURING-PLAN, CLAUDE-HANDOFF-INSTRUCTIONS, RISK-REGISTER,
+> TRANSITION-TO-STEADY-STATE-PROTOCOL, POST-MIGRATION-OWNERSHIP-MATRIX) live in the
+> **parent Palm6 restructuring handoff package**, not in this gtarp repo.
+
 ---
 
 ## Purpose

@@ -35,16 +35,23 @@ System as **Candidate (v0.9.0-rc.1)** for additive, reversible work only. Theref
 - An asset reaches **Approved** in gtarp **only** via an explicit gtarp Decision Log
   entry (`00-FOUNDATION/09-DECISION-LOG.md`), never by a status line in a copied doc.
 
-### Decision-Log numbering reconciliation (DEC-002 collision)
+### Decision-Log numbering reconciliation (DEC-001 & DEC-002 collisions)
 
-The system package reserves **DEC-002** for the *Creative System rc.1 → v1.0.0
-promotion* (a Phase 0 output). **gtarp's local `DEC-002` is already used** for the
-Phase 1 post-execution audit + open-blocker registration. These are two different
-things sharing an ID across two different logs.
+The system package's own Decision Log uses **DEC-001** for the *Dual Visual System*
+decision and reserves **DEC-002** for the *Creative System rc.1 → v1.0.0 promotion*
+(a Phase 0 output). **gtarp's local log already uses both IDs for other things:**
+`DEC-001` = the Phase 1 (Foundation) kickoff, `DEC-002` = the Phase 1 post-execution
+audit + open-blocker registration. Same IDs, different meanings, across two logs.
 
 **Resolution (logged in `DEC-003`):** gtarp's local Decision Log is authoritative for
 this repository. gtarp will **not** renumber its already-logged `DEC-001`/`DEC-002`.
-Where a copied system doc says "DEC-002 (promotion)", read it as *"the promotion
-entry in the system's own log."* If/when gtarp runs Phase 0, the local promotion will
-be logged under the **next free gtarp DEC id** (not `DEC-002`), and that id will be
-cited as the local promotion reference. Until then, the system in gtarp is Candidate.
+Reading guide for copied system docs:
+- Where a copied doc says **"DEC-001 (Dual Visual System, Approved)"**, read it as the
+  Dual Visual System entry in the *system's own* log. gtarp's local DEC-001 is the Phase 1
+  kickoff; the Dual Visual System is adopted here by reference via `DESIGN-BIBLE-v1.0.md`
+  and `05-DUAL-VISUAL-SYSTEM.md`, not as a standalone local DEC.
+- Where a copied doc says **"DEC-002 (promotion)"**, read it as the promotion entry in the
+  system's own log. If/when gtarp runs Phase 0, the local promotion is logged under the
+  **next free gtarp DEC id** — which is **DEC-004** (Proposed) — not `DEC-002`.
+
+Until Phase 0 is signed, the system in gtarp is Candidate (v0.9.0-rc.1).

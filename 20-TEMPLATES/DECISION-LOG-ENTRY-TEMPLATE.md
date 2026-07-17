@@ -84,4 +84,3 @@ The entry below shows a completed record. It matches the example already present
 - `05-DUAL-VISUAL-SYSTEM.md` (subject of DEC-001)
 - `07-QUALITY-STANDARDS.md` (Phase 0 Foundation Review criteria)
 - `08-DESIGN-REVIEW-CHECKLIST.md` (Phase 0 Foundation Review checklist)
-- `20-TEMPLATES/README.md` (index of templates in this folder)

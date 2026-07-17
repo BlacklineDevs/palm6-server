@@ -72,8 +72,8 @@ baselined 2026-07-03; production has NOT been baselined yet.
 
 ## When it runs
 
-- **Automatically** on every push to `main` that touches `resources/[custom]/**` or
-  `custom.cfg` (i.e. merges to main).
+- **Automatically** on every push to `main` that touches `resources/**` (any resource
+  group, not only `[custom]`) or `custom.cfg` (i.e. merges to main).
 - **Manually** via the **Run workflow** button (workflow_dispatch) in the
   **Actions** tab.
 

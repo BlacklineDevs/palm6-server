@@ -33,12 +33,14 @@ below and `14-OPERATIONS/README.md`).
   asset). `mystudio_props` flagged: license/ownership must be confirmed before promotion.
 - **2.5 Deprecations:** `docs/RESTRUCTURING/PHASE-2-DEPRECATIONS.md` — `prop_spawn`
   deprecated + neutralized (registry: Archived); nothing deleted (code is live).
-- **2.6 Brand:** `01-BRAND/` scaffold + guidelines placed. David supplied **6 Palm6
-  department emblems (System B)** during Phase 2 — now sorted into
-  `01-BRAND/logos/departments/`, cataloged, and registered (Candidate). **Still open:**
-  the System A core identity mark (a different asset class) is not yet supplied. Tracked
-  as CD-001 (downgraded High → Medium).
-- **2.7 Creative debt:** `14-OPERATIONS/CREATIVE-DEBT-TRACKING.md` — CD-001…CD-005.
+- **2.6 Brand:** `01-BRAND/` scaffold + guidelines placed. David supplied Palm6
+  **department emblems (System B)** during Phase 2 — an initial 6, then the full set of
+  **24 department crests + 2 Verano state seals** (follow-up brand commit) — now sorted
+  into `01-BRAND/logos/departments/` + `01-BRAND/logos/state/`, cataloged, and registered
+  (Candidate). The rejected private-business logo tier is NOT committed (CD-006). **Still
+  open:** the System A core identity mark (a different asset class) is not yet supplied.
+  Tracked as CD-001 (downgraded High → Medium).
+- **2.7 Creative debt:** `14-OPERATIONS/CREATIVE-DEBT-TRACKING.md` — CD-001…CD-006.
 - **2.8 Log + commit:** this entry; branch pushed with scoped commits.
 
 ## Decision Log numbering reconciliation (resolves the DEC-002 collision)
@@ -50,7 +52,9 @@ to the *system's own* log. If/when gtarp runs Phase 0, the local promotion is lo
 under the next free gtarp DEC id (not DEC-002). Recorded in `14-OPERATIONS/README.md`.
 
 ## Phase 2 Quality Gate status
-- ✅ Structure matches the Master Plan §2.2 target (all target folders present).
+- ✅ Structure matches the Master Plan §2.2 target (all target folders present except
+  `resources/[core]/`, which is intentionally absent — Palm6 overrides no framework files,
+  so FiveM never creates that group; documented in PHASE-2-INVENTORY-MAP.md).
 - ✅ At least one metadata RFC logged (RFC-001, Approved).
 - ✅ Assets registered with correct ladder status.
 - ✅ Builds/runs cleanly — additive/docs-only + one doc move; no `resources/`, `sql/`,

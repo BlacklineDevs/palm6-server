@@ -57,7 +57,13 @@ identity mark is missing, so the System-A legibility gate is unverifiable. Track
 **CD-001**. This is the single thing standing between "reviewed" and "fully clean."
 
 ## Task 0.3 — Decision Log / DEC-001
-DEC-001 (Dual Visual System, Approved) is present and correctly formatted. **PASS.**
+gtarp's DEC-001 ("Start Palm6 Creative System Restructuring — gtarp Phase 1 (Foundation)",
+Approved as the scoped process decision) is present and correctly formatted. **PASS.**
+Note: the plan's task 0.3 phrases DEC-001 as the *Dual Visual System* decision (that is
+its meaning in the system package's own log). In gtarp the Dual Visual System is adopted
+by reference via the Approved `DESIGN-BIBLE-v1.0.md` + `05-DUAL-VISUAL-SYSTEM.md` (and the
+illustrative example entry in `09-DECISION-LOG.md`), not as a standalone local DEC — same
+cross-log numbering divergence as the DEC-002 case (see `14-OPERATIONS/README.md`).
 
 ---
 

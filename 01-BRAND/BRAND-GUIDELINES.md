@@ -1,7 +1,7 @@
 # Palm6 Brand Guidelines
 
-**Version:** v0.1.0  
-**Status:** Approved (v1.0.0, via DEC-002; frozen in 15-VAULT/)
+**Version:** v0.9.0-rc.1 (Release Candidate)  
+**Status:** Candidate in gtarp — copied system reference. NOT Approved here (Phase 0 not run; the local promotion is DEC-004, still Proposed). Nothing is Approved without a gtarp Decision Log entry. See `../14-OPERATIONS/README.md`.
 
 ## Overview
 

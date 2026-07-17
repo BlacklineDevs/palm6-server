@@ -18,7 +18,9 @@ logged under the next free gtarp id: **DEC-004**.
 ## What the review found
 - **0.1 (docs vs Quality Standards):** all 11 Foundation documents pass, no unresolved
   fail. Promotion-ready as documentation.
-- **0.3 (DEC-001 present + formatted):** pass.
+- **0.3 (DEC-001 present + formatted):** pass. gtarp's DEC-001 is the Phase 1 (Foundation)
+  kickoff (Approved process decision); the Dual Visual System is adopted by reference via
+  DESIGN-BIBLE-v1.0 + 05-DUAL-VISUAL-SYSTEM.md, not a standalone local DEC.
 - **0.2 (design review + Dual Visual System):** ONE open item — the **System A core
   identity mark does not exist yet** (CD-001), so the "System A reads in one color at 32px"
   gate cannot be verified. System B assets (department crests, state seals) are acceptable

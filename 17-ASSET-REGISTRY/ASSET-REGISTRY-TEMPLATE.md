@@ -4,6 +4,8 @@ Version: v0.9.0-rc.1 (Release Candidate)
 Status: Candidate template in this repo. The Palm6 Creative System has NOT been promoted to v1.0.0 in gtarp (Phase 0 / the Creative System Approval Gate has not been run here), so nothing in gtarp is auto-Approved. An asset reaches Approved only via a gtarp Decision Log entry. See `14-OPERATIONS/README.md` for the repo-local status + Decision-Log-numbering note.
 Owner: Creative Lead
 
+> Note: this template's `RESTRUCTURING-PLANS/*` references (e.g. POST-MIGRATION-OWNERSHIP-MATRIX) live in the **parent Palm6 restructuring handoff package**, not in this gtarp repo. The populated repo registry is `ASSET-REGISTRY.md` (this folder).
+
 ---
 
 ## Purpose

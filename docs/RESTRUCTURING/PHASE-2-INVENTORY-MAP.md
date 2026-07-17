@@ -19,14 +19,14 @@ Phase 1/2 (`15-VAULT/`, `19-RFC/`, `17-ASSET-REGISTRY/`, `14-OPERATIONS/`, `20-T
 
 | Current item | Type | Destination | Action | Notes |
 |---|---|---|---|---|
-| `resources/` (`[custom]`, `[core]`, …) | code | `resources/` | **keep** | FiveM load path — must not move. Conforms. |
+| `resources/` (`[custom]`) | code | `resources/` | **keep** | FiveM load path — must not move. Conforms. `[core]/` (framework overrides) is a §2.2 target folder but is **intentionally absent** — Palm6 overrides no framework files, so FiveM never creates that resource group; add it only if/when an override is needed. |
 | `sql/` | migrations | `sql/` | **keep (append-only)** | Never reorder/rewrite; migrations are append-only during restructuring. |
 | `assets/ox_icons/` | media | `assets/` | **keep** | Conforms. Now registered in `17-ASSET-REGISTRY/`. |
 | `tools/` | scripts | `tools/` | **keep** | Conforms. |
 | `docs/` | docs | `docs/` | **keep** | Conforms. Phase 2 adds `docs/RESTRUCTURING/`. |
 | `custom.cfg`, `server.cfg.example` | server cfg | root | **keep** | FiveM/panel exec order depends on `custom.cfg` at root. Do not move. |
 | `.github/` (workflows) | CI | `.github/` | **keep** | GitHub REQUIRES workflows in `.github/workflows/`. Cannot move to `deploy/`. `deploy/` documents + points to them. |
-| `DEPLOY.md` | deploy doc | `deploy/DEPLOY.md` | **move (`git mv`)** | Doc-only move; consolidates deploy docs under `deploy/`. Root refs updated. |
+| `DEPLOY.md` | deploy doc | `deploy/README.md` | **move (`git mv`)** | Doc-only move; consolidates deploy docs under `deploy/`. Root refs updated. |
 | `CHANGELOG.md`, `README.md` | root docs | root | **keep** | Standard root docs. |
 | `00-FOUNDATION/`, `15-VAULT/`, `19-RFC/`, `MASTER-INDEX.md`, `00-START-HERE.md`, `HANDOFF-TO-CLAUDE.md` | governance | as-is | **keep** | Added in Phase 1. |
 | `01-BRAND/` | brand | `01-BRAND/` | **create** | New in Phase 2. Scaffold + guidelines; art pending (CD-001). |

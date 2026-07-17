@@ -26,5 +26,6 @@ Small, additive, reversible changes (e.g. copying approved docs, fixing typos) d
 
 ## Status
 
-Phase 1 scaffold. No active RFCs yet. The metadata-standards RFC is the first
-expected item in Phase 2 (Organization).
+Phase 2 complete. `RFC-001-resource-and-asset-metadata-standard.md` is filed here and
+**Approved** (adopted via DEC-003) — the resource/asset metadata standard. New RFCs
+continue from RFC-002.

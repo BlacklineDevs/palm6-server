@@ -32,6 +32,8 @@ Structure Guide, Design Bible. Status: Candidate (v0.9.0-rc.1) except
   open blockers requiring an owner ruling.
 - `DECISION-LOG-ENTRY-003.md` (DEC-003) — Phase 2 execution (structure, RFC-001,
   Asset Registry, deprecations, DEC-numbering reconciliation).
+- `DECISION-LOG-ENTRY-004.md` (DEC-004) — Phase 0 promotion (rc.1 → v1.0.0),
+  **Proposed**, awaiting David's signature.
 - `09-DECISION-LOG.md` now carries an at-a-glance **Decision Registry** table.
 
 ### `19-RFC/` — the RFC process home
@@ -46,12 +48,14 @@ Structure Guide, Design Bible. Status: Candidate (v0.9.0-rc.1) except
 
 ## Present now (Phase 2 — Organization)
 
-### `01-BRAND/` — brand assets (scaffold)
-- `README.md` + `BRAND-GUIDELINES.md`; `logos/` empty pending David's art (CD-001).
+### `01-BRAND/` — brand assets
+- `README.md`, `BRAND-GUIDELINES.md`, `BUSINESS-BRAND-BRIEF.md`; `logos/departments/`
+  (24 dept crests + README), `logos/state/` (2 Verano seals + README), all registered
+  Candidate. Outstanding: the System A core mark (CD-001).
 
 ### `14-OPERATIONS/` — day-to-day governance
 - `README.md` (repo-local status + DEC-numbering note), `ASSET-LIFECYCLE.md`,
-  `RFC-PROCESS.md`, `VERSION-CONTROL.md`, `CREATIVE-DEBT-TRACKING.md` (CD-001…CD-005).
+  `RFC-PROCESS.md`, `VERSION-CONTROL.md`, `CREATIVE-DEBT-TRACKING.md` (CD-001…CD-006).
 
 ### `17-ASSET-REGISTRY/` — the asset inventory
 - `README.md`, `ASSET-REGISTRY-TEMPLATE.md`, and the populated `ASSET-REGISTRY.md`.
@@ -63,7 +67,10 @@ Structure Guide, Design Bible. Status: Candidate (v0.9.0-rc.1) except
 - `README.md` (the deploy pipeline doc; CI stays in `.github/workflows/`).
 
 ### `docs/RESTRUCTURING/` — phase working docs
-- `PHASE-2-INVENTORY-MAP.md`, `PHASE-2-DEPRECATIONS.md`.
+- `PHASE-2-INVENTORY-MAP.md`, `PHASE-2-DEPRECATIONS.md`, `PHASE-0-FOUNDATION-REVIEW.md`.
+
+### `CONTRIBUTING.md` (root) — Creative System alignment quickstart
+- One-page "how to add anything correctly" guide (Phase 3 groundwork).
 
 ---
 
