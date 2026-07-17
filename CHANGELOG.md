@@ -9,6 +9,41 @@ Format: newest first. Dates are EDT.
 
 ---
 
+## 2026-07-16 - Insurance agent NPC + plan tiers
+
+Mors Mutual is now a person you talk to, not a slash command. Walk up to the
+agent at the Little Seoul office and shop for a plan like real insurance.
+
+**Tracking (internal):**
+- 🧑‍💼 **Agent NPC** at the Mors Mutual desk (ox_target eye / E-prompt fallback →
+  ox_lib menus): **Buy a policy**, **File a claim**, **My policies & claims**.
+- 🛡️ **Three plan tiers** — a policy remembers its tier and claims pay at that
+  tier's theft % and payout speed:
+  | Tier | Premium | Coverage | Deductible | Term | Payout | Theft |
+  |---|---|---|---|---|---|---|
+  | Basic | 3% | 40% | 15% | 48h | 15 min | 70% |
+  | Standard | 5% | 60% | 10% | 72h | 10 min | 100% |
+  | Premium | 8% | 85% | 5% | 120h | 3 min | 100% |
+  Standard = the old flat plan exactly, so any existing policy is unchanged.
+- 🔒 **Server-authoritative** — the menu only chooses plan/plate/kind; the server
+  recomputes the premium from the resolved tier and re-runs every guard, so a
+  modified client can't buy a richer plan than it pays for. New agent events are
+  DoS-budgeted in palm6_eventguard.
+- 🧾 Buy quotes all three tiers for the car you're sitting in; claims let you pick
+  which insured plate to claim (theft can't use the car you're in — it's gone).
+- ⚖️ Damage claims (repairable car kept) are capped so a payout never scales with
+  tier — Premium's bigger cap only pays out on a consumed car (theft/total-loss).
+- Commands still work: `/insure [plate] [basic|standard|premium]`, `/fileclaim`,
+  `/policy`. Migration `sql/0064` (policies.tier). Ultracode-verified (authority
+  clean); 5 review findings fixed.
+
+**📣 Public:** Car insurance got a real agent — visit Mors Mutual in Little Seoul,
+talk to the rep, and pick a plan: **Basic** (cheap, light cover), **Standard**
+(balanced), or **Premium** (top cover, low deductible, fast payouts). File
+damage or theft claims right there with them.
+
+---
+
 ## 2026-07-16 - Payout recoverability: no money lost to a restart
 
 The server restarts on every deploy, so a payout that was mid-flight when the
