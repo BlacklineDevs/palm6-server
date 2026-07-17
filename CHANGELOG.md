@@ -31,8 +31,10 @@ agent at the Little Seoul office and shop for a plan like real insurance.
   DoS-budgeted in palm6_eventguard.
 - 🧾 Buy quotes all three tiers for the car you're sitting in; claims let you pick
   which insured plate to claim (theft can't use the car you're in — it's gone).
-- ⚖️ Damage claims (repairable car kept) are capped so a payout never scales with
-  tier — Premium's bigger cap only pays out on a consumed car (theft/total-loss).
+- ⚖️ Insurance protects against LOSING the car: theft / total-loss pay the full
+  tier coverage. A repairable-damage claim (you keep the car) instead pays a
+  modest **repair subsidy**, so a real accident is covered but "ram your own car
+  and claim" is never profitable.
 - Commands still work: `/insure [plate] [basic|standard|premium]`, `/fileclaim`,
   `/policy`. Migration `sql/0064` (policies.tier). Ultracode-verified (authority
   clean); 5 review findings fixed.
