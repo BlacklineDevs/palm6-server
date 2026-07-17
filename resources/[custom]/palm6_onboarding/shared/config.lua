@@ -33,6 +33,7 @@ Config.Tour = {
     content = table.concat({
         'Bank & cash — check your phone/inventory for your balance; ATMs are marked on the map.',
         'Jobs — visit a job center or the relevant NPC to get started; `/rules` re-shows this text anytime.',
+        'Lost? Type `/help` for the full list of city commands — jobs, crews, EMS billing, bounties, the lottery, and more.',
         'Need help? Ping staff in Discord — an admin can `/tp` to you if something is stuck.',
         'Planning on going into law enforcement? The MDT (`/mdt`) is your case log, warrants, and BOLOs once on duty.',
     }, '\n'),

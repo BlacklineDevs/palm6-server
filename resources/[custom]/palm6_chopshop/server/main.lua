@@ -208,16 +208,29 @@ local function cmdSellStolen(src)
                 "UPDATE palm6_chopshop_stolen SET status = 'resolved', resolved_at = NOW() WHERE id = ? AND status = 'active'",
                 { stolenRow.id })
         end)
+    end
 
+    -- Open a forensic case on EVERY chop that has a real victim — a reported-stolen
+    -- car (stolenRow) OR an unreported owned car (ownRow, i.e. chop-before-report).
+    -- Evidence creation used to be nested under `if stolenRow`, so the common
+    -- chop-before-report path (owner hasn't run /reportstolen yet) destroyed the
+    -- victim's registration and paid clean money with ZERO paper trail — bypassing
+    -- the very consequence layer this resource exists to guarantee just by acting
+    -- fast. was_stolen already records which path it was; the case is opened either
+    -- way so the seller is always linked as a suspect.
+    if stolenRow or ownRow then
+        local victimCid = (stolenRow and stolenRow.owner_citizenid) or (ownRow and ownRow.citizenid)
         local evidenceCaseId
         if Bridge.ResourceStarted('palm6_evidence') then
             pcall(function()
                 local incidentKey = ('chopshop-%s-%d'):format(plate, math.floor(now() / 300))
-                evidenceCaseId = exports.palm6_evidence:EnsureCase(incidentKey, 'Stolen vehicle sold to chop shop', 'palm6_chopshop')
+                local caseTitle = stolenRow and 'Stolen vehicle sold to chop shop'
+                    or 'Vehicle sold to chop shop (unreported at time of chop)'
+                evidenceCaseId = exports.palm6_evidence:EnsureCase(incidentKey, caseTitle, 'palm6_chopshop')
                 if evidenceCaseId then
                     exports.palm6_evidence:AppendEntry(evidenceCaseId, 'chopshop_sale', {
                         plate = plate, vehicle_class = class, payout = payout,
-                        owner_citizenid = stolenRow.owner_citizenid,
+                        owner_citizenid = victimCid, was_stolen = stolenRow and true or false,
                     }, 'palm6_chopshop')
                     exports.palm6_evidence:LinkSuspect(evidenceCaseId, cid, nil)
                 end

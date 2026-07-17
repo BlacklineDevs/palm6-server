@@ -164,7 +164,21 @@ local function cmdBuy(src, nRaw)
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
 
-    local n = math.floor(tonumber(nRaw) or 1)
+    -- Sanitize the client-supplied count to a FINITE positive integer BEFORE any
+    -- guard or charge. A forged client can send an IEEE NaN (0/0): tonumber(NaN) is
+    -- NaN (truthy, so `or 1` never fires) and math.floor(NaN) is NaN — every
+    -- subsequent `<`/`>` guard is then false (n<1, n>MaxPerBuy, held+n>cap all
+    -- pass), and NaN flows into cost = n*price → Bridge.ChargeBank(NaN) → the
+    -- affordability check `bank < NaN` is false → bank is set to NaN, corrupting the
+    -- balance and defeating every future affordability check. The `n ~= n` test
+    -- rejects NaN; the math.huge tests reject ±Infinity. Fall back to 1 on any
+    -- non-finite/invalid input rather than trusting it.
+    local n = tonumber(nRaw)
+    if type(n) ~= 'number' or n ~= n or n == math.huge or n == -math.huge then
+        n = 1
+    else
+        n = math.floor(n)
+    end
     if n < 1 then n = 1 end
     if n > Config.MaxPerBuy then
         Bridge.Notify(src, 'Lottery',
@@ -533,30 +547,25 @@ RegisterNetEvent('palm6_lottery:kiosk:data', function()
         nextIn = 'drawing any moment now'
     end
 
-    -- Recent jackpots (public — winners are announced on draw). Names resolved
-    -- from the players charinfo; a missing/offline name falls back to 'a citizen'.
+    -- Recent jackpots — AMOUNT and time only, no winner identity. A winner's legal
+    -- name is private-by-default PII (no nameplates in RP) and the game never
+    -- publicly announces draws (settleDraw only DMs the single winner; runDraw's
+    -- result goes only to the admin/console), so this kiosk must not be the one
+    -- surface that broadcasts every recent winner's full name to any walk-up.
     local recent = {}
     pcall(function()
         local rows = MySQL.query.await([[
-            SELECT d.pot, d.rake, d.winner_citizenid,
-                   TIMESTAMPDIFF(MINUTE, d.drawn_at, NOW()) AS mins_ago, p.charinfo
+            SELECT d.pot, d.rake,
+                   TIMESTAMPDIFF(MINUTE, d.drawn_at, NOW()) AS mins_ago
               FROM palm6_lottery_draws d
-              LEFT JOIN players p ON p.citizenid = d.winner_citizenid
              WHERE d.status = 'drawn' AND d.winner_citizenid IS NOT NULL
              ORDER BY d.id DESC LIMIT 5
         ]]) or {}
         for _, w in ipairs(rows) do
             local amount = math.max(0, (tonumber(w.pot) or 0) - (tonumber(w.rake) or 0))
-            local name
-            if w.charinfo then
-                local okj, ci = pcall(function() return json.decode(w.charinfo) end)
-                if okj and type(ci) == 'table' and ci.firstname then
-                    name = (tostring(ci.firstname) .. ' ' .. tostring(ci.lastname or '')):gsub('%s+$', '')
-                end
-            end
             local mins = tonumber(w.mins_ago) or 0
             local ago = mins < 60 and (mins .. 'm ago') or (math.floor(mins / 60) .. 'h ago')
-            recent[#recent + 1] = { amount = amount, name = name, ago = ago }
+            recent[#recent + 1] = { amount = amount, ago = ago }
         end
     end)
 

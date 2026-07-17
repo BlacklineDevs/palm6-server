@@ -233,4 +233,10 @@ Config.Events = {
     ['palm6_lottery:kiosk:data']    = { calls = 20, window_seconds = 60 },
     ['palm6_lottery:kiosk:buy']     = { calls = 15, window_seconds = 60 },
     ['palm6_lottery:kiosk:scratch'] = { calls = 20, window_seconds = 60 },
+
+    -- palm6_gunrunning — the dealer NPC buy. Routes into cmdBuyWeapon (proximity
+    -- + price + bank charge + serialized grant, all server-side). Own 10s spam
+    -- guard already applies; this budgets the net-event surface too. eventguard
+    -- ensures before palm6_gunrunning so this registers first.
+    ['palm6_gunrunning:dealer:buy'] = { calls = 10, window_seconds = 60 },
 }

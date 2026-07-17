@@ -24,8 +24,10 @@ Config = {}
 
 Config.Debug = false
 
--- Stake account (clean money in) and win item (dirty money out).
-Config.StakeAccount = 'cash'          -- you bet clean cash
+-- Win item (dirty money out). The stake is always clean CASH — taken via
+-- Bridge.TakeCash and refunded via Bridge.GiveCash in server/main.lua; there is
+-- no account knob (a former Config.StakeAccount was never read, so it was removed
+-- rather than leave a dead knob that looked configurable).
 Config.WinItem      = 'black_money'   -- you win dirty money (needs laundering)
 
 -- The bookie / runner spot. Hidden — no blip, word-of-mouth RP (same as

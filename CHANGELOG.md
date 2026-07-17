@@ -9,6 +9,47 @@ Format: newest first. Dates are EDT.
 
 ---
 
+## 2026-07-17 - Gap/flaw sweep + the black-market gun dealer gets a face
+
+A fresh ultracode audit (regression on the last day's code + a new
+discoverability dimension, every finding adversarially verified) turned up 11
+real issues. The important ones are closed, plus the street-weapon dealer is now
+an actual person you can find.
+
+**Tracking (internal):**
+- 🔴 **Gang rename destroyed a gang's turf (HIGH).** `/gang` rename updated only
+  the gang name, but `palm6_turf` keys ownership on that name — so a rename lost
+  turf attribution + protection income immediately, and the every-boot migration
+  0049 permanently NULLed the gang's territory on the next restart. Rename now
+  cascades onto turf (DB rows + in-memory cache + client re-sync) via a new
+  `palm6_turf:RenameOwner` export. Other gang consumers (protection, pumpcoin,
+  ganginfo, clout, season) resolve identity live/by-id, so turf was the only gap.
+- 🔴 **Lottery ticket count NaN (HIGH).** A forged `NaN` ticket count slipped
+  past every `<`/`>` guard and drove a player's bank balance to `NaN`. Count is
+  now sanitized to a finite positive integer before any guard or charge.
+- **Chop shop left no paper trail on chop-before-report (MEDIUM).** Evidence
+  cases were only opened for *reported*-stolen cars, so chopping a stolen car
+  before the owner reported it destroyed their vehicle + paid clean money with
+  zero forensic record. A case is now opened + the seller linked as a suspect on
+  every chop that has a real victim.
+- **Lottery kiosk leaked winners' legal names (LOW).** The recent-winners board
+  broadcast every winner's full name to any walk-up; now shows amount + time only.
+- **New players never told about `/help` (LOW).** The onboarding tour now points
+  to `/help`, the index of every city command.
+- **Gun dealer NPC.** `/buyweapon` was invisible (no ped, no blip) at an unmarked
+  scrapyard lot. Added a dealer NPC + map blip + catalog menu (mirrors the
+  lottery/insurance clerk); buying routes into the existing server authority
+  (proximity, price, charge, serialized grant) + a new eventguard budget.
+- Removed a dead `Config.StakeAccount` knob in numbers. All changes luaparse-clean
+  and adversarially verified (5/5 clean, 0 regressions).
+
+**📣 Public:** The city keeps getting sharper. The **black-market weapon dealer**
+now has a spot you can actually find (look for the new blip). New here? The
+welcome tour now tells you about **/help** — every command in one list. Plus a
+round of behind-the-scenes fixes to gangs, turf, the chop shop, and the lottery.
+
+---
+
 ## 2026-07-17 - City Lottery kiosk
 
 The lottery is now a place you go, not a command you have to know. Walk up to

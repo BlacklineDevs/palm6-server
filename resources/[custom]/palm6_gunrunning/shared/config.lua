@@ -38,3 +38,17 @@ Config.BuyCooldownSec = 10
 -- "GR-" at a glance in an evidence bag description — same readability idea
 -- as palm6_counterfeit's "CF-" wad serials.
 Config.SerialPrefix = 'GR'
+
+-- Discoverable dealer NPC at the drop point (presentation only — the buy still
+-- re-runs the full server authority: proximity, price, charge, grant). Anchored
+-- to Config.DropPoint.coords so the ped IS the proximity zone. Was command-only
+-- with no blip/ped, so a new player had no way to find (or learn of) the black
+-- market — mirrors the palm6_lottery / palm6_insurance clerk pattern.
+-- VERIFY IN-GAME: ped on-ground + heading faces the approach; retune if floating.
+Config.Dealer = {
+    model   = 'g_m_m_armboss_01',       -- arms-dealer vibe
+    heading = 160.0,
+    label   = 'Talk to the dealer',
+    icon    = 'fa-solid fa-gun',
+    blip    = { sprite = 110, color = 1, scale = 0.7, label = 'Scrapyard' },
+}

@@ -165,6 +165,17 @@ end)
 -- ---------------------------------------------------------------------------
 Bridge.RegisterCommand('buyweapon', function(source, args) cmdBuyWeapon(source, args) end)
 
+-- Dealer NPC buy — the client menu fires this with a catalog INDEX. Routes into
+-- the exact same authority as /buyweapon: cmdBuyWeapon re-runs the spam guard,
+-- resolves price/weapon from Config server-side (never trusts the client), re-
+-- checks proximity to the drop point, charges the bank, and grants a serialized
+-- weapon. A forged index is safely rejected (Config.Catalog[idx] is nil → usage,
+-- no charge; a NaN/huge index indexes to nil the same way). Budgeted in
+-- palm6_eventguard so a flood is throttled + logged like every other money event.
+RegisterNetEvent('palm6_gunrunning:dealer:buy', function(idx)
+    cmdBuyWeapon(source, { idx })
+end)
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     local n, total = 0, 0

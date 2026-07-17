@@ -335,6 +335,15 @@ RegisterNetEvent('palm6_gangs:rename', function(payload)
         return
     end
 
+    -- Cascade the rename onto palm6_turf, which keys ownership on the gang NAME
+    -- (g.name is still the OLD name here — the UPDATE above changed the DB row, not
+    -- this Lua table). Without this the renamed gang loses turf attribution and
+    -- protection income immediately, and dbmigrate 0049 permanently NULLs its turf
+    -- on the next restart. Soft/guarded (turf may be stopped); no-op if no turf held.
+    if g.name ~= name and GetResourceState('palm6_turf') == 'started' then
+        pcall(function() exports.palm6_turf:RenameOwner(g.name, name) end)
+    end
+
     -- Re-mirror EVERY online member so their PlayerData.gang reflects the new
     -- name (create only mirrors the founder, but a rename changes it for all).
     -- No-op unless Config.MirrorToQbxGang; pcall-guarded in the bridge.

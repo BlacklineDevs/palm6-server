@@ -153,6 +153,32 @@ RegisterNetEvent('palm6_turf:cancel', function(zoneId)
     if pend and pend.zoneId == zoneId then pending[src] = nil end
 end)
 
+-- Cascade a gang rename onto turf ownership. Turf keys owner_gang on the MUTABLE
+-- gang NAME (both the DB rows and the in-memory `zones` cache), so a /gang rename
+-- that does not rewrite it silently orphans the gang's territory: live
+-- comparisons (z.owner_gang == gang.name) stop matching, palm6_protection can no
+-- longer collect on its own turf, season turf standings drop to 0, and — worst —
+-- dbmigrate 0049 (runs every boot) permanently NULLs any turf whose owner_gang is
+-- not a current palm6_gangs.name, so the renamed gang loses all turf on the next
+-- restart. palm6_gangs calls this from its rename success path. Idempotent and
+-- guarded; returns the number of DB rows rewritten (0 if the gang held no turf).
+exports('RenameOwner', function(oldName, newName)
+    if type(oldName) ~= 'string' or type(newName) ~= 'string' then return 0 end
+    if oldName == '' or newName == '' or oldName == newName then return 0 end
+    local updated = 0
+    pcall(function()
+        updated = MySQL.update.await(
+            'UPDATE palm6_turf SET owner_gang = ? WHERE owner_gang = ?', { newName, oldName }) or 0
+    end)
+    -- Rewrite the in-memory cache so live name comparisons match without a reload.
+    local touched = false
+    for _, z in pairs(zones) do
+        if z.owner_gang == oldName then z.owner_gang = newName; touched = true end
+    end
+    if touched then syncAll() end
+    return updated
+end)
+
 RegisterCommand('turf', function(src)
     local counts = {}
     for _, z in pairs(zones) do
