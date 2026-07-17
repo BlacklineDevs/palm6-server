@@ -23,9 +23,14 @@ limit, open-draw, bank charge, per-draw cap); `kiosk:data` is a read-only
 snapshot; both DoS-budgeted in `palm6_eventguard`. Ultracode-verified (0
 confirmed / 6 refuted). Kiosk coord is a placeholder near the Davis 24/7.
 
+Also added **instant scratch cards** at the kiosk — pay $500, roll a server-side
+weighted prize (No luck → 💎 JACKPOT), ~30% house edge so it's a clean cash sink.
+Server-authoritative RNG, charge-before-grant, adversarially reviewed clean.
+
 **📣 Public:** The **City Lottery** now has a kiosk — find the ticket blip, check
-the live jackpot, and grab tickets right there. Draws pay a random ticket holder
-the whole pot (minus the house cut). Recent winners are on the board.
+the live jackpot, grab tickets, or try an **instant scratch card** right there.
+Draws pay a random ticket holder the whole pot (minus the house cut). Recent
+winners are on the board.
 
 ---
 
