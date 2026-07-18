@@ -477,3 +477,334 @@ end)
 
 -- T7/T8 read/mutate match state through this export (never re-declare matches[]).
 exports('MatchState', function(matchId) return matches[matchId] end)
+
+-- ============================================================================
+-- T7: server move clock. HP/stamina/momentum are server script vars keyed by
+-- matchId..':'..cid (never ped health). Combat numbers come from palm6_fc_core
+-- (§6a). Per-match live state comes from T6 via MatchState(matchId).
+-- ============================================================================
+
+local DBG = false
+local Combat = {}   -- [matchId..':'..cid] = { slot, cid, src, hp, stam, blazin, blocking, cd={}, active, name, model, animStrike }
+local Active = {}    -- [matchId] = true   (T7-managed: LIVE + roundStarted)
+local Dirty  = {}    -- [matchId] = true   (statebag needs a throttled flush)
+
+-- fc_core caches (populated once the export is up; pcall-retry survives load order).
+local MOVES, VIT, MOM, TIM, BLZ, RING, SK
+CreateThread(function()
+    while not MOVES do
+        local ok, c = pcall(function() return exports.palm6_fc_core:Config() end)
+        if ok and c and c.Moves then
+            MOVES, VIT, MOM, TIM, BLZ, RING = c.Moves, c.Vitals, c.Momentum, c.Timers, c.Blazin, c.Ring
+        end
+        if not SK then
+            local ok2, k = pcall(function() return exports.palm6_fc_core:StateKeys() end)
+            if ok2 and k then SK = k end
+        end
+        if not MOVES then Wait(250) end
+    end
+    if DBG then print('[palm6_fc_combat] T7 combat config cached') end
+end)
+
+local function ckey(matchId, cid) return matchId .. ':' .. cid end
+local function mkey(matchId) return (SK and SK.matchKey(matchId)) or ('fc:match:' .. matchId) end
+local function ms(matchId) return exports.palm6_fc_combat:MatchState(matchId) end
+
+-- Throttled statebag write (§6/§12: send-on-change, not per-frame). Writes the
+-- SAME slot shape T6's enterLive seeded and T9 reads: slot 1 = cidA/srcA,
+-- slot 2 = cidB/srcB. Only the client-display fields go on the wire (never cd/active/src).
+local function flush(matchId)
+    local st = ms(matchId)
+    if not st then return end
+    local a = Combat[ckey(matchId, st.cidA)]
+    local b = Combat[ckey(matchId, st.cidB)]
+    if not a or not b then return end
+    local function view(f) return { hp = f.hp, stam = f.stam, blazin = f.blazin, name = f.name, model = f.model } end
+    GlobalState[mkey(matchId)] = {
+        status = 'live', roundStarted = true,
+        slot = { [1] = view(a), [2] = view(b) },
+    }
+end
+
+-- Build the server-owned fight state for a match that just went LIVE. One DB
+-- read maps slot -> cid/name/model/style; everything else lives in memory only.
+-- Guards double-init via Active[matchId] (claimed BEFORE the await) so the
+-- fc:combat:live seam (C8) and the 1s discovery backstop can't both seed it.
+local function startRound(matchId)
+    local st = ms(matchId)
+    if not st or not st.roundStarted or Active[matchId] then return end
+    if not VIT then return end          -- fc_core not cached yet; discovery retries
+    Active[matchId] = true              -- claim BEFORE the await so discovery can't double-init
+
+    local row
+    pcall(function()
+        row = MySQL.single.await([[
+            SELECT fighter1_citizenid, fighter2_citizenid,
+                   fighter1_name, fighter2_name,
+                   fighter1_model, fighter2_model,
+                   style1, style2
+              FROM palm6_fightclub_matches WHERE id = ?]], { matchId })
+    end)
+    if not row then Active[matchId] = nil; return end   -- transient DB fail; retry next pass
+
+    local function strikeDictFor(styleId)
+        local okS, style = pcall(function() return exports.palm6_fc_core:GetStyle(styleId) end)
+        if okS and style and style.animDicts and style.animDicts.strike then
+            return style.animDicts.strike
+        end
+        return 'melee@unarmed@streamed_core'
+    end
+
+    local seats = {
+        { slot = 1, cid = row.fighter1_citizenid, src = st.srcA, name = row.fighter1_name, model = row.fighter1_model, dict = strikeDictFor(row.style1) },
+        { slot = 2, cid = row.fighter2_citizenid, src = st.srcB, name = row.fighter2_name, model = row.fighter2_model, dict = strikeDictFor(row.style2) },
+    }
+    for _, s in ipairs(seats) do
+        Combat[ckey(matchId, s.cid)] = {
+            slot = s.slot, cid = s.cid, src = s.src,
+            hp = VIT.StartHP, stam = VIT.MaxStamina, blazin = 0,
+            blocking = false, cd = {}, active = nil,
+            name = s.name or ('fighter %d'):format(s.slot),
+            model = s.model or 'mp_m_freemode_01',
+            animStrike = s.dict,
+        }
+        if s.src then
+            Player(s.src).state:set('fc:active', matchId, true)
+            Player(s.src).state:set('fc:slot', s.slot, true)
+        end
+    end
+    Dirty[matchId] = true
+    if DBG then print(('[palm6_fc_combat] round started #%d'):format(matchId)) end
+end
+
+-- T7 REPLACES T6's draw-only round-cap timeout with an HP%-comparison decision:
+-- higher HP% wins by decision (method='ko'); an HP gap within Config.Timers.DrawBand
+-- (percentage points) is an honest draw. Redefines the in-file GLOBAL so the T6
+-- startRoundTimer's call-time lookup picks up this body; routes through the
+-- resolveFight hub and NEVER pre-sets m.resolving (resolveFight owns that flag).
+function onRoundTimeout(matchId)
+    local m = matches[matchId]
+    if not m or m.resolving or not m.roundStarted then return end
+    local a = Combat[ckey(matchId, m.cidA)]
+    local b = Combat[ckey(matchId, m.cidB)]
+    if not a or not b or not VIT then
+        resolveFight(matchId, nil, 'draw')          -- no combat state to judge -> honest draw
+        return
+    end
+    local maxHp = (VIT.StartHP and VIT.StartHP > 0) and VIT.StartHP or 100
+    local aPct = math.max(0, a.hp) / maxHp * 100
+    local bPct = math.max(0, b.hp) / maxHp * 100
+    local band = (TIM and TIM.DrawBand) or 0
+    if math.abs(aPct - bPct) <= band then
+        resolveFight(matchId, nil, 'draw')
+    elseif aPct > bPct then
+        resolveFight(matchId, m.cidA, 'ko')
+    else
+        resolveFight(matchId, m.cidB, 'ko')
+    end
+end
+
+-- Strike (§6 step 2): validate -> deduct stamina -> open active window -> order
+-- the attacker's OWN client to play the swing (replication shows it to everyone).
+RegisterNetEvent('palm6_fc_combat:strike', function(data)
+    local src = source
+    if not MOVES or type(data) ~= 'table' then return end
+    local matchId = tonumber(data.matchId)
+    local moveId  = data.moveId
+    if not matchId or type(moveId) ~= 'string' then return end
+    local move = MOVES[moveId]
+    if not move then return end
+
+    local st = ms(matchId)
+    if not st or not st.roundStarted or st.resolving then return end
+    local cid = (src == st.srcA and st.cidA) or (src == st.srcB and st.cidB) or nil
+    if not cid then return end
+    local f = Combat[ckey(matchId, cid)]
+    if not f then return end
+
+    local nowMs = GetGameTimer()
+    if nowMs < (f.cd[moveId] or 0) then return end                          -- cooldown not elapsed
+    if move.kind == 'heavy' and f.stam < move.staminaCost then return end    -- 0-stam = light only
+
+    f.stam = math.max(0, f.stam - move.staminaCost)
+    f.cd[moveId] = nowMs + move.cooldownMs
+    f.active = { moveId = moveId, expiresAt = nowMs + move.activeWindowMs }
+    Dirty[matchId] = true
+
+    TriggerClientEvent('palm6_fc_combat:playClip', src,
+        { matchId = matchId, cid = cid, moveId = moveId, animDict = f.animStrike })
+end)
+
+-- Block: held stance (server records on/off). Cost is drained per absorbed hit
+-- in the connect handler; while blocking, stamina does not regenerate (§6a).
+RegisterNetEvent('palm6_fc_combat:block', function(data)
+    local src = source
+    if type(data) ~= 'table' then return end
+    local matchId = tonumber(data.matchId)
+    if not matchId then return end
+    local st = ms(matchId)
+    if not st or not st.roundStarted or st.resolving then return end
+    local cid = (src == st.srcA and st.cidA) or (src == st.srcB and st.cidB) or nil
+    if not cid then return end
+    local f = Combat[ckey(matchId, cid)]
+    if not f then return end
+    f.blocking = data.on and true or false
+end)
+
+-- Connect (§6 step 4): the attacker client claims a visual hit; the SERVER
+-- validates window + reach + block and applies authoritative damage/momentum.
+RegisterNetEvent('palm6_fc_combat:connect', function(data)
+    local src = source
+    if not MOVES or type(data) ~= 'table' then return end
+    local matchId = tonumber(data.matchId)
+    if not matchId then return end
+    local st = ms(matchId)
+    if not st or not st.roundStarted or st.resolving then return end
+
+    local attCid = (src == st.srcA and st.cidA) or (src == st.srcB and st.cidB) or nil
+    if not attCid then return end
+    local att = Combat[ckey(matchId, attCid)]
+    if not att or not att.active then return end                     -- no live swing
+    if GetGameTimer() > att.active.expiresAt then att.active = nil; return end  -- window closed
+
+    local move = MOVES[att.active.moveId]
+    if not move then att.active = nil; return end
+
+    local tgtCid = (attCid == st.cidA) and st.cidB or st.cidA
+    local tgt = Combat[ckey(matchId, tgtCid)]
+    if not tgt or not tgt.src then att.active = nil; return end
+
+    local reach = Bridge.Reach(att.src, tgt.src)                      -- server distance, never client
+    if not reach or reach > move.reach then att.active = nil; return end
+
+    att.active = nil                                                  -- one connect per swing
+
+    local dmg = move.damage
+    if tgt.blocking and Bridge.Facing(tgt.src, att.src) then
+        dmg = math.floor(move.damage * (move.chipPct or 0))           -- chip through the guard
+        tgt.stam = math.max(0, tgt.stam - (move.blockStamCost or 0))
+        if tgt.stam <= 0 then tgt.blocking = false end                -- block breaks at 0 stamina
+    end
+
+    tgt.hp = tgt.hp - dmg
+    local cap = (BLZ and BLZ.FullThreshold) or 100
+    att.blazin = math.min(cap, att.blazin + (MOM.PerLandedHit or 0))  -- both gain (Def Jam feel)
+    -- [T8 anchor] Fin.tryTrigger(matchId, attCid, tgtCid, move.moveId) inserts on the NEXT line
+    tgt.blazin = math.min(cap, tgt.blazin + (MOM.PerTakenHit or 0))
+    Dirty[matchId] = true
+
+    if tgt.hp <= 0 then
+        -- KO. Route through the single resolveFight hub (C1): it guards+sets
+        -- m.resolving itself (do NOT pre-set) and sends teardown to BOTH fighters
+        -- so the winner is restored out of the fighter ped/loadout (§8/§11).
+        TriggerClientEvent('palm6_fc_combat:koRagdoll', tgt.src, { matchId = matchId })
+        resolveFight(matchId, attCid, 'ko')
+    end
+end)
+
+-- Discovery (boot/reconnect backstop for the C8 fc:combat:live seam): a
+-- DB-authoritative sweep that promotes any LIVE row whose T6 round has actually
+-- started into Active. Cheap 1s cadence; empty result set at idle. startRound
+-- self-guards double-init, so overlap with the live seam is harmless.
+CreateThread(function()
+    while true do
+        Wait(1000)
+        if MOVES then
+            local live = {}
+            pcall(function()
+                live = MySQL.query.await("SELECT id FROM palm6_fightclub_matches WHERE status = 'live'") or {}
+            end)
+            for _, r in ipairs(live) do
+                local id = tonumber(r.id)
+                if id and not Active[id] then
+                    local st = ms(id)
+                    if st and st.roundStarted then startRound(id) end
+                end
+            end
+        end
+    end
+end)
+
+-- C8: consume the live seam so combat state inits the instant LIVE begins (no ~1s
+-- dead-zone at "FIGHT!"). startRound double-init-guards against the discovery poll.
+AddEventHandler('fc:combat:live', function(d)
+    if type(d) == 'table' and tonumber(d.matchId) then startRound(tonumber(d.matchId)) end
+end)
+
+-- Combat tick: stamina regen (skip a fighter mid-swing or blocking) + throttled
+-- statebag flush. Runs only over Active matches -> no measurable cost at idle.
+CreateThread(function()
+    while true do
+        Wait(250)
+        for matchId in pairs(Active) do
+            local nowMs = GetGameTimer()
+            local prefix = matchId .. ':'
+            for k, f in pairs(Combat) do
+                if k:sub(1, #prefix) == prefix then
+                    local attacking = f.active and nowMs <= f.active.expiresAt
+                    if not f.blocking and not attacking and f.stam < VIT.MaxStamina then
+                        f.stam = math.min(VIT.MaxStamina, f.stam + (VIT.StaminaRegenPerSec * 0.25))
+                        Dirty[matchId] = true
+                    end
+                end
+            end
+        end
+        for matchId in pairs(Dirty) do
+            flush(matchId)
+            Dirty[matchId] = nil
+        end
+    end
+end)
+
+-- Ring confinement (§6, CONFIRMED gap): a fast server coords poll force-resolves
+-- a ring-out to a forfeit AND drops that fighter's invincibility this instant
+-- (teardown to their own client) — invincibility must not survive a ring-exit.
+-- Routes through resolveFight (C1); the explicit teardown to f.src guarantees the
+-- exiting client un-hardens immediately even before the resolve settle completes.
+CreateThread(function()
+    while not TIM do Wait(250) end
+    local pollMs = math.floor((TIM.RingPollSec or 0.5) * 1000)
+    if pollMs < 250 then pollMs = 250 end
+    while true do
+        Wait(pollMs)
+        for matchId in pairs(Active) do
+            local st = ms(matchId)
+            if st and st.roundStarted and not st.resolving then
+                local prefix = matchId .. ':'
+                for k, f in pairs(Combat) do
+                    if k:sub(1, #prefix) == prefix and f.src then
+                        local d = Bridge.DistToRing(f.src, RING.coords)
+                        if d ~= nil and d > RING.radius then     -- real out-of-radius read (nil = skip; DC is T6)
+                            local oppCid = (f.cid == st.cidA) and st.cidB or st.cidA
+                            TriggerClientEvent('palm6_fc_combat:teardown', f.src, { matchId = matchId })  -- drop invincibility NOW
+                            resolveFight(matchId, oppCid, 'forfeit')   -- hub: sets m.resolving, tears down both
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Cleanup: when any match resolves (T3 fires this after settle, for KO / ring-out
+-- forfeit / DC / void), drop all T7 state so nothing is stranded. Safe for a
+-- match that never entered Active (a betting-row void has no Combat entries).
+AddEventHandler('fc:match:resolved', function(d)
+    if type(d) ~= 'table' then return end
+    local matchId = tonumber(d.matchId)
+    if not matchId then return end
+    Active[matchId] = nil
+    Dirty[matchId]  = nil
+    local prefix = matchId .. ':'
+    for k, f in pairs(Combat) do
+        if k:sub(1, #prefix) == prefix then
+            if f.src then
+                Player(f.src).state:set('fc:active', false, true)
+                Player(f.src).state:set('fc:slot', nil, true)
+            end
+            Combat[k] = nil
+        end
+    end
+    GlobalState[mkey(matchId)] = nil
+end)

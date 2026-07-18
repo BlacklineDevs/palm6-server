@@ -144,3 +144,70 @@ function Game.SquareUp(coords, heading)
     SetEntityCoordsNoOffset(ped, coords.x + 0.0, coords.y + 0.0, coords.z + 0.0, false, false, false)
     SetEntityHeading(ped, heading or 0.0)
 end
+
+-- ============================================================================
+-- T7: LIVE fighter ped hardening / strike clip / KO ragdoll / restore.
+-- Every native re-fetches PlayerPedId() so a model swap (§8) never leaves us
+-- operating on a stale handle.
+-- ============================================================================
+
+local FC_MELEE_CONTROLS = { 24, 25, 140, 141, 142, 143, 257, 262, 263, 264 }  -- attack/aim/melee light+heavy+block+combo
+local FC_UNARMED = joaat('WEAPON_UNARMED')
+
+-- One frame of hardening on the LOCAL fighter's own ped (§6): invincible (blocks
+-- health loss only), ragdoll OFF (re-asserted each frame so a punch/blast can't
+-- interrupt a clip), pain/flinch off, own melee suppressed, empty-handed.
+function Game.HardenFighterPed()
+    local pid = PlayerId()
+    local ped = PlayerPedId()
+    SetPlayerInvincible(pid, true)
+    SetEntityInvincible(ped, true)
+    SetPedCanRagdoll(ped, false)
+    SetPedSuffersCriticalHits(ped, false)
+    SetPedConfigFlag(ped, 187, true)          -- disable melee-hit reactions
+    SetPedConfigFlag(ped, 281, true)
+    SetCurrentPedWeapon(ped, FC_UNARMED, true)
+    SetWeaponsNoAutoswap(true)
+    for i = 1, #FC_MELEE_CONTROLS do
+        DisableControlAction(0, FC_MELEE_CONTROLS[i], true)
+    end
+end
+
+-- Play a strike clip on the LOCAL fighter's own ped, non-interruptibly (flag 2)
+-- so a stray reaction can't override the intended swing (§6).
+function Game.PlayStrikeClip(animDict, animName)
+    if type(animDict) ~= 'string' or type(animName) ~= 'string' then return end
+    RequestAnimDict(animDict)
+    local deadline = GetGameTimer() + 1000
+    while not HasAnimDictLoaded(animDict) and GetGameTimer() < deadline do Wait(0) end
+    if not HasAnimDictLoaded(animDict) then return end
+    TaskPlayAnim(PlayerPedId(), animDict, animName, 8.0, -8.0, -1, 2, 0.0, false, false, false)
+end
+
+-- KO: the victim's own client ragdolls its own ped. §6 ordering — the caller
+-- MUST have stopped the hardening loop first; here we enable ragdoll then apply.
+-- C6: FreezeEntityPosition(false) FIRST so a Task-8 finisher-KO (victim ped frozen
+-- by the finisher scene) actually ragdolls instead of no-opping.
+function Game.RagdollSelf()
+    FreezeEntityPosition(PlayerPedId(), false)
+    local ped = PlayerPedId()
+    SetPlayerInvincible(PlayerId(), false)
+    SetEntityInvincible(ped, false)
+    SetPedCanRagdoll(ped, true)
+    SetPedToRagdoll(ped, 3500, 3500, 0, false, false, false)
+    ApplyForceToEntity(ped, 1, 0.0, -1.5, 0.4, 0.0, 0.0, 0.0, 0, false, true, true, false, true)
+end
+
+-- Teardown of hardening: reverse everything HardenFighterPed asserted (§11).
+function Game.RestoreFighterPed()
+    local pid = PlayerId()
+    local ped = PlayerPedId()
+    SetPlayerInvincible(pid, false)
+    SetEntityInvincible(ped, false)
+    SetPedCanRagdoll(ped, true)
+    SetPedSuffersCriticalHits(ped, true)
+    SetPedConfigFlag(ped, 187, false)
+    SetPedConfigFlag(ped, 281, false)
+    SetWeaponsNoAutoswap(false)
+    ClearPedTasks(ped)
+end

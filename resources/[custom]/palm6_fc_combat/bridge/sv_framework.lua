@@ -138,3 +138,37 @@ end
 function Bridge.RegisterCommand(name, handler)
     RegisterCommand(name, handler, false)
 end
+
+-- ============================================================================
+-- T7 combat-native helpers (server-authoritative reach / confinement / facing).
+-- GetEntityCoords/GetEntityHeading are valid server-side on a synced player ped.
+-- ============================================================================
+
+-- Distance (m) between two online fighters' peds; nil if either isn't readable.
+function Bridge.Reach(aSrc, bSrc)
+    local pa, pb = GetPlayerPed(aSrc), GetPlayerPed(bSrc)
+    if not pa or pa == 0 or not pb or pb == 0 then return nil end
+    return #(GetEntityCoords(pa) - GetEntityCoords(pb))
+end
+
+-- Distance (m) from an online player's ped to a ring-center {x,y,z}; nil if the
+-- ped isn't readable (unsynced / gone) — caller treats nil as "skip", never a ring-out.
+function Bridge.DistToRing(src, ring)
+    local ped = GetPlayerPed(src)
+    if not ped or ped == 0 then return nil end
+    return #(GetEntityCoords(ped) - vec3(ring.x, ring.y, ring.z))
+end
+
+-- Is targetSrc's ped facing attackerSrc? Forward-dot toward the attacker > 0.25
+-- (~75 deg frontal arc) = a valid guard direction. False if unreadable.
+function Bridge.Facing(targetSrc, attackerSrc)
+    local tp, ap = GetPlayerPed(targetSrc), GetPlayerPed(attackerSrc)
+    if not tp or tp == 0 or not ap or ap == 0 then return false end
+    local dir = GetEntityCoords(ap) - GetEntityCoords(tp)
+    local len = #dir
+    if len < 0.01 then return true end
+    dir = dir / len
+    local h = math.rad(GetEntityHeading(tp))    -- GTA heading 0 = +Y; forward = (-sin, cos)
+    local fwd = vec3(-math.sin(h), math.cos(h), 0.0)
+    return (fwd.x * dir.x + fwd.y * dir.y) > 0.25
+end
