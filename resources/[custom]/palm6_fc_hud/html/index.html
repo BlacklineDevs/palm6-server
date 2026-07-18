@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fc.hud</title>
+<style>
+  /* palm6_fc_hud NUI — self-contained (no CDNs/fonts/network). Pure overlay:
+     never takes focus, sends nothing back. All numbers come from the server
+     (statebags + the parimutuel pool broadcast); the sportsbook math below is
+     display-only — settlement IS the pool split, so a spoofed client only
+     fools itself. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden;
+    font-family: 'Segoe UI', 'Arial', sans-serif; user-select: none; color: #eef; }
+
+  /* ---- fight vitals (two HP bars + stamina + Blazin) ---- */
+  #vitals { position: absolute; top: 3vh; left: 50%; transform: translateX(-50%);
+    width: 640px; max-width: 92vw; display: none; }
+  #vitals.show { display: block; }
+  .fbar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .fname { width: 150px; font-weight: 800; font-size: 13px; letter-spacing: .5px;
+    text-shadow: 0 1px 3px #000; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fname.right { text-align: right; }
+  .track { flex: 1; height: 16px; background: rgba(0,0,0,.55);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; width: 100%; transition: width .12s linear; }
+  .hp .fill  { background: linear-gradient(90deg, #ff3b3b, #ff7a5c); }
+  .opp .fill { background: linear-gradient(90deg, #ff7a5c, #ff3b3b); }
+  /* opponent bar drains right-to-left (mirror), reads like Def Jam */
+  .opp .track { transform: scaleX(-1); }
+  .meta { margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+  .mini { flex: 1; height: 9px; background: rgba(0,0,0,.5);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; }
+  .mini .fill { transition: width .12s linear; }
+  .stam .fill   { background: linear-gradient(90deg, #ffd23b, #7dff5c); }
+  .blazin .fill { background: linear-gradient(90deg, #ff8a00, #ffd23b); }
+  .lbl { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: #b9c0cc; width: 54px; }
+  #blazinWrap.ready .mini { box-shadow: 0 0 10px 2px #ffb23b; }
+  #blazinWrap.ready .lbl { color: #ffb23b; animation: bpulse .8s ease-in-out infinite; }
+  @keyframes bpulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+  /* ---- sportsbook odds board ---- */
+  #book { position: absolute; bottom: 4vh; right: 18px; width: 320px;
+    background: rgba(9,10,16,.82); border: 1px solid rgba(255,255,255,.10);
+    border-radius: 10px; padding: 12px 14px; display: none; backdrop-filter: blur(2px); }
+  #book.show { display: block; }
+  #book h2 { font-size: 12px; letter-spacing: 2px; color: #7ab8ff; margin-bottom: 2px; }
+  #book.closed h2 { color: #ff5c5c; }
+  #bookSub { font-size: 10px; color: #9aa0aa; margin-bottom: 8px; }
+  .side { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+    padding: 7px 0; border-top: 1px solid rgba(255,255,255,.07); }
+  .side .who { font-weight: 800; font-size: 13px; }
+  .side .price { font-weight: 800; font-size: 16px; text-align: right;
+    font-variant-numeric: tabular-nums; }
+  .side .row2 { grid-column: 1 / 3; display: flex; justify-content: space-between;
+    font-size: 10px; color: #aab0bc; margin-top: 1px; }
+  .side .row2 b { color: #dfe4ee; }
+  #bookCap { margin-top: 8px; font-size: 10px; color: #ffc44d; }
+  #bookCap .thin { color: #ff8a5c; display: none; }
+  #bookCap .thin.show { display: inline; }
+
+  /* ---- career panel (rep/rank, read-only) ---- */
+  #career { position: absolute; top: 3vh; right: 18px; width: 200px;
+    background: rgba(9,10,16,.86); border: 1px solid rgba(255,255,255,.10);
+    border-radius: 10px; padding: 12px 14px; display: none; text-align: center; }
+  #career.show { display: block; }
+  #career h3 { font-size: 11px; letter-spacing: 2px; color: #7dff9e; }
+  #career .rep { font-size: 26px; font-weight: 800; margin-top: 4px; }
+  #career .rank { font-size: 11px; color: #aab0bc; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div id="vitals">
+  <div class="fbar-row hp opp">
+    <div class="fname" id="oppName">Opponent</div>
+    <div class="track"><div class="fill" id="oppHp"></div></div>
+  </div>
+  <div class="fbar-row hp me">
+    <div class="fname" id="meName">You</div>
+    <div class="track"><div class="fill" id="meHp"></div></div>
+  </div>
+  <div class="meta stam">
+    <span class="lbl">STAMINA</span>
+    <div class="mini"><div class="fill" id="meStam"></div></div>
+  </div>
+  <div class="meta blazin" id="blazinWrap">
+    <span class="lbl">BLAZIN</span>
+    <div class="mini"><div class="fill" id="meBlazin"></div></div>
+  </div>
+</div>
+
+<div id="book">
+  <h2 id="bookTitle">LIVE ODDS</h2>
+  <div id="bookSub">indicative &mdash; locks at close</div>
+  <div class="side" id="sideA">
+    <div class="who">FIGHTER 1</div><div class="price" id="aPrice">&mdash;</div>
+    <div class="row2"><span>impl <b id="aImpl">&mdash;</b></span><span>$<b id="aStake">0</b> in</span></div>
+    <div class="row2"><span id="aPrev">&mdash;</span></div>
+  </div>
+  <div class="side" id="sideB">
+    <div class="who">FIGHTER 2</div><div class="price" id="bPrice">&mdash;</div>
+    <div class="row2"><span>impl <b id="bImpl">&mdash;</b></span><span>$<b id="bStake">0</b> in</span></div>
+    <div class="row2"><span id="bPrev">&mdash;</span></div>
+  </div>
+  <div id="bookCap"><span id="capMain">indicative &mdash; locks at close</span> <span class="thin" id="capThin">&middot; thin pool</span></div>
+</div>
+
+<div id="career">
+  <h3>FIGHT REP</h3>
+  <div class="rep" id="repVal">0</div>
+  <div class="rank" id="rankVal">Rank 0</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var vitals = document.getElementById('vitals');
+  var oppName = document.getElementById('oppName'), meName = document.getElementById('meName');
+  var oppHp = document.getElementById('oppHp'), meHp = document.getElementById('meHp');
+  var meStam = document.getElementById('meStam'), meBlazin = document.getElementById('meBlazin');
+  var blazinWrap = document.getElementById('blazinWrap');
+
+  var book = document.getElementById('book'), bookTitle = document.getElementById('bookTitle');
+  var bookSub = document.getElementById('bookSub');
+  var aPrice = document.getElementById('aPrice'), bPrice = document.getElementById('bPrice');
+  var aImpl = document.getElementById('aImpl'), bImpl = document.getElementById('bImpl');
+  var aStake = document.getElementById('aStake'), bStake = document.getElementById('bStake');
+  var aPrev = document.getElementById('aPrev'), bPrev = document.getElementById('bPrev');
+  var capThin = document.getElementById('capThin'), capMain = document.getElementById('capMain');
+
+  var career = document.getElementById('career');
+  var repVal = document.getElementById('repVal'), rankVal = document.getElementById('rankVal');
+
+  var maxHp = 100, maxStam = 100, maxBlazin = 100;
+  var bookHideTimer = null, careerHideTimer = null;
+
+  function pct(v, max) {
+    v = Number(v) || 0; max = Number(max) || 1;
+    var p = (v / max) * 100;
+    return p < 0 ? 0 : p > 100 ? 100 : p;
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  // ---- sportsbook math (§10b) — display-only, mirrors the spec formulas ----
+  function decimalFor(sideTotal, payoutPool) {
+    if (sideTotal <= 0) return null;            // no action on this side
+    return payoutPool / sideTotal;
+  }
+  function american(dec) {
+    if (dec == null || dec <= 1) return null;   // below-stake chalk: no ML shown
+    if (dec >= 2) return '+' + Math.round((dec - 1) * 100);
+    return '-' + Math.round(100 / (dec - 1));
+  }
+  function preview(w, sideTotal, P, takeout) {   // your gross return incl own stake
+    if (sideTotal + w <= 0) return 0;
+    return w * (P + w) * (1 - takeout) / (sideTotal + w);
+  }
+  function money(n) { return '$' + Math.round(Number(n) || 0).toLocaleString(); }
+
+  function renderBoard(d) {
+    var A = Number(d.sideA) || 0, B = Number(d.sideB) || 0, P = A + B;
+    var takeout = Number(d.takeout) || 0.25, minBet = Number(d.minBet) || 50;
+    var closed = !!d.closed;
+    var payoutPool = P * (1 - takeout);
+
+    book.className = 'show' + (closed ? ' closed' : '');
+    bookTitle.innerHTML = closed ? 'CLOSED &mdash; closing line' : 'LIVE ODDS';
+    bookSub.innerHTML = closed
+      ? 'final pool ' + money(P)
+      : 'closes in ' + Math.max(0, Number(d.secsLeft) || 0) + 's';
+
+    aStake.textContent = A.toLocaleString();
+    bStake.textContent = B.toLocaleString();
+
+    var dA = decimalFor(A, payoutPool), dB = decimalFor(B, payoutPool);
+    aPrice.textContent = dA ? dA.toFixed(2) + 'x' : '—';
+    bPrice.textContent = dB ? dB.toFixed(2) + 'x' : '—';
+    var mlA = american(dA), mlB = american(dB);
+    aImpl.textContent = P > 0 ? Math.round((A / P) * 100) + '%' + (mlA ? ' (' + mlA + ')' : '') : '—';
+    bImpl.textContent = P > 0 ? Math.round((B / P) * 100) + '%' + (mlB ? ' (' + mlB + ')' : '') : '—';
+
+    aPrev.innerHTML = money(minBet) + ' bet &rarr; ' + money(preview(minBet, A, P, takeout));
+    bPrev.innerHTML = money(minBet) + ' bet &rarr; ' + money(preview(minBet, B, P, takeout));
+
+    capMain.innerHTML = closed ? 'projections frozen at close' : 'indicative &mdash; locks at close';
+    capThin.className = 'thin' + ((Number(d.betCount) || 0) < 3 ? ' show' : '');
+
+    // Auto-retire a closed board so it doesn't linger; live boards persist.
+    if (bookHideTimer) { clearTimeout(bookHideTimer); bookHideTimer = null; }
+    if (closed) bookHideTimer = setTimeout(function () { book.className = ''; }, 8000);
+  }
+
+  window.addEventListener('message', function (e) {
+    var d = e.data || {};
+    if (d.action === 'hud:open') {
+      maxHp = Number(d.maxHp) || 100;
+      maxStam = Number(d.maxStam) || 100;
+      maxBlazin = Number(d.maxBlazin) || 100;
+      vitals.className = 'show';
+    } else if (d.action === 'hud:vitals') {
+      var mine = Number(d.mySlot) === 2 ? d.s2 : d.s1;
+      var opp  = Number(d.mySlot) === 2 ? d.s1 : d.s2;
+      mine = mine || {}; opp = opp || {};
+      meName.textContent  = mine.name || 'You';
+      oppName.textContent = opp.name || 'Opponent';
+      meHp.style.width  = pct(mine.hp, maxHp) + '%';
+      oppHp.style.width = pct(opp.hp, maxHp) + '%';
+      meStam.style.width   = pct(mine.stam, maxStam) + '%';
+      meBlazin.style.width = pct(mine.blazin, maxBlazin) + '%';
+      blazinWrap.className = 'meta blazin' + ((Number(mine.blazin) || 0) >= maxBlazin ? ' ready' : '');
+    } else if (d.action === 'hud:close') {
+      vitals.className = '';
+    } else if (d.action === 'odds:update') {
+      renderBoard(d);
+    } else if (d.action === 'odds:hide') {
+      if (bookHideTimer) { clearTimeout(bookHideTimer); bookHideTimer = null; }
+      book.className = '';
+    } else if (d.action === 'career:show') {
+      repVal.textContent = Number(d.rep || 0).toLocaleString();
+      rankVal.textContent = 'Rank ' + (Number(d.rank || 0));
+      career.className = 'show';
+      if (careerHideTimer) clearTimeout(careerHideTimer);
+      careerHideTimer = setTimeout(function () { career.className = ''; }, 6000);
+    } else if (d.action === 'career:hide') {
+      career.className = '';
+    }
+  });
+})();
+</script>
+</body>
+</html>
