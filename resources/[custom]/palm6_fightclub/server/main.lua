@@ -585,3 +585,9 @@ exports('GetSummary', function()
     end)
     return out
 end)
+
+---Read-only money-authority getter: the entry ante fc_combat charges + passes to OpenMatch.
+---Lives here so shared/config.lua Config.Fight.EntryStake stays the single source of truth (no drift).
+exports('GetEntryStake', function()
+    return math.floor(tonumber(Config.Fight and Config.Fight.EntryStake) or 0)
+end)
