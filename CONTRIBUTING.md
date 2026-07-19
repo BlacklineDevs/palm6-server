@@ -4,9 +4,10 @@ This repo follows the **Palm6 Creative System**. This is the one-page quickstart
 adding anything correctly. Reference docs: `00-START-HERE.md`, `MASTER-INDEX.md`,
 `14-OPERATIONS/`, `19-RFC/`, `17-ASSET-REGISTRY/`.
 
-> System status: the Creative System is **Candidate (v0.9.0-rc.1)** in this repo until
-> Phase 0 is signed (see `00-FOUNDATION/DECISION-LOG/DECISION-LOG-ENTRY-004.md`). Nothing
-> is **Approved** without a Decision Log entry — never by editing a status line.
+> System status: the Creative System is **Approved v1.0.0** in this repo (Phase 0 signed,
+> DEC-004, 2026-07-18; Phase 3 alignment logged as DEC-006). Nothing else is **Approved**
+> without its own Decision Log entry, never by editing a status line. Visual-dependent items
+> (System A core mark CD-001, COLOR-SYSTEM CD-008) remain Candidate.
 
 ---
 
@@ -15,10 +16,10 @@ adding anything correctly. Reference docs: `00-START-HERE.md`, `MASTER-INDEX.md`
    live code; deprecate with a migration note (`docs/RESTRUCTURING/PHASE-2-DEPRECATIONS.md`).
 2. **`sql/` is append-only.** Never edit or reorder an existing migration. New migrations
    must be idempotent and registered in `palm6_dbmigrate/server.lua` (it re-runs every
-   statement every boot — there is no ledger).
+   statement every boot - there is no ledger).
 3. **Server is authoritative.** Clients forge any net-event payload. Price, ownership, and
    outcomes are always recomputed server-side. Sanitize client numbers (reject `NaN`/±Inf).
-4. **Stage explicit paths.** Never `git add -A`/`-u` in this shared tree — stage your exact
+4. **Stage explicit paths.** Never `git add -A`/`-u` in this shared tree - stage your exact
    files by path.
 5. **`main` auto-deploys** only on changes under `resources/**` or `custom.cfg`. Docs/brand
    pushes don't deploy. `luaparse`-check every changed `.lua` before pushing.
@@ -37,8 +38,8 @@ adding anything correctly. Reference docs: `00-START-HERE.md`, `MASTER-INDEX.md`
    license, commercial flag). If it's not in the registry, it must not ship or be sold.
 3. Status ladder: Experimental → Candidate → Approved → Vault. Start at Experimental or
    Candidate. **Approved requires a Decision Log entry** (put its ID in the registry).
-4. It must pass `00-FOUNDATION/07-QUALITY-STANDARDS.md`: original/ownable, timeless, and —
-   for **System A** identity marks — legible in one color at 32px with no reliance on
+4. It must pass `00-FOUNDATION/07-QUALITY-STANDARDS.md`: original/ownable, timeless, and,
+   for **System A** identity marks, legible in one color at 32px with no reliance on
    glow/texture. **System B** marketing art (faction crests, cinematics) has more latitude.
 5. Log creative shortcuts in `14-OPERATIONS/CREATIVE-DEBT-TRACKING.md`.
 
@@ -50,4 +51,4 @@ adding anything correctly. Reference docs: `00-START-HERE.md`, `MASTER-INDEX.md`
 ## Commit + changelog
 - Conventional commits, scoped, explicit paths. Co-author trailer for AI-assisted commits.
 - Player-facing gameplay changes get a `CHANGELOG.md` entry (internal detail + a public
-  blurb) — it's the build-in-public source of truth.
+  blurb) - it's the build-in-public source of truth.

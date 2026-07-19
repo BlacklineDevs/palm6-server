@@ -17,10 +17,10 @@ Status values: Open · In Progress · Resolved · Accepted (a deliberate, owned 
 - **Detail:** Full keeper set pulled from the Palm6 Discord bot DMs and placed:
   **24 Palm6 department crests** (`01-BRAND/logos/departments/`) + **2 Verano state seals**
   (`01-BRAND/logos/state/`), all registered Candidate. **Still missing:** the **System A
-  core identity mark** (the primary ownable Palm6/Verano logo) — a different asset class
+  core identity mark** (the primary ownable Palm6/Verano logo) - a different asset class
   from the department crests and state seals.
-- **Resolution:** (a) DONE — 24 departments + 2 state seals placed + registered.
-  (b) OPEN — supply the System A core mark, place in `01-BRAND/logos/`, register it, and
+- **Resolution:** (a) DONE - 24 departments + 2 state seals placed + registered.
+  (b) OPEN - supply the System A core mark, place in `01-BRAND/logos/`, register it, and
   fill the System A specifics in `BRAND-GUIDELINES.md`. The brand half of the Phase 2 gate
   closes when the System A core mark lands.
 
@@ -28,7 +28,7 @@ Status values: Open · In Progress · Resolved · Accepted (a deliberate, owned 
 - **Severity:** Low · **Status:** In Progress · **Owner:** David Olverson
 - **Detail:** The first private-business logo batch (Apex Motors, Bayside Realty, Verano
   Air, Coastline Insurance, Harbor Freight, Palm Medical, Harbor Energy, PalmLink, Palm6
-  Garage, +more — the synthwave "P6" style) was rejected as too generic/"ugly". Those
+  Garage, +more - the synthwave "P6" style) was rejected as too generic/"ugly". Those
   assets are deliberately **NOT** committed to the repo.
 - **Resolution:** David regenerates in ChatGPT using the improved system in
   `01-BRAND/BUSINESS-BRAND-BRIEF.md` (one palette, flat vector, one type family, one icon
@@ -48,7 +48,7 @@ Status values: Open · In Progress · Resolved · Accepted (a deliberate, owned 
 - **Severity:** Low · **Status:** Open · **Owner:** David Olverson (in-game feel-test)
 - **Detail:** Several discoverable destinations use placeholder coords pending an
   in-game pass: lottery kiosk (near Davis 24/7), gunrunning dealer (scrapyard lot),
-  fightclub ring (Vanilla Unicorn back lot — config marks it placeholder pending MLO),
+  fightclub ring (Vanilla Unicorn back lot - config marks it placeholder pending MLO),
   black market (Config). All are flagged VERIFY IN-GAME in their configs.
 - **Resolution:** David retunes coords/headings in-game; update the resource configs.
 
@@ -85,3 +85,21 @@ Status values: Open · In Progress · Resolved · Accepted (a deliberate, owned 
   be a fake-approval.
 - **Resolution:** Lock the palette against the approved DESIGN-BIBLE and the System A core mark
   (CD-001) when it lands, then promote COLOR-SYSTEM to Approved via a Decision Log entry.
+
+## Phase 3 scheduling pass (DEC-006, 2026-07-18)
+
+Task 3.4 requires every open debt item to be closed or to carry an owner and a target date.
+
+| Item | Owner | Status | Target |
+|------|-------|--------|--------|
+| CD-001 System A core mark | David (Creative Lead) | In Progress | Next brand session; prompts emailed 2026-07-18 |
+| CD-002 prop_spawn ensure removal | David (Dev Lead) | Accepted | When txAdmin panel access is available |
+| CD-003 NPC destination coords | David | Open | Next in-game feel-test pass |
+| CD-006 private-business logo redo | David (Creative Lead) | In Progress | Regenerate in ChatGPT per BUSINESS-BRAND-BRIEF |
+| CD-007 Website org migration | David | Accepted | Optional, non-blocking, at David's discretion |
+| CD-008 COLOR-SYSTEM refinement | David (Creative Lead) | Accepted | Lock with the System A core mark (CD-001) |
+| Cleanup: delete stray `BlacklineDevs/palm6-scripts-old-placeholder` | David | Open | Needs `delete_repo` scope (bot token lacks it) |
+
+CD-004 (repo identities) closed by DEC-005; CD-005 (Phase 0) closed by DEC-004. The real
+Commercial Scripts repo was renamed `GTARPScripts-` to `palm6-scripts` (DEC-006 follow-up),
+so the canonical name now holds real content and GitHub redirects preserve the old URL.

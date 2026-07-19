@@ -63,3 +63,12 @@ reconciliation + DEC-002b note); `14-OPERATIONS/CREATIVE-DEBT-TRACKING.md` (CD-0
 now resolved by this entry, CD-007 Website org-migration debt, CD-001 for System A);
 Palm6 Restructuring Handoff Package v39, Master Restructuring Plan (canonical phase
 model and the Cross-Repo Consistency Pass; external source, not committed to this repo).
+
+## Update (2026-07-18, via DEC-006)
+
+Item 4 (Commercial Scripts) is no longer a deferred create. The real scripts repo, formerly
+`BlacklineDevs/GTARPScripts-` (holding `civcore-npc-pro` and `release`), was **renamed to the
+canonical `BlacklineDevs/palm6-scripts`**. GitHub redirects preserve the old URL. The empty
+placeholder created earlier was renamed aside to `BlacklineDevs/palm6-scripts-old-placeholder`
+and is pending deletion by David (the working token lacks `delete_repo` scope). Main, Bot, and
+Website rulings are unchanged.
