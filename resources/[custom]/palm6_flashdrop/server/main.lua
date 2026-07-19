@@ -456,6 +456,15 @@ RegisterNetEvent('palm6_flashdrop:finishCheckout', function()
     if not d then return end
     local res = d.reservations[src]
     if not res then return end
+    -- Re-entry latch. A modified client can fire finishCheckout many times in a
+    -- single frame; every call re-reads this same reservation and, because the
+    -- token is not voided until the very end (after the MySQL.insert yield below),
+    -- each concurrent call mints another serial from ONE reservation, defeating
+    -- the supply cap and OnePerCitizen. Latch synchronously, before any yield, so
+    -- only the first in-flight claim proceeds. (craft:finish / legit:finish clear
+    -- their pending token up front for exactly this reason.)
+    if res.claiming then return end
+    res.claiming = true
 
     -- Two-phase window: full checkout time must have elapsed, and not more
     -- than the grace allows. (min AND max, server clock.)

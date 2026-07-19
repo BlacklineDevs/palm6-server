@@ -471,6 +471,14 @@ local function tickStream(s, ctx)
     for _, ev in ipairs(ExplosionBuf) do
         if ev.ts > s.lastEventTs and booms < Config.Gain.MaxExplosionsPerTick
             and not bombers[ev.src]
+            -- Economy audit 2026-07-19 fix: a streamer cannot score their OWN
+            -- explosionEvent. FiveM explosions are client-emitted and cannot be
+            -- server-authenticated, so a self-explosion is the spoof vector (emit
+            -- at your own coords, pass WitnessRadius, farm viewers -> milestone
+            -- payouts). Others' explosions near your stream still count, which is
+            -- the intended "film the chaos" content. (Mirrors the crowd loop's
+            -- pl.src ~= s.src guard.) Tune Config.Gain.Explosion to rebalance.
+            and ev.src ~= s.src
             and Bridge.Distance(coords, ev.coords) <= Config.WitnessRadius then
             bombers[ev.src] = true
             booms = booms + 1
