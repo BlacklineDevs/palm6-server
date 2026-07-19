@@ -16,6 +16,7 @@ end
 
 -- CHALLENGE: ox_target eye on a nearby player.
 CreateThread(function()
+    if not enabledClient() then return end   -- C3: no 'Challenge' eye on prod (Enabled=false)
     Game.AddChallengeTarget(function(serverId)
         TriggerServerEvent('palm6_fc_combat:challenge', { targetServerId = serverId })
     end)
@@ -23,6 +24,7 @@ end)
 
 -- CHALLENGE fallback: /fcchallenge <serverid>
 RegisterCommand('fcchallenge', function(_, args)
+    if not enabledClient() then return end   -- C3: /fcchallenge inert on prod (Enabled=false)
     local sid = tonumber(args[1])
     if not sid then
         Game.Notify({ title = 'Fight Club', description = 'Usage: /fcchallenge [server id]', type = 'error' })
@@ -69,6 +71,11 @@ RegisterNetEvent('palm6_fc_combat:countdown', function(d)
             if f and f.model then Game.SwapToFighter(f.model, pick.styleId) end
         end
         Game.RunCountdown(sec)
+        -- C2: preload is done here — Game.SwapToFighter/PreloadStyle synchronously
+        -- awaits the fighter model + every style anim dict above. Ack readiness so
+        -- batch-1's server preload gate goes LIVE instead of voiding at the deadline.
+        local mid = tonumber(d.matchId)
+        if mid then TriggerServerEvent('palm6_fc_combat:ready', { matchId = mid }) end
     else
         Game.Notify({ title = 'Fight Club', description = 'FIGHT!', type = 'inform', duration = 1500 })
     end
@@ -91,6 +98,13 @@ end)
 
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
+    -- C4 (§11 no-stranding): a mid-fight `stop palm6_fc_combat` must reverse the
+    -- finisher scene + all hardening (invincibility / SetPedCanRagdoll(false) /
+    -- crit-hit off / config-flags 187,281 / disabled melee controls) BEFORE the
+    -- appearance restore, so no one is stranded invincible/frozen. abortFinisherLocal
+    -- + Game.RestoreFighterPed are globals reachable from this earlier-declared handler.
+    abortFinisherLocal()      -- stop the synced scene + clear the handle FIRST (§11 ordering)
+    Game.RestoreFighterPed()  -- reverse the hardening natives on the ped
     Game.RestoreAppearance()
 end)
 
@@ -165,13 +179,119 @@ AddEventHandler('palm6_fc_combat:teardown', function()
 end)
 
 -- ============================================================================
+-- C1: LIVE combat input layer. Native melee is DISABLED every frame by
+-- Game.HardenFighterPed (bridge), so strikes/block are driven through DEDICATED,
+-- rebindable RegisterKeyMapping inputs that fire regardless of DisableControlAction.
+-- Every handler gates on Fighter.hardening (fc:active set + round LIVE): it no-ops
+-- pre-fight, after teardown/KO/round-end (stopHardening flips it false), and on
+-- prod (Enabled=false -> no match -> hardening never turns on). That gate IS the
+-- teardown — there is no free-running thread to leak.
+--
+-- DEFAULT BINDS (rebindable via Settings > Key Bindings > FiveM):
+--   E        -> LIGHT strike  (alternates jab <-> cross for feel)
+--   Q        -> HEAVY strike  (cycles hook -> uppercut -> body)
+--   LEFT ALT -> BLOCK (hold: on press, off release)
+--
+-- Payload keys match the server handlers EXACTLY: :strike { matchId, moveId },
+-- :block { matchId, on }, :connect { matchId } (server derives the target itself).
+-- ============================================================================
+
+local function coreMove(moveId)
+    local ok, mv = pcall(function() return exports.palm6_fc_core:GetMove(moveId) end)
+    return ok and mv or nil
+end
+
+-- Best-effort local swing dict from our own pick (server owns the authoritative
+-- dict on its :playClip echo; this is just responsiveness on press).
+local function myStrikeDict()
+    local styleId = myPick and myPick.styleId
+    if not styleId then return nil end
+    local ok, st = pcall(function() return exports.palm6_fc_core:GetStyle(styleId) end)
+    if ok and st and st.animDicts and st.animDicts.strike then return st.animDicts.strike end
+    return nil
+end
+
+local strikeCd = {}   -- [moveId] = GetGameTimer() until which this move is client-cooldowned
+
+local function throwStrike(moveId)
+    if not Fighter.hardening or not Fighter.matchId then return end
+    local mv = coreMove(moveId)
+    if not mv then return end
+    local nowMs = GetGameTimer()
+    if nowMs < (strikeCd[moveId] or 0) then return end          -- respect cooldownMs (eventguard budget)
+    strikeCd[moveId] = nowMs + (tonumber(mv.cooldownMs) or 0)
+    local matchId = Fighter.matchId
+
+    -- 1) request the strike: server deducts stamina, opens the active window, and
+    --    echoes :playClip back to us (replication shows the swing to everyone).
+    TriggerServerEvent('palm6_fc_combat:strike', { matchId = matchId, moveId = moveId })
+
+    -- 2) optimistic local swing for feel (reuse STRIKE_CLIP + Game.PlayStrikeClip).
+    local dict = myStrikeDict()
+    local clip = STRIKE_CLIP[moveId]
+    if dict and clip then Game.PlayStrikeClip(dict, clip) end
+
+    -- 3) schedule the CONNECT so it lands inside the server active window. Delay
+    --    ~min(200, activeWindowMs*0.4) accounts for client->server latency; the
+    --    server validates window + reach + block and derives the target, so the
+    --    payload is just matchId.
+    local windup = math.min(200, math.floor((tonumber(mv.activeWindowMs) or 250) * 0.4))
+    SetTimeout(windup, function()
+        if Fighter.hardening and Fighter.matchId == matchId then
+            TriggerServerEvent('palm6_fc_combat:connect', { matchId = matchId })
+        end
+    end)
+end
+
+-- LIGHT: alternate jab <-> cross on repeated presses.
+local lightAlt = false
+RegisterCommand('fc_light', function()
+    if not Fighter.hardening then return end
+    lightAlt = not lightAlt
+    throwStrike(lightAlt and 'jab' or 'cross')
+end, false)
+RegisterKeyMapping('fc_light', 'Fight Club: Light strike', 'keyboard', 'E')
+
+-- HEAVY: cycle hook -> uppercut -> body (server rejects a heavy if stamina is short).
+local HEAVY_CYCLE = { 'hook', 'uppercut', 'body' }
+local heavyIdx = 0
+RegisterCommand('fc_heavy', function()
+    if not Fighter.hardening then return end
+    heavyIdx = (heavyIdx % #HEAVY_CYCLE) + 1
+    throwStrike(HEAVY_CYCLE[heavyIdx])
+end, false)
+RegisterKeyMapping('fc_heavy', 'Fight Club: Heavy strike', 'keyboard', 'Q')
+
+-- BLOCK: held stance. +cmd fires on press (on=true), -cmd on release (on=false).
+RegisterCommand('+fc_block', function()
+    if not Fighter.hardening or not Fighter.matchId then return end
+    TriggerServerEvent('palm6_fc_combat:block', { matchId = Fighter.matchId, on = true })
+end, false)
+RegisterCommand('-fc_block', function()
+    if not Fighter.matchId then return end
+    TriggerServerEvent('palm6_fc_combat:block', { matchId = Fighter.matchId, on = false })
+end, false)
+RegisterKeyMapping('+fc_block', 'Fight Club: Block (hold)', 'keyboard', 'LMENU')
+
+-- ============================================================================
 -- Blazin finisher (T8) -- client half. Runs the scene on THIS client's OWN ped
 -- ONLY (§7): never drives the other ped. Interruptible -- abortFinisherLocal()
 -- stops the scene task + clears the handle BEFORE unfreeze/timescale/cam (§11),
 -- and is called at the TOP of the palm6_fc_combat:teardown handler (below). A
 -- per-client `finisherActive` flag stops a torn-down player from being re-frozen.
 -- ============================================================================
-local FinCfg = exports.palm6_fc_core:Config()
+-- C6/F12: fc_core config for the finisher, read LAZILY + guarded (mirrors the
+-- server half's finCfg() and this file's enabledClient()). A bare top-level
+-- exports.palm6_fc_core:Config() throws at CHUNK LOAD if fc_core is momentarily
+-- unavailable (load-order race / reload), failing the whole client script. This
+-- returns the cached config or nil; every caller guards nil.
+local FinCfgCache
+local function finCfg()
+    if FinCfgCache then return FinCfgCache end
+    local ok, c = pcall(function() return exports.palm6_fc_core:Config() end)
+    if ok and c and c.Blazin then FinCfgCache = c end
+    return FinCfgCache
+end
 
 local FINISHER_DICT        = 'mini@takedowns@front'
 local FINISHER_ANIM_VICTIM = 'victim_takedown_front'   -- role tag: this recipient is the mash-side victim
@@ -191,6 +311,8 @@ local function stopFinisherCam()
 end
 
 local function startFinisherCam(origin)
+    local fc = finCfg()                                    -- C6: guarded fc_core read
+    local sceneMs = (fc and fc.Blazin.SceneDurationMs) or 0
     finisherCam = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA',
         origin.x + 1.6, origin.y + 1.6, origin.z + 0.7, 0.0, 0.0, 0.0, 42.0, false, 2)
     SetCamActive(finisherCam, true)
@@ -198,7 +320,7 @@ local function startFinisherCam(origin)
     -- slow dolly toward the action over the full lock
     SetCamParams(finisherCam,
         origin.x + 2.4, origin.y + 2.4, origin.z + 1.0, 0.0, 0.0, 0.0, 42.0,
-        FINISHER_WINDUP_MS + FinCfg.Blazin.SceneDurationMs)
+        FINISHER_WINDUP_MS + sceneMs)
 end
 
 -- Hard abort (KO / DC / void / resource-stop). Stops the scene task + clears the
@@ -234,6 +356,8 @@ end
 RegisterNetEvent('palm6_fc_combat:finisher', function(d)
     if type(d) ~= 'table' or type(d.origin) ~= 'table' then return end
     if finisherActive then return end
+    local fc = finCfg()                          -- C6: guarded fc_core read; no-op until fc_core is up
+    if not fc then return end
 
     RequestAnimDict(d.sceneDict)
     local dl = GetGameTimer() + 2000
@@ -248,7 +372,7 @@ RegisterNetEvent('palm6_fc_combat:finisher', function(d)
     if isVictim then
         BeginTextCommandDisplayHelp('STRING')
         AddTextComponentSubstringPlayerName('~INPUT_JUMP~ mash to break the finisher!')
-        EndTextCommandDisplayHelp(0, false, true, FINISHER_WINDUP_MS + FinCfg.Blazin.SceneDurationMs)
+        EndTextCommandDisplayHelp(0, false, true, FINISHER_WINDUP_MS + fc.Blazin.SceneDurationMs)
         CreateThread(function()
             while finisherActive do
                 if IsControlJustPressed(0, 22) then   -- 22 = JUMP
@@ -279,7 +403,7 @@ RegisterNetEvent('palm6_fc_combat:finisher', function(d)
 
     -- Non-KO end: server applies damage at the SAME total; if it wasn't a KO, no
     -- teardown arrives, so we self-restore and resume fighting.
-    SetTimeout(FinCfg.Blazin.SceneDurationMs, function()
+    SetTimeout(fc.Blazin.SceneDurationMs, function()
         if finisherActive then endFinisherLocal() end
     end)
 end)

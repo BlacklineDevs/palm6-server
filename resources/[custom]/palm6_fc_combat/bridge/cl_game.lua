@@ -9,7 +9,7 @@
 Game = {}
 
 local hasTarget = GetResourceState('ox_target') == 'started'
-local saved = { model = nil, appearance = nil, active = false }
+local saved = { model = nil, appearance = nil, active = false, weapon = nil, ammo = 0 }
 
 function Game.MyServerId()
     return GetPlayerServerId(PlayerId())
@@ -104,6 +104,20 @@ function Game.SwapToFighter(model, styleId)
     local ok, ap = pcall(function() return exports['illenium-appearance']:getPedAppearance(ped) end)
     saved.appearance = ok and ap or nil
     saved.model = GetEntityModel(ped)
+    -- C5: snapshot the currently equipped weapon + ammo so SetPlayerModel (which
+    -- spawns a fresh, empty-handed ped) doesn't leave the fighter disarmed after the
+    -- match. Snapshot happens during COUNTDOWN — before LIVE hardening forces UNARMED
+    -- — so the real weapon is still equipped here. (Framework inventory reapplies its
+    -- own loadout on skinchange; this guards the equipped gun in the common case.)
+    local unarmed = joaat('WEAPON_UNARMED')
+    local curWep = GetSelectedPedWeapon(ped)
+    if curWep and curWep ~= 0 and curWep ~= unarmed then
+        saved.weapon = curWep
+        saved.ammo = GetAmmoInPedWeapon(ped, curWep)
+    else
+        saved.weapon = nil
+        saved.ammo = 0
+    end
     saved.active = true
     Game.PreloadStyle(styleId)
     local hash = joaat(model)
@@ -133,6 +147,13 @@ function Game.RestoreAppearance()
     if saved.appearance then
         pcall(function() exports['illenium-appearance']:setPedAppearance(PlayerPedId(), saved.appearance) end)
     end
+    -- C5: re-give the snapshotted weapon on the restored ped (SetPlayerModel made a
+    -- fresh, empty-handed ped) so the fighter isn't disarmed post-match.
+    if saved.weapon and saved.weapon ~= 0 then
+        GiveWeaponToPed(PlayerPedId(), saved.weapon, saved.ammo or 0, false, true)
+    end
+    saved.weapon = nil
+    saved.ammo = 0
     saved.appearance = nil
     saved.model = nil
 end
