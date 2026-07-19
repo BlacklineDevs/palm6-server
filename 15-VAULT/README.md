@@ -12,9 +12,11 @@ protection and must never bypass the Asset Lifecycle
 
 ## Status
 
-**Intentionally empty** at Phase 1. That is correct, not a gap: no asset has earned
-Approved status yet. The first Vault entries are expected in Phase 3 (Alignment &
-Governance) once brand elements pass review.
+**v1.0.0 Foundation snapshot frozen 2026-07-18** via DEC-004 (Phase 0, Option B). The
+Approved Foundation governance documentation (9 governance docs + DESIGN-BIBLE-v1.0) is
+frozen under `15-VAULT/v1.0.0/00-FOUNDATION/`. Still Candidate and NOT vaulted: the System A
+core identity mark (CD-001) and `COLOR-SYSTEM.md` (CD-008), both visual-dependent. Brand and
+System A assets enter the Vault in Phase 3 once they pass review.
 
 > Note: `00-FOUNDATION/DESIGN-BIBLE-v1.0.md` is marked "Approved v1.0 — Locked in
 > Vault" in its header, but it physically lives in `00-FOUNDATION/` for discoverability

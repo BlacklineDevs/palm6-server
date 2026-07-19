@@ -1,10 +1,9 @@
 # Phase 0 — Creative System Foundation Review (gtarp-conducted)
 
-Version: v0.9.0-rc.1 (Release Candidate — under this review)
-Status: **Review conducted; promotion PROPOSED, not executed.** The Creative System
-remains **Candidate (v0.9.0-rc.1)** until David (Creative Lead + Project Lead) signs the
-promotion. Nothing here marks the system Approved — that is his call per the governance
-rules.
+Version: v1.0.0 (promoted; this review is now executed)
+Status: **Review conducted; promotion EXECUTED via DEC-004 (2026-07-18, Option B).** The
+Creative System documentation is now Approved at v1.0.0 in gtarp. Visual-dependent items
+(System A core mark CD-001, COLOR-SYSTEM CD-008) remain Candidate as tracked debt.
 Conducted: 2026-07-17. Basis: Master Restructuring Plan §4 (Phase 0), scoring against
 `00-FOUNDATION/07-QUALITY-STANDARDS.md` and `08-DESIGN-REVIEW-CHECKLIST.md`.
 
@@ -80,15 +79,15 @@ Two clean ways forward:
   asset is itself marked Approved. This unlocks Phase 3 now without pretending the logo
   exists.
 
-Either way, **the promotion itself (task 0.4) needs your signature** — I have staged it as
-**DEC-004 (Proposed)**, not Approved. On your word I finalize DEC-004, bump the version
-strings to v1.0.0, move the approved Foundation set into `15-VAULT/` (0.5), and log the
-gtarp unlock (0.6).
+The promotion (task 0.4) was signed by David on 2026-07-18 as **DEC-004 (Approved, Option B)**.
+On that signature the version strings were bumped to v1.0.0, the approved Foundation set was
+frozen into `15-VAULT/v1.0.0/` (0.5), and the gtarp Phase 3 unlock was logged (0.6).
 
-## Tasks 0.4–0.6 — staged, awaiting sign-off
-- **0.4 Promote rc.1 → v1.0.0:** drafted as `DECISION-LOG/DECISION-LOG-ENTRY-004.md`
-  (Status: Proposed). Note the numbering: the plan calls this "DEC-002", but gtarp's
+## Tasks 0.4 to 0.6: executed 2026-07-18 (DEC-004, Option B)
+- **0.4 Promote rc.1 to v1.0.0:** signed as `DECISION-LOG/DECISION-LOG-ENTRY-004.md`
+  (Status: Approved, Option B). Numbering: the plan calls this "DEC-002", but gtarp's
   local DEC-002 is the Phase 1 audit, so the local promotion is **DEC-004** (see DEC-003).
-- **0.5 Vault the approved Foundation set:** not done — waits on 0.4.
-- **0.6 Announce + unlock gtarp:** retroactive (gtarp already ran Phase 1/2 on Candidate);
-  will be logged when 0.4 is signed.
+- **0.5 Vault the approved Foundation set:** done. Frozen into `15-VAULT/v1.0.0/00-FOUNDATION/`
+  (9 governance docs + DESIGN-BIBLE-v1.0). COLOR-SYSTEM held at Candidate (CD-008).
+- **0.6 Announce + unlock gtarp:** logged. Retroactive (gtarp already ran Phase 1/2 on
+  Candidate); Phase 3 is now unlocked.

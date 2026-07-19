@@ -1,6 +1,6 @@
 # 14-OPERATIONS (gtarp)
 
-Version: v0.9.0-rc.1 (Release Candidate)
+Version: v1.0.0 (Approved via DEC-004, 2026-07-18)
 Status: Active operational reference for the gtarp repository during the Palm6
 Creative System restructuring. Introduced in Phase 2 (Organization).
 
@@ -28,10 +28,15 @@ system is promoted from **v0.9.0-rc.1 (Candidate)** to **v1.0.0 (Approved)** dur
 **Phase 0 (the Creative System Approval Gate)**, recorded in the *system's* Decision
 Log as its promotion entry.
 
-**In gtarp, Phase 0 has NOT been run.** Per `DEC-001`, gtarp adopted the Creative
-System as **Candidate (v0.9.0-rc.1)** for additive, reversible work only. Therefore:
+**In gtarp, Phase 0 has been run and signed (DEC-004, 2026-07-18).** The Creative System
+documentation is now **Approved at v1.0.0** in gtarp. Per `DEC-001`, gtarp first adopted it
+as Candidate for additive, reversible work; the Option B promotion (DEC-004) then approved
+the audited documentation set, carrying the System A core mark (CD-001) and COLOR-SYSTEM
+refinement (CD-008) as tracked debt. Therefore:
 
-- Nothing in this repository is auto-Approved. The Creative System here is Candidate.
+- Nothing in this repository is auto-Approved by a copied status line. The Creative System
+  documentation set is Approved v1.0.0 via DEC-004; visual-dependent items (System A mark
+  CD-001, COLOR-SYSTEM CD-008) remain Candidate.
 - An asset reaches **Approved** in gtarp **only** via an explicit gtarp Decision Log
   entry (`00-FOUNDATION/09-DECISION-LOG.md`), never by a status line in a copied doc.
 
@@ -52,6 +57,6 @@ Reading guide for copied system docs:
   and `05-DUAL-VISUAL-SYSTEM.md`, not as a standalone local DEC.
 - Where a copied doc says **"DEC-002 (promotion)"**, read it as the promotion entry in the
   system's own log. If/when gtarp runs Phase 0, the local promotion is logged under the
-  **next free gtarp DEC id** — which is **DEC-004** (Proposed) — not `DEC-002`.
+  **next free gtarp DEC id**, which is **DEC-004** (Approved 2026-07-18, Option B), not `DEC-002`.
 
-Until Phase 0 is signed, the system in gtarp is Candidate (v0.9.0-rc.1).
+Phase 0 is signed (DEC-004, 2026-07-18): the Creative System documentation in gtarp is Approved v1.0.0. Visual-dependent items (System A mark CD-001, COLOR-SYSTEM CD-008) remain Candidate.

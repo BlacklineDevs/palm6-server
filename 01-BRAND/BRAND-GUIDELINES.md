@@ -1,7 +1,7 @@
 # Palm6 Brand Guidelines
 
-**Version:** v0.9.0-rc.1 (Release Candidate)  
-**Status:** Candidate in gtarp — copied system reference. NOT Approved here (Phase 0 not run; the local promotion is DEC-004, still Proposed). Nothing is Approved without a gtarp Decision Log entry. See `../14-OPERATIONS/README.md`.
+**Version:** v1.0.0 (system Approved via DEC-004, 2026-07-18)  
+**Status:** Candidate in gtarp. The Creative System documentation was Approved v1.0.0 via DEC-004 (2026-07-18, Option B), but this brand guideline stays Candidate because its System A specifics depend on the System A core identity mark, which does not exist yet (CD-001). It advances to Approved once that mark lands and passes review. Nothing is Approved without a gtarp Decision Log entry. See `../14-OPERATIONS/README.md`.
 
 ## Overview
 
