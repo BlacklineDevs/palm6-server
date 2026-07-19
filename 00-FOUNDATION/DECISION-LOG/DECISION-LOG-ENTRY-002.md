@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-15
 **Decision ID:** DEC-002
-**Decision:** gtarp Phase 1 — post-execution adversarial audit, reconciliation of
+**Decision:** gtarp Phase 1 - post-execution adversarial audit, reconciliation of
 findings, and registration of open blockers requiring an owner ruling.
 **Status:** Approved. Remediation applied (below); both open blockers now resolved (DEC-002a by DEC-005, DEC-002b by DEC-003).
 **Owner:** David Olverson (Palm6 Creative + Dev Lead)
@@ -21,19 +21,19 @@ what remains an owner decision.
   Qbox README is intact; the 5 in-flight `resources/[custom]/` files were left unstaged
   and untouched.
 - **False positives (correctly dropped):** (a) "origin → EvThatGuy = Ev IP entanglement"
-  — the repo was **transferred to the BlacklineDevs org**; Ev no longer owns it (residual:
-  stale URL string, fixed below). (b) "DEC-001 breaks the log template" — it faithfully
+  - the repo was **transferred to the BlacklineDevs org**; Ev no longer owns it (residual:
+  stale URL string, fixed below). (b) "DEC-001 breaks the log template" - it faithfully
   matches the intended example.
 
 ## Remediation applied in this commit
 1. **Dead-link onboarding (was HIGH).** `00-START-HERE.md` / `HANDOFF-TO-CLAUDE.md`
    routed the next session to files/folders that did not exist. Fixed by: adding an
    accurate repo-local `MASTER-INDEX.md`; materializing the two governance homes the docs
-   route to — `19-RFC/` (README + template) and `15-VAULT/` (README, empty by design); and
+   route to - `19-RFC/` (README + template) and `15-VAULT/` (README, empty by design); and
    adding a "Repository State (Phase 1)" note to both onboarding docs marking still-absent
    items (`EXECUTIVE-SUMMARY.md`, `PHILOSOPHY-WHY-THIS-MATTERS.md`, `01-BRAND/`) as
    forthcoming, not errors. The aspirational source `MASTER-INDEX.md` was deliberately
-   **not** copied — it references a large taxonomy that exists nowhere and would import
+   **not** copied - it references a large taxonomy that exists nowhere and would import
    more dead links.
 2. **"Approved" wording drift (was medium).** DEC-001 described Candidate/Draft docs as
    "approved" and marked itself Approved. Reworded: DEC-001's Approved status is now scoped
@@ -43,14 +43,14 @@ what remains an owner decision.
    `EvThatGuy/gtarp` URL to the canonical `BlacklineDevs/gtarp.git`.
 
 ## RESOLVED (both blockers ruled; were OPEN at Phase 1)
-- **DEC-002a — Repo identities for Website & Commercial Scripts (blocks Phase 2 repo /
+- **DEC-002a - Repo identities for Website & Commercial Scripts (blocks Phase 2 repo /
   Website phase).** The spec names them only generically. Confirmed clean mappings:
   Main Server = `BlacklineDevs/gtarp`; Discord Bot = `BlacklineDevs/palm6-bot`. Unresolved:
   the **Website** repo (candidate `davidolverson/palm6-web` deploy vs a separate Blackline
-  canonical — which is the restructuring target?) and **Commercial Scripts** (candidates
-  `fivem-scripts` [no remote, local-only] and `davidolverson/gta-rp-bot-kit` [ambiguous] —
+  canonical - which is the restructuring target?) and **Commercial Scripts** (candidates
+  `fivem-scripts` [no remote, local-only] and `davidolverson/gta-rp-bot-kit` [ambiguous] -
   or a new BlacklineDevs repo). *RESOLVED by DEC-005 (2026-07-18): Website = davidolverson/palm6-web (canonical); Commercial Scripts = deferred BlacklineDevs/palm6-scripts (create when that phase begins). Main = BlacklineDevs/gtarp and Bot = BlacklineDevs/palm6-bot confirmed.*
-- **DEC-002b — Undefined phase gates.** Six spec files gate later work on "Website Phase 4"
+- **DEC-002b - Undefined phase gates.** Six spec files gate later work on "Website Phase 4"
   and "Phase 6 (Cross-Repo Polish)", but the model defines only Phases 1–3. The start
   condition for the Discord Bot and (highest-IP-risk) Commercial Scripts phases is therefore
   undefined. *Action needed: reconcile "Phase 4" → "Phase 3 + post-phase review", and define

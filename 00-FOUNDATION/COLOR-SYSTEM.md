@@ -1,6 +1,6 @@
-# PALM6 Color System — Version 1.0
+# PALM6 Color System - Version 1.0
 
-**Status:** Draft — Based on approved DESIGN-BIBLE v1.0. Awaiting final visual refinement and locking.  
+**Status:** Draft - Based on approved DESIGN-BIBLE v1.0. Awaiting final visual refinement and locking.  
 **Purpose:** Defines the exact color palette, usage rules, tints/shades, and accessibility standards for all Palm6 assets.  
 **Last Updated:** 2026-07-12  
 **Related:** DESIGN-BIBLE-v1.0.md (Section 5)
@@ -46,7 +46,7 @@ The palette must work across digital (UI, web, social), print, in-game signage, 
 **Primary Brand Application**
 - Deep Ocean Teal is the dominant color for most logos, wordmarks, and primary buttons.
 - Warm Heritage Gold is used for premium accents and secondary logos.
-- Never use Coral as the main brand color — it is an accent only.
+- Never use Coral as the main brand color - it is an accent only.
 
 **Government & Emergency Services**
 - Use Navy Authority as the primary color.

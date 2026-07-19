@@ -28,9 +28,9 @@ If the answer to any of these is unclear or negative, the asset needs refinement
 
 Every asset must move through these stages:
 
-- **🟡 Experimental** — Early concepts and explorations.
-- **🟠 Candidate** — Under formal review against the Creative System.
-- **🟢 Approved** — Passed review and moved into the Vault.
-- **⚫ Archived** — Retired but kept for historical reference.
+- **🟡 Experimental** - Early concepts and explorations.
+- **🟠 Candidate** - Under formal review against the Creative System.
+- **🟢 Approved** - Passed review and moved into the Vault.
+- **⚫ Archived** - Retired but kept for historical reference.
 
 Nothing moves into the Vault until it reaches **Approved** status.

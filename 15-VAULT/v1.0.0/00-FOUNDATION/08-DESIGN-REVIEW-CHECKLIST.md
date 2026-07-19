@@ -9,11 +9,11 @@ Use this checklist for every major asset before moving to Candidate status.
 
 ### Design Gates
 
-- [ ] **Gate 1 — Vision**: Supports the North Star?
-- [ ] **Gate 2 — Brand**: Fits the Creative System and Dual Visual System (A or B)?
-- [ ] **Gate 3 — User Experience**: Will players understand and enjoy it?
-- [ ] **Gate 4 — Technical**: Can it be built and maintained well?
-- [ ] **Gate 5 — Production**: Ready for approval and Vault?
+- [ ] **Gate 1 - Vision**: Supports the North Star?
+- [ ] **Gate 2 - Brand**: Fits the Creative System and Dual Visual System (A or B)?
+- [ ] **Gate 3 - User Experience**: Will players understand and enjoy it?
+- [ ] **Gate 4 - Technical**: Can it be built and maintained well?
+- [ ] **Gate 5 - Production**: Ready for approval and Vault?
 
 ### Core Checks
 

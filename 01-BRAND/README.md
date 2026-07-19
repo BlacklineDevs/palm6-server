@@ -21,5 +21,5 @@ outside this repo and supplied by David. The 24 department crests + 2 Verano sta
 are placed and registered (Candidate). Still outstanding: the **System A core identity
 mark**, which keeps the brand half of the Phase 2 quality gate open (tracked as **CD-001**
 in `14-OPERATIONS/CREATIVE-DEBT-TRACKING.md`). The rejected private-business logos are
-being redone (CD-006). Nothing here is Approved without a Decision Log entry — see
+being redone (CD-006). Nothing here is Approved without a Decision Log entry - see
 `14-OPERATIONS/README.md`.

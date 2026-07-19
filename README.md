@@ -1,4 +1,4 @@
-# palm6 — Qbox Custom Resource Layer
+# palm6 - Qbox Custom Resource Layer
 
 This repository is the **custom layer** for a Qbox-based FiveM RP server. It
 holds only the resources, config overrides, SQL migrations, and docs that are
@@ -12,21 +12,21 @@ recipe and must never be committed to this repo.
 
 Phases 1-10 of the build (see `docs/BUILD-ROADMAP.md`) ship:
 
-- **[config_overrides]** — convar / config override resources for
+- **[config_overrides]** - convar / config override resources for
   `qbx_core`, the economy, police, ambulance, civilian jobs, and
   `ox_inventory`.
-- **server_identity** — dark loading screen, default spawn handler,
+- **server_identity** - dark loading screen, default spawn handler,
   Discord rich presence.
-- **server_base** — startup banner, `playerConnecting` logger,
+- **server_base** - startup banner, `playerConnecting` logger,
   `/serverinfo`, ACE-gated `/coords`.
-- **palm6_whitelist_jobs** — emergency-services job whitelist enforcement.
-- **palm6_courier** — signature feature: player-run delivery board with
+- **palm6_whitelist_jobs** - emergency-services job whitelist enforcement.
+- **palm6_courier** - signature feature: player-run delivery board with
   bounty escrow.
-- **palm6_staff** — staff command set + audit log + Discord webhook.
-- **palm6_eventguard** — server-side event ratelimit + amount validation.
-- **palm6_allowlist** — playerConnecting Discord-role + DB allowlist
+- **palm6_staff** - staff command set + audit log + Discord webhook.
+- **palm6_eventguard** - server-side event ratelimit + amount validation.
+- **palm6_allowlist** - playerConnecting Discord-role + DB allowlist
   gate.
-- **palm6_perf** — server-thread hitch sampler + p95/p99 reports.
+- **palm6_perf** - server-thread hitch sampler + p95/p99 reports.
 
 ## Repo layout
 
@@ -81,13 +81,13 @@ This repository is aligned with the approved **Palm6 Creative System**. Creative
 brand, and structural decisions follow the governance defined there.
 
 - **Start here:** [`00-START-HERE.md`](00-START-HERE.md)
-- **Foundation docs:** [`00-FOUNDATION/`](00-FOUNDATION/) — Design Manifesto,
+- **Foundation docs:** [`00-FOUNDATION/`](00-FOUNDATION/) - Design Manifesto,
   Dual Visual System, Brand Pyramid, Quality Standards, Color System, Design Bible.
 - **Decisions are logged:** [`00-FOUNDATION/09-DECISION-LOG.md`](00-FOUNDATION/09-DECISION-LOG.md)
   and entries in [`00-FOUNDATION/DECISION-LOG/`](00-FOUNDATION/DECISION-LOG/).
 
 Non-trivial creative/brand changes go through the RFC + Decision Log process.
 Nothing is treated as final/production-ready without an **Approved** status in the
-Decision Log. This governance layer is additive — it does not change how the server
+Decision Log. This governance layer is additive - it does not change how the server
 resources above are built, deployed, or run.
 

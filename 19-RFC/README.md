@@ -1,4 +1,4 @@
-# 19-RFC — Request for Comment
+# 19-RFC - Request for Comment
 
 This is the home for **RFCs** (Request for Comment) referenced throughout the Palm6
 Creative System. Non-trivial creative, brand, structural, or governance changes are
@@ -13,7 +13,7 @@ proposed here before they are made, then recorded in the Decision Log once resol
 - Anything the Quality Standards or Design Review Checklist flag as non-trivial.
 
 Small, additive, reversible changes (e.g. copying approved docs, fixing typos) do
-**not** need an RFC — but they should still be logged in the Decision Log if significant.
+**not** need an RFC - but they should still be logged in the Decision Log if significant.
 
 ## Process
 
@@ -27,5 +27,5 @@ Small, additive, reversible changes (e.g. copying approved docs, fixing typos) d
 ## Status
 
 Phase 2 complete. `RFC-001-resource-and-asset-metadata-standard.md` is filed here and
-**Approved** (adopted via DEC-003) — the resource/asset metadata standard. New RFCs
+**Approved** (adopted via DEC-003) - the resource/asset metadata standard. New RFCs
 continue from RFC-002.

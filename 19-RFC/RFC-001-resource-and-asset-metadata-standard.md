@@ -3,7 +3,7 @@
 **Author:** Dev Lead / Creative Lead (Palm6)
 **Date:** 2026-07-17
 **Status:** Approved
-**Affects:** gtarp — `resources/[custom]/*`, `assets/*`, `17-ASSET-REGISTRY/ASSET-REGISTRY.md`
+**Affects:** gtarp - `resources/[custom]/*`, `assets/*`, `17-ASSET-REGISTRY/ASSET-REGISTRY.md`
 
 ## Summary
 
@@ -23,9 +23,9 @@ pattern the Website / Bot / Commercial Scripts repos inherit.
 
 ### 1. Custom resource manifest metadata (`fxmanifest.lua`)
 Every `resources/[custom]/palm6_*` resource's `fxmanifest.lua` SHOULD carry:
-- `author` — `'Palm6'` (or the specific author for third-party-derived resources).
-- `version` — SemVer (`'x.y.z'`); bump on meaningful change.
-- `description` — one line: what the resource does.
+- `author` - `'Palm6'` (or the specific author for third-party-derived resources).
+- `version` - SemVer (`'x.y.z'`); bump on meaningful change.
+- `description` - one line: what the resource does.
 - A top-of-file banner comment already used across the layer (purpose + money/authority
   notes) remains the human reference; this RFC does not change code, only standardizes
   the manifest fields.
@@ -46,7 +46,7 @@ owner, **license/ownership**, commercial flag, Decision Log ref, notes.
   (`palm6_*`), because the resources ship and evolve together as the server. A single
   resource is split into its own row only when it is (a) proposed for reuse/sale, (b)
   under individual review for Approved status, or (c) deprecated/archived (so its
-  retirement is auditable — e.g. `prop_spawn`).
+  retirement is auditable - e.g. `prop_spawn`).
 - **Media** (icons, brand marks, props, vehicles, clothing, EUP, audio) is registered
   **per file or per coherent set** (e.g. "item icons" is one set row; each brand mark
   is its own row once placed, because brand marks are individually governed).
@@ -61,7 +61,7 @@ owner, **license/ownership**, commercial flag, Decision Log ref, notes.
 ## Alternatives Considered
 
 - **Per-resource registry rows for all 56 resources.** Rejected for now: high churn,
-  low signal — the layer ships as a unit. RFC allows splitting a resource out when it
+  low signal - the layer ships as a unit. RFC allows splitting a resource out when it
   genuinely needs individual governance.
 - **Embed metadata in a sidecar `.meta.json` per asset.** Rejected: duplicates the
   registry, drifts from it. The registry is the single source of truth.

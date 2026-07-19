@@ -1,18 +1,18 @@
-# PALM6 Design Bible — Version 1.0
+# PALM6 Design Bible - Version 1.0
 
-**Status:** APPROVED v1.0 — Locked in Vault. Executive Director approval confirmed 2026-07-12. 
+**Status:** APPROVED v1.0 - Locked in Vault. Executive Director approval confirmed 2026-07-12. 
 **Purpose:** This is the constitution for every piece of PALM6. Every logo, UI screen, building sign, vehicle livery, social post, and line of code must align with this document.  
 **Last Updated:** 2026-07-12  
 **Owner:** Executive Office (Creative Director + Production Lead)
 
 **Changelog:**
 - v1.0 (2026-07-12): Initial foundation synthesized from creative direction. Core mission, vision, 4 permanent rules, visual identity direction, Design Review Checklist, North Star philosophy, and dedicated Player Identity pillar.
-- APPROVED v1.0 — Locked in Vault on 2026-07-12 after Executive review.
+- APPROVED v1.0 - Locked in Vault on 2026-07-12 after Executive review.
 
 ---
 
 ## 1. Mission
-Palm6 exists to deliver a premium, cinematic roleplay experience that feels like its own complete game — not "another GTA server."
+Palm6 exists to deliver a premium, cinematic roleplay experience that feels like its own complete game - not "another GTA server."
 
 We build with the same discipline, consistency, and polish that Rockstar applies to its own brands. Players should feel they are stepping into a living, breathing world with its own identity, history, economy, and visual language.
 
@@ -27,7 +27,7 @@ We achieve this through obsessive consistency, professional-grade design systems
 ## 2.5 Design Philosophy (North Star)
 Palm6 is built like a premium fictional universe with real-world production values.
 
-We reject "good enough for RP" aesthetics. Every element — from a police badge to a luxury real estate logo to a phone notification — must feel intentional, cohesive, and timeless. 
+We reject "good enough for RP" aesthetics. Every element - from a police badge to a luxury real estate logo to a phone notification - must feel intentional, cohesive, and timeless. 
 
 The goal is not to imitate Rockstar. The goal is to earn the same level of respect for craft, attention to detail, and world integrity that players associate with the best single-player titles. 
 
@@ -68,8 +68,8 @@ Every major system (phone, MDT, business panels, vehicle liveries, clothing, eve
 - **Confident but not arrogant**
 - **Polished and cinematic**
 - **Tropical luxury with grit** (Palm6 State has beautiful coastlines, wealthy districts, industrial ports, and real crime/problems)
-- **Modern, clean, and premium** — think high-end real estate branding meets grounded law enforcement and street-level authenticity
-- **Warm yet professional** — inviting for new players, respected by veterans
+- **Modern, clean, and premium** - think high-end real estate branding meets grounded law enforcement and street-level authenticity
+- **Warm yet professional** - inviting for new players, respected by veterans
 
 **Tone of Voice (for all official communication):**
 - Direct, clear, and slightly elevated.
@@ -97,7 +97,7 @@ We use a small, carefully chosen set of high-quality typefaces across all touchp
 - Strict hierarchy: One display face + one body face is usually enough.
 - All text must remain highly legible at small sizes (mobile, in-game UI, distance signage).
 
-### Color System (Initial Direction — to be refined with actual palette)
+### Color System (Initial Direction - to be refined with actual palette)
 Palm6 draws from tropical luxury, coastal Florida grit, and modern corporate aesthetics.
 
 **Core Direction:**
@@ -120,14 +120,14 @@ Palm6 draws from tropical luxury, coastal Florida grit, and modern corporate aes
 - Subtle micro-interactions in UI (gentle spring, clean fades).
 - Logo reveals and loading sequences should feel premium and intentional.
 - Avoid overly bouncy or "gamey" animations unless contextually appropriate (e.g., arcade-style in certain entertainment venues).
-- Performance is non-negotiable — animations must not impact gameplay.
+- Performance is non-negotiable - animations must not impact gameplay.
 
 ### Iconography & UI Language
 - Clean, geometric, consistent stroke weight.
 - Rounded corners on cards and buttons (modern, friendly but professional).
 - Strong use of negative space.
 - Icons must work at 24px and scale beautifully.
-- Glassmorphism or subtle depth only where it enhances readability and premium feel — never as a crutch.
+- Glassmorphism or subtle depth only where it enhances readability and premium feel - never as a crutch.
 
 ## 6. World-Building Rules
 - Palm6 is its own fictional state (not Leonida or any existing GTA map).
@@ -185,7 +185,7 @@ All future work in Brand, World, Government, UI, Corporations, etc. must referen
 Next actions after Executive approval:
 - Create dedicated COLOR-SYSTEM.md with locked palette, tints, accessibility rules, and visual references.
 - Finalize exact typography pairings with specimen examples.
-- Begin Phase A: Brand Foundation — logo system explorations, primary/secondary marks, icon set direction.
+- Begin Phase A: Brand Foundation - logo system explorations, primary/secondary marks, icon set direction.
 - Expand into detailed World Bible (02-WORLD/) and first wave of fictional corporations (04-CORPORATIONS/).
 - Develop UI component system and design tokens (05-UI/).
 

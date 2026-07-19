@@ -7,8 +7,8 @@ The single per-repository Asset Registry for gtarp lives in
 [`ASSET-REGISTRY.md`](./ASSET-REGISTRY.md). It is the authoritative inventory of the
 creative and functional assets that live in or ship from this repository.
 
-- `ASSET-REGISTRY-TEMPLATE.md` — the blank template (system reference).
-- `ASSET-REGISTRY.md` — **the populated gtarp registry** (source of truth for this repo).
+- `ASSET-REGISTRY-TEMPLATE.md` - the blank template (system reference).
+- `ASSET-REGISTRY.md` - **the populated gtarp registry** (source of truth for this repo).
 
 **Rules (from the template + `14-OPERATIONS/ASSET-LIFECYCLE.md`):**
 - If an asset is not in the registry, it is not tracked; an untracked asset must not

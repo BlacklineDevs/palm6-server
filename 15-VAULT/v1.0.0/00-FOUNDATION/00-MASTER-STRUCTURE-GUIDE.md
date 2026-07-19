@@ -12,15 +12,15 @@ Every repo must feel like it belongs to the same professional studio. Structure 
 
 ## Universal Folders (Present in Most Repos)
 
-- `00-FOUNDATION/` — Creative System documents (Design Bible, North Star, etc.)
-- `01-BRAND/` — Brand assets (logos, UI kit, color system, typography)
-- `docs/` — Technical and project documentation
-- `src/` or `resources/` — Main code / assets
-- `assets/` — Organized media, props, textures, etc.
-- `tools/` — Utility scripts and automation
-- `deploy/` or `INFRA/` — Deployment and infrastructure
-- `tests/` — Test files
-- `.github/` — GitHub workflows
+- `00-FOUNDATION/` - Creative System documents (Design Bible, North Star, etc.)
+- `01-BRAND/` - Brand assets (logos, UI kit, color system, typography)
+- `docs/` - Technical and project documentation
+- `src/` or `resources/` - Main code / assets
+- `assets/` - Organized media, props, textures, etc.
+- `tools/` - Utility scripts and automation
+- `deploy/` or `INFRA/` - Deployment and infrastructure
+- `tests/` - Test files
+- `.github/` - GitHub workflows
 
 ---
 
@@ -31,11 +31,11 @@ Every repo must feel like it belongs to the same professional studio. Structure 
 - `00-FOUNDATION/`
 - `01-BRAND/`
 - `docs/`
-- `resources/` — FiveM resources
-  - `[custom]/` — Palm6 custom scripts
-  - `[core]/` — Framework overrides
+- `resources/` - FiveM resources
+  - `[custom]/` - Palm6 custom scripts
+  - `[core]/` - Framework overrides
 - `sql/`
-- `assets/` — Props, vehicles, clothing
+- `assets/` - Props, vehicles, clothing
 - `tools/`
 - `deploy/`
 
@@ -44,8 +44,8 @@ Every repo must feel like it belongs to the same professional studio. Structure 
 - `00-FOUNDATION/`
 - `01-BRAND/`
 - `docs/`
-- `src/` — Next.js / frontend code
-- `public/assets/` — Images, fonts, etc.
+- `src/` - Next.js / frontend code
+- `public/assets/` - Images, fonts, etc.
 - `components/`
 - `pages/` or `app/`
 - `deploy/`
@@ -55,7 +55,7 @@ Every repo must feel like it belongs to the same professional studio. Structure 
 - `00-FOUNDATION/`
 - `01-BRAND/`
 - `docs/`
-- `src/` — Bot code
+- `src/` - Bot code
 - `commands/`
 - `events/`
 - `utils/`
@@ -66,8 +66,8 @@ Every repo must feel like it belongs to the same professional studio. Structure 
 - `00-FOUNDATION/`
 - `01-BRAND/`
 - `docs/`
-- `assets/` — Sellable items (vehicles, clothing, props)
-- `packages/` — Individual script packages
+- `assets/` - Sellable items (vehicles, clothing, props)
+- `packages/` - Individual script packages
 - `examples/`
 - `tools/`
 

@@ -1,4 +1,4 @@
-# gtarp Phase 2 — Inventory → Destination Map
+# gtarp Phase 2 - Inventory → Destination Map
 
 Version: v0.9.0-rc.1 (Release Candidate)
 Status: Phase 2 (Organization) task 2.1 deliverable. Maps every top-level item in the
@@ -12,14 +12,14 @@ FiveM dictates `resources/ · sql/ · custom.cfg` locations, so Phase 2 is mostl
 
 ## Target structure (Master Plan §2.2, gtarp)
 `00-FOUNDATION/` · `01-BRAND/` · `docs/` · `resources/` (`[custom]`, `[core]`) · `sql/` ·
-`assets/` · `tools/` · `deploy/` — plus the universal governance folders introduced in
+`assets/` · `tools/` · `deploy/` - plus the universal governance folders introduced in
 Phase 1/2 (`15-VAULT/`, `19-RFC/`, `17-ASSET-REGISTRY/`, `14-OPERATIONS/`, `20-TEMPLATES/`).
 
 ## Map
 
 | Current item | Type | Destination | Action | Notes |
 |---|---|---|---|---|
-| `resources/` (`[custom]`) | code | `resources/` | **keep** | FiveM load path — must not move. Conforms. `[core]/` (framework overrides) is a §2.2 target folder but is **intentionally absent** — Palm6 overrides no framework files, so FiveM never creates that resource group; add it only if/when an override is needed. |
+| `resources/` (`[custom]`) | code | `resources/` | **keep** | FiveM load path - must not move. Conforms. `[core]/` (framework overrides) is a §2.2 target folder but is **intentionally absent** - Palm6 overrides no framework files, so FiveM never creates that resource group; add it only if/when an override is needed. |
 | `sql/` | migrations | `sql/` | **keep (append-only)** | Never reorder/rewrite; migrations are append-only during restructuring. |
 | `assets/ox_icons/` | media | `assets/` | **keep** | Conforms. Now registered in `17-ASSET-REGISTRY/`. |
 | `tools/` | scripts | `tools/` | **keep** | Conforms. |

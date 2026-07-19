@@ -1,4 +1,4 @@
-# 15-VAULT — Approved Assets Only
+# 15-VAULT - Approved Assets Only
 
 The Vault holds **only** materials that have reached **Approved** status through the
 Decision Log. It is the single place where "final / production-ready" lives.
@@ -18,7 +18,7 @@ frozen under `15-VAULT/v1.0.0/00-FOUNDATION/`. Still Candidate and NOT vaulted: 
 core identity mark (CD-001) and `COLOR-SYSTEM.md` (CD-008), both visual-dependent. Brand and
 System A assets enter the Vault in Phase 3 once they pass review.
 
-> Note: `00-FOUNDATION/DESIGN-BIBLE-v1.0.md` is marked "Approved v1.0 — Locked in
+> Note: `00-FOUNDATION/DESIGN-BIBLE-v1.0.md` is marked "Approved v1.0 - Locked in
 > Vault" in its header, but it physically lives in `00-FOUNDATION/` for discoverability
 > alongside the rest of the foundation. Treat it as the first Vault-grade document; a
 > future RFC may relocate a canonical copy here.

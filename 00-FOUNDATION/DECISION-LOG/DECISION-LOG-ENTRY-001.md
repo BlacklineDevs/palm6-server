@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-14
 **Decision ID:** DEC-001
-**Decision:** Start Palm6 Creative System Restructuring — gtarp Phase 1 (Foundation)
-**Status:** Approved — scoped strictly to the *process decision* to begin additive,
+**Decision:** Start Palm6 Creative System Restructuring - gtarp Phase 1 (Foundation)
+**Status:** Approved - scoped strictly to the *process decision* to begin additive,
 reversible Phase-1 work. This entry does **not** approve the content of the Creative
 System, which remains **Candidate (v0.9.0-rc.1)** until it passes review per its own rules.
 **Owner:** David Olverson (Palm6 Creative + Dev Lead)
@@ -12,7 +12,7 @@ System, which remains **Candidate (v0.9.0-rc.1)** until it passes review per its
 ## Context
 The gtarp repository (canonical remote `BlacklineDevs/gtarp`; Palm6 Qbox custom
 resource layer) is the first of four Palm6 repositories to be aligned with the Palm6
-Creative System (currently **Candidate, v0.9.0-rc.1** — target v1.0.0 after review).
+Creative System (currently **Candidate, v0.9.0-rc.1** - target v1.0.0 after review).
 Execution order is gtarp → Website → Discord Bot → Commercial Scripts, per the
 handoff package.
 

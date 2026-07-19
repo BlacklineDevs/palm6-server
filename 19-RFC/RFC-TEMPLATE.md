@@ -12,7 +12,7 @@ One paragraph: what is being proposed and why.
 The problem this solves. What is broken, missing, or at risk if we do nothing.
 
 ## Proposal
-The concrete change. Be specific — files, structure, rules, wording.
+The concrete change. Be specific - files, structure, rules, wording.
 
 ## Alternatives Considered
 What else was weighed, and why this option wins.

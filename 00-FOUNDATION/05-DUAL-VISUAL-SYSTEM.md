@@ -7,7 +7,7 @@
 
 Palm6 uses **two distinct but complementary visual systems**. Understanding the difference between them is essential.
 
-## System A — Identity (The Logo System)
+## System A - Identity (The Logo System)
 
 **Purpose:** This is the official, timeless representation of Palm6.
 
@@ -35,7 +35,7 @@ Palm6 uses **two distinct but complementary visual systems**. Understanding the 
 
 **Rule:** The Identity system must never rely on cinematic effects, glows, backgrounds, or dramatic lighting to look good.
 
-## System B — Marketing (The Emotional System)
+## System B - Marketing (The Emotional System)
 
 **Purpose:** This is where we create emotion, atmosphere, and the "GTA6 feel."
 
