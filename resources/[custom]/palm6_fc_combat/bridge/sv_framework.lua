@@ -185,3 +185,38 @@ function Bridge.Facing(targetSrc, attackerSrc)
     local fwd = vec3(-math.sin(h), math.cos(h), 0.0)
     return (fwd.x * dir.x + fwd.y * dir.y) > 0.25
 end
+
+-- ============================================================================
+-- §19 PvE CPU-actor geometry. The dark-PvE CPU is a SERVER-OWNED logical entity
+-- with NO src (§19.1) — it has a logical {x,y,z} position var, never a ped the
+-- server can read. These variants measure reach/facing against that logical
+-- position so the SAME §6 connect validator works for a CPU actor. Every one is
+-- FAIL-CLOSED: a nil/malformed pos returns "no reach" / "not facing" so a
+-- mis-plumbed CPU seat can never land or absorb a hit it shouldn't (§19.4).
+-- ============================================================================
+
+-- Distance (m) from an online player's ped to a logical {x,y,z}; nil (fail-
+-- closed: caller treats as out-of-reach) if the ped is unreadable OR pos is bad.
+function Bridge.ReachToPos(src, pos)
+    if type(pos) ~= 'table' or type(pos.x) ~= 'number' or type(pos.y) ~= 'number' then return nil end
+    local ped = GetPlayerPed(src)
+    if not ped or ped == 0 then return nil end
+    return #(GetEntityCoords(ped) - vec3(pos.x, pos.y, pos.z or 0.0))
+end
+
+-- Is targetSrc's ped facing a logical position `pos` (the CPU attacker)? Same
+-- ~75deg frontal-arc test as Bridge.Facing, but the attacker is a logical point
+-- instead of a ped. False (fail-closed) if the ped or pos is unreadable — so a
+-- human whose facing can't be proven never gets the block-chip discount.
+function Bridge.FacingPos(targetSrc, pos)
+    if type(pos) ~= 'table' or type(pos.x) ~= 'number' or type(pos.y) ~= 'number' then return false end
+    local tp = GetPlayerPed(targetSrc)
+    if not tp or tp == 0 then return false end
+    local dir = vec3(pos.x, pos.y, pos.z or 0.0) - GetEntityCoords(tp)
+    local len = #dir
+    if len < 0.01 then return true end
+    dir = dir / len
+    local h = math.rad(GetEntityHeading(tp))
+    local fwd = vec3(-math.sin(h), math.cos(h), 0.0)
+    return (fwd.x * dir.x + fwd.y * dir.y) > 0.25
+end

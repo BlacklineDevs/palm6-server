@@ -15,7 +15,7 @@
 -- ---------------------------------------------------------------------------
 
 local SELECT_WINDOW_SEC = 15   -- client-UX select window (not money); defaults applied if a side never picks
-local RATE = { fcchallenge = 3, fcaccept = 1, fcdecline = 1, fcselect = 1 }
+local RATE = { fcchallenge = 3, fcaccept = 1, fcdecline = 1, fcselect = 1, fcpve = 3 }
 
 local matches        = {}   -- [matchId] = { cidA,cidB,srcA,srcB, selA,selB, nameA,nameB, modelA,modelB, roundStarted,resolving,inFinisher,startedAt,wentLive,bettingEndsAt }
 local activeByCid    = {}   -- [cid]  = matchId (in-memory quick lookup; DB is the authority)
@@ -261,6 +261,84 @@ local function goLiveAndCountdown(matchId)
             end
         end
     end)
+end
+
+-- ---------------------------------------------------------------------------
+-- §19 dark-PvE lifecycle (server). A solo human opens a MONEY-INERT CPU bout via
+-- palm6_fightclub:OpenPveMatch (is_pve=1, entry_pot=0, betting_ends_at=NOW()).
+-- We build the same in-memory shell a PvP match uses — but fighter2 is the
+-- server-owned CPU: cidB = the '__CPU__:'..id sentinel, srcB = nil, and its
+-- preload ack is PRE-SET so the F4 gate only waits on the human. Then we route
+-- straight through goLiveAndCountdown (no betting window) — the identical LIVE
+-- path, so the client can't tell PvE from PvP and needs no special-casing to fight.
+-- The CPU actor + aiThink brain are seeded later by startRound's is_pve branch.
+-- ---------------------------------------------------------------------------
+local function cpuForTier(tier)
+    local cfg = fcCore()
+    local list = cfg and cfg.Pve and cfg.Pve.CpuFighters
+    if type(list) ~= 'table' then return nil end
+    for _, c in ipairs(list) do
+        if tonumber(c.tier) == tier then return c end
+    end
+    return nil
+end
+
+-- Returns true if the bout opened. Human fights as the DEFAULT fighter in P2 (the
+-- client has no PvE select yet, so server + client must agree on the default);
+-- a PvE fighter-select lands with the client puppet phase.
+local function startPveMatch(humanSrc, humanCid, tier)
+    local cfg = fcCore()
+    local cpu = cpuForTier(tier)
+    if not cpu then
+        Bridge.Notify(humanSrc, 'Fight Club', 'No CPU challenger for that tier.', 'error')
+        return false
+    end
+
+    local fighterH, styleH = cfg.DefaultFighter, cfg.DefaultStyle
+
+    -- OpenMatch-equivalent money-inert row. pcall-wrapped: a throw/nil is the single
+    -- failure branch (nothing was charged, so nothing to refund — §19.2).
+    local ok, matchId = pcall(function()
+        return exports.palm6_fightclub:OpenPveMatch(humanCid, tier, styleH, fighterH, cpu.id, cpu.styleId)
+    end)
+    if not ok or not matchId or matchId == 0 then
+        Bridge.Notify(humanSrc, 'Fight Club', 'Could not start the CPU bout — try again.', 'error')
+        return false
+    end
+
+    local sentinel = '__CPU__:' .. matchId
+
+    -- Resolve the human's fighter model + name BEFORE building the shell (mirrors
+    -- beginAccepted's F3 guards so no unguarded call can throw mid-setup).
+    local function safeFighter(id)
+        local okF, f = pcall(function() return exports.palm6_fc_core:GetFighter(id) end)
+        return (okF and f) or nil
+    end
+    local fH     = safeFighter(fighterH) or safeFighter(cfg.DefaultFighter)
+    local modelH = (fH and fH.model) or 'mp_m_freemode_01'
+    local okName, nameH = pcall(function() return Bridge.GetPlayerName(humanSrc) end)
+    nameH = (okName and nameH) or ('fighter %s'):format(tostring(humanCid))
+
+    matches[matchId] = {
+        cidA = humanCid, cidB = sentinel, srcA = humanSrc, srcB = nil,
+        selA = { fighterId = fighterH, styleId = styleH },
+        selB = { fighterId = cpu.id, styleId = cpu.styleId },
+        nameA = nameH, nameB = cpu.name or 'CPU',
+        modelA = modelH, modelB = cpu.model or 'mp_m_freemode_01',
+        roundStarted = false, resolving = false, inFinisher = {}, startedAt = 0,
+        wentLive = false, bettingEndsAt = now(),
+        isPve = true, cpuTier = tier,
+        ready = { [sentinel] = true },   -- CPU auto-ready: the F4 preload gate only waits on the human
+    }
+    activeByCid[humanCid] = matchId
+    activeBySrc[humanSrc] = matchId
+
+    -- No betting window — straight to countdown/LIVE via the shared path.
+    goLiveAndCountdown(matchId)
+    Bridge.Notify(humanSrc, 'Fight Club',
+        ('Sparring %s (Tier %d) — square up.'):format(cpu.name or 'a challenger', tier), 'inform')
+    dbg(('PvE match #%d opened: %s vs CPU %s (tier %d)'):format(matchId, tostring(humanCid), cpu.id, tier))
+    return true
 end
 
 -- C4: sportsbook 2s tote board + closing line. Rebroadcast the live parimutuel
@@ -551,6 +629,63 @@ AddEventHandler('onResourceStart', function(res)
     end)
 end)
 
+-- §19.4 population gate: is any OTHER human standing at the ring? PvE is a
+-- "no real opponents around" mode (RequireNoHumanAtRing) — if a second human is
+-- at the ring they should be challenged, not shadow-boxed past. Skips selfSrc.
+local function otherHumanAtRing(selfSrc)
+    for _, ps in ipairs(GetPlayers()) do
+        local s = tonumber(ps)
+        if s and s ~= selfSrc and atRing(s) then return true end
+    end
+    return false
+end
+
+-- /fcpve [tier 1-5] — open a dark-PvE bout vs the tier's house CPU. Gated on
+-- Config.Pve.Enabled (ships dark), the feature Enabled + boot no-contest, being
+-- at the ring, not already in a match, a free ring, and the §19.4 population gate.
+Bridge.RegisterCommand('fcpve', function(src, args)
+    if src == 0 then return end
+    if not enabled() or not bootDone then return end
+    if not rl(src, 'fcpve') then return end
+
+    local pve = (fcCore() or {}).Pve
+    if not pve or pve.Enabled ~= true then
+        Bridge.Notify(src, 'Fight Club', 'Solo sparring is not available.', 'error')
+        return
+    end
+
+    local cid = Bridge.GetCitizenId(src)
+    if not cid then return end
+    if not atRing(src) then
+        Bridge.Notify(src, 'Fight Club', ('You must be at %s.'):format(fcCore().Ring.label), 'error')
+        return
+    end
+    if activeMatchForCitizen(cid) then
+        Bridge.Notify(src, 'Fight Club', 'You already have a match.', 'error')
+        return
+    end
+    if ringBusy() then
+        Bridge.Notify(src, 'Fight Club', 'The ring is in use.', 'error')
+        return
+    end
+    if pve.RequireNoHumanAtRing and otherHumanAtRing(src) then
+        Bridge.Notify(src, 'Fight Club', 'Another fighter is at the ring — challenge them instead.', 'error')
+        return
+    end
+    local maxPop = tonumber(pve.MaxPop) or 6
+    if #GetPlayers() > maxPop then
+        Bridge.Notify(src, 'Fight Club', 'Too many players online for solo sparring — find a real opponent.', 'error')
+        return
+    end
+
+    -- tier: default 1, clamped to the configured tier count.
+    local maxTier = (type(pve.Tiers) == 'table' and #pve.Tiers) or 5
+    local tier = math.floor(tonumber(args[1]) or 1)
+    if tier < 1 then tier = 1 elseif tier > maxTier then tier = maxTier end
+
+    startPveMatch(src, cid, tier)
+end)
+
 -- T7/T8 read/mutate match state through this export (never re-declare matches[]).
 exports('MatchState', function(matchId) return matches[matchId] end)
 
@@ -618,7 +753,7 @@ local function startRound(matchId)
             SELECT fighter1_citizenid, fighter2_citizenid,
                    fighter1_name, fighter2_name,
                    fighter1_model, fighter2_model,
-                   style1, style2
+                   style1, style2, is_pve, cpu_tier
               FROM palm6_fightclub_matches WHERE id = ?]], { matchId })
     end)
     if not row then Active[matchId] = nil; return end   -- transient DB fail; retry next pass
@@ -649,8 +784,185 @@ local function startRound(matchId)
             Player(s.src).state:set('fc:slot', s.slot, true)
         end
     end
+
+    -- §19.1 dark-PvE: slot 2 is the server-owned CPU logical actor (src=nil). Mark
+    -- its Combat seat with the CPU fields the connect validator + brain read, seed
+    -- its logical position near the human, then start the aiThink brain. Guarded on
+    -- is_pve so a normal PvP round is byte-for-byte unaffected.
+    if tonumber(row.is_pve) == 1 then
+        local cpu = Combat[ckey(matchId, row.fighter2_citizenid)]
+        local humanSrc = st.srcA
+        if cpu and humanSrc then
+            startCpuActor(matchId, cpu, humanSrc, tonumber(row.cpu_tier) or 1)
+        end
+    end
+
     Dirty[matchId] = true
     if DBG then print(('[palm6_fc_combat] round started #%d'):format(matchId)) end
+end
+
+-- ============================================================================
+-- §19 dark-PvE CPU brain (server-authoritative). The CPU is a SERVER-OWNED
+-- logical actor: its HP/stam/blazin live on its Combat seat (seeded by startRound
+-- exactly like a human seat, but with src=nil + isCpu=true), its POSITION is a
+-- server var stepped toward the human each tick (§19.1 locomotion, leashed to the
+-- ring so it can't be kited out of reach), and EVERY move choice is authored here
+-- by the tier policy (§19.3). It never trusts a client, never sends a net event
+-- (no spoof surface), and never touches money/rep (is_pve=1 + '__' sentinel). One
+-- aiThink thread per live PvE match, gated on a liveness flag AND the live match
+-- state, so it exits within one tick of resolve/teardown — no leak (§19.6).
+-- Lives in the T7 chunk so it binds Combat/ckey/ms/Dirty/Active/resolveFight/MOVES.
+-- ============================================================================
+local PveActors = {}   -- [matchId] = { alive = true }  (aiThink liveness flag, §19.1 review fix)
+
+local function pveConfig()
+    local ok, c = pcall(function() return exports.palm6_fc_core:Config() end)
+    return ok and type(c) == 'table' and c.Pve or nil
+end
+
+-- The tier row (reactionMs / blockChance / aggression / comboDepth). Difficulty is
+-- POLICY-ONLY — never HP/damage inflation (§19.2) — so a CPU win stays cash-neutral.
+local function tierPolicy(tier)
+    local p = pveConfig()
+    if p and type(p.Tiers) == 'table' then
+        for _, t in ipairs(p.Tiers) do if t.tier == tier then return t end end
+        return p.Tiers[1]
+    end
+    return { tier = tier, reactionMs = 600, blockChance = 0.20, aggression = 0.60, comboDepth = 2 }
+end
+
+-- Authored move pick: light-biased, heavier tiers reach for heavies more often,
+-- and a heavy the CPU can't afford falls back to a light. Uses the SAME §6a Move
+-- table the human draws from (no bespoke CPU damage — policy is timing, not stats).
+local function cpuPickMove(cpu, policy)
+    if not MOVES then return nil end
+    local lights, heavies = {}, {}
+    for id, mv in pairs(MOVES) do
+        if mv.kind == 'heavy' then heavies[#heavies + 1] = id else lights[#lights + 1] = id end
+    end
+    if #lights == 0 and #heavies == 0 then return nil end
+    local heavyBias = math.min(0.7, 0.15 + 0.10 * (policy.tier or 1))
+    local pool = (#heavies > 0 and math.random() < heavyBias) and heavies or lights
+    if #pool == 0 then pool = (#lights > 0) and lights or heavies end
+    local id = pool[math.random(1, #pool)]
+    local move = MOVES[id]
+    if move and move.kind == 'heavy' and cpu.stam < (move.staminaCost or 0) and #lights > 0 then
+        move = MOVES[lights[math.random(1, #lights)]]   -- can't afford the heavy -> jab instead
+    end
+    return move
+end
+
+-- The CPU lands an authored strike on the human. Server-authoritative mirror of
+-- the §6 connect handler with the human as target: reach = human ped -> CPU
+-- logical pos, block-chip respects the human's guard+facing, damage/momentum are
+-- the SAME numbers a human attacker would deal. A KO flips the row through the one
+-- resolveFight hub with the CPU sentinel as winner (is_pve=1 + '__' guard => no
+-- rep, no cash — a bare loss for the human).
+local function cpuStrike(matchId, cpu, human, humanSrc, move)
+    if not move or not cpu.pos then return end
+    local reach = Bridge.ReachToPos(humanSrc, cpu.pos)               -- fail-closed: nil pos -> no reach
+    if not reach or reach > move.reach then return end
+    local dmg = move.damage
+    if human.blocking and Bridge.FacingPos(humanSrc, cpu.pos) then
+        dmg = math.floor(move.damage * (move.chipPct or 0))          -- chip through the guard
+        human.stam = math.max(0, human.stam - (move.blockStamCost or 0))
+        if human.stam <= 0 then human.blocking = false end
+    end
+    human.hp = human.hp - dmg
+    local cap = (BLZ and BLZ.FullThreshold) or 100
+    cpu.blazin   = math.min(cap, cpu.blazin + (MOM.PerLandedHit or 0))
+    human.blazin = math.min(cap, human.blazin + (MOM.PerTakenHit or 0))
+    Dirty[matchId] = true
+    if human.hp <= 0 then
+        if humanSrc then TriggerClientEvent('palm6_fc_combat:koRagdoll', humanSrc, { matchId = matchId }) end
+        resolveFight(matchId, cpu.cid, 'ko')                         -- CPU wins; cpu.cid is the '__CPU__' sentinel
+    end
+end
+
+-- Boot the CPU actor: mark its seat, seed its logical position near the human, and
+-- spawn the single aiThink thread. GLOBAL (called from startRound across the same
+-- chunk) — mirrors the resolveFight/teardownMatch/Fin cross-binding convention.
+function startCpuActor(matchId, cpu, humanSrc, tier)
+    cpu.isCpu = true
+    cpu.tier  = tier
+    cpu.cd    = cpu.cd or {}
+    local hc = Bridge.GetCoords(humanSrc)
+    if hc then
+        cpu.pos = { x = hc.x + 1.5, y = hc.y + 1.5, z = hc.z }        -- square up ~2m off the human
+    elseif RING then
+        cpu.pos = { x = RING.coords.x, y = RING.coords.y, z = RING.coords.z }
+    else
+        cpu.pos = { x = 0.0, y = 0.0, z = 0.0 }
+    end
+
+    PveActors[matchId] = { alive = true }
+    local policy    = tierPolicy(tier)
+    local pcfg      = pveConfig() or {}
+    local tickMs    = math.max(100, math.floor(tonumber(pcfg.AiTickMs) or 250))
+    local stepSpeed = tonumber(pcfg.CpuStepSpeed) or 2.2
+    local ringRad   = (RING and RING.radius) or 15.0
+    local ringC     = RING and RING.coords or nil
+
+    CreateThread(function()
+        local lastSwingMs = 0
+        while true do
+            Wait(tickMs)
+            local actor = PveActors[matchId]
+            if not actor or not actor.alive then return end          -- liveness gate (§19.1/§19.6)
+            local st = ms(matchId)
+            if not st or not st.roundStarted or st.resolving or not Active[matchId] then
+                PveActors[matchId] = nil                             -- resolved/torn down -> stop cleanly
+                return
+            end
+            local human = Combat[ckey(matchId, st.cidA)]
+            local self  = Combat[ckey(matchId, cpu.cid)]
+            if not human or not self or not self.pos then PveActors[matchId] = nil; return end
+
+            -- Locomotion (§19.1): step the logical pos toward the human, stopping at
+            -- striking range, then leash inside the ring so it can't be kited out.
+            local hcoords = Bridge.GetCoords(st.srcA)
+            if hcoords then
+                local dx, dy = hcoords.x - self.pos.x, hcoords.y - self.pos.y
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d > 0.05 then
+                    local step   = stepSpeed * (tickMs / 1000)
+                    local stopGap = 1.2                              -- stand within striking range
+                    local moveBy = math.min(step, math.max(0, d - stopGap))
+                    self.pos.x = self.pos.x + (dx / d) * moveBy
+                    self.pos.y = self.pos.y + (dy / d) * moveBy
+                    self.pos.z = hcoords.z
+                end
+            end
+            if ringC then
+                local rx, ry = self.pos.x - ringC.x, self.pos.y - ringC.y
+                local rd = math.sqrt(rx * rx + ry * ry)
+                if rd > ringRad then
+                    self.pos.x = ringC.x + (rx / rd) * ringRad
+                    self.pos.y = ringC.y + (ry / rd) * ringRad
+                end
+            end
+
+            -- Block policy: roll a guard stance for this tick (blocking suppresses the
+            -- attack + lets the human's stamina regen, matching the T7 human model).
+            self.blocking = math.random() < (policy.blockChance or 0)
+
+            -- Attack policy: aggression-gated, throttled by the tier reaction gate.
+            local nowMs = GetGameTimer()
+            if not self.blocking
+               and math.random() < (policy.aggression or 0.6)
+               and (nowMs - lastSwingMs) >= (policy.reactionMs or 600) then
+                local move = cpuPickMove(self, policy)
+                if move and self.stam >= (move.staminaCost or 0) and nowMs >= (self.cd[move.moveId] or 0) then
+                    self.stam = math.max(0, self.stam - (move.staminaCost or 0))
+                    self.cd[move.moveId] = nowMs + (move.cooldownMs or 500)
+                    lastSwingMs = nowMs
+                    cpuStrike(matchId, self, human, st.srcA, move)
+                end
+            end
+            Dirty[matchId] = true
+        end
+    end)
+    if DBG then print(('[palm6_fc_combat] PvE CPU actor #%d live (tier %d)'):format(matchId, tier)) end
 end
 
 -- T7 REPLACES T6's draw-only round-cap timeout with an HP%-comparison decision:
@@ -748,15 +1060,26 @@ RegisterNetEvent('palm6_fc_combat:connect', function(data)
 
     local tgtCid = (attCid == st.cidA) and st.cidB or st.cidA
     local tgt = Combat[ckey(matchId, tgtCid)]
-    if not tgt or not tgt.src then att.active = nil; return end
+    if not tgt then att.active = nil; return end
 
-    local reach = Bridge.Reach(att.src, tgt.src)                      -- server distance, never client
+    -- §19.4 CPU-target branch: a human striking the dark-PvE CPU. The CPU has NO
+    -- src (a server-owned logical actor), so reach is measured human-ped -> the
+    -- CPU's server logical-position var, and the guard-chip uses the CPU's rolled
+    -- block state directly (it always squares up to the human, so no facing native
+    -- is needed). FAIL-CLOSED: an unset CPU pos yields nil reach -> no connect.
+    local reach
+    if tgt.isCpu then
+        reach = Bridge.ReachToPos(att.src, tgt.pos)                   -- human ped vs CPU logical pos
+    else
+        reach = Bridge.Reach(att.src, tgt.src)                        -- server distance, never client (PvP)
+    end
     if not reach or reach > move.reach then att.active = nil; return end
 
     att.active = nil                                                  -- one connect per swing
 
     local dmg = move.damage
-    if tgt.blocking and Bridge.Facing(tgt.src, att.src) then
+    local blocked = tgt.isCpu and tgt.blocking or (tgt.blocking and tgt.src and Bridge.Facing(tgt.src, att.src))
+    if blocked then
         dmg = math.floor(move.damage * (move.chipPct or 0))           -- chip through the guard
         tgt.stam = math.max(0, tgt.stam - (move.blockStamCost or 0))
         if tgt.stam <= 0 then tgt.blocking = false end                -- block breaks at 0 stamina
@@ -772,8 +1095,10 @@ RegisterNetEvent('palm6_fc_combat:connect', function(data)
     if tgt.hp <= 0 then
         -- KO. Route through the single resolveFight hub (C1): it guards+sets
         -- m.resolving itself (do NOT pre-set) and sends teardown to BOTH fighters
-        -- so the winner is restored out of the fighter ped/loadout (§8/§11).
-        TriggerClientEvent('palm6_fc_combat:koRagdoll', tgt.src, { matchId = matchId })
+        -- so the winner is restored out of the fighter ped/loadout (§8/§11). The
+        -- ragdoll order is skipped for a CPU victim (no src; its client puppet, P3,
+        -- plays its own KO), guarded so the PvP path is unchanged.
+        if tgt.src then TriggerClientEvent('palm6_fc_combat:koRagdoll', tgt.src, { matchId = matchId }) end
         resolveFight(matchId, attCid, 'ko')
     end
 end)
@@ -874,6 +1199,7 @@ AddEventHandler('fc:match:resolved', function(d)
     if not matchId then return end
     Active[matchId] = nil
     Dirty[matchId]  = nil
+    PveActors[matchId] = nil           -- §19: stop the CPU brain (belt-and-suspenders; the loop also self-exits)
     local prefix = matchId .. ':'
     for k, f in pairs(Combat) do
         if k:sub(1, #prefix) == prefix then
