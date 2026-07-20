@@ -27,3 +27,11 @@ Config.DefaultIcon = 'founder'
 
 -- Accent (RGB) for the built-in stock-chat badge only.
 Config.BadgeColor = { 255, 180, 60 }
+
+-- Cache freshness (seconds). A player's founder status is cached on join so we do
+-- not hit the DB on every chat line. This TTL bounds how stale that cache can be:
+-- after it lapses, the next read triggers ONE background re-query (deduped), so a
+-- grant earned or revoked WHILE the player is connected takes effect within this
+-- window instead of only on reconnect. Set higher to reduce DB reads, lower for
+-- fresher tags. exports.palm6_founder:Refresh(src) forces an immediate re-read.
+Config.CacheTtlSeconds = 60

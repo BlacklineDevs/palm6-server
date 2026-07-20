@@ -22,10 +22,15 @@ game → THIS resource: shows the founder tag / name icon in game   ← you are 
   ```lua
   local label, icon = exports.palm6_founder:GetTag(src)  -- nil if not a founder
   local isFounder   = exports.palm6_founder:IsFounder(src)
+  exports.palm6_founder:Refresh(src)                     -- force an immediate re-read
   ```
 
   These are **non-blocking** (cache-backed) and **fail-open** (a DB hiccup just
-  means no tag — never a blocked connect or a dropped chat line).
+  means no tag — never a blocked connect or a dropped chat line). The cache has a
+  freshness TTL (`Config.CacheTtlSeconds`, default 60s): a grant earned or revoked
+  **while the player is connected** is picked up within that window (one deduped
+  background re-query on the next read), so a relog is no longer required. Use
+  `Refresh(src)` to apply a change instantly (e.g. from an admin command).
 
 ## Rendering the tag
 
@@ -75,7 +80,8 @@ No new SQL: `palm6_founding_grants` is created by the website's migrations
 2. As a player who holds an active grant, `exports.palm6_founder:IsFounder(src)`
    returns `true` (or the `[FOUNDER]` badge shows in stock-chat mode).
 3. Revoke in DB (`UPDATE palm6_founding_grants SET revoked_at = NOW() WHERE …`),
-   reconnect → tag is gone. Fail-open: stop the DB and chat/gameplay still work.
+   the tag clears within `Config.CacheTtlSeconds` (or instantly via `Refresh(src)`)
+   — no relog needed. Fail-open: stop the DB and chat/gameplay still work.
 
 ## Safety notes
 
