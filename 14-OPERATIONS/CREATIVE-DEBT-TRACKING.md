@@ -13,16 +13,15 @@ Status values: Open · In Progress · Resolved · Accepted (a deliberate, owned 
 ## Register
 
 ### CD-001: Brand art: department + state art placed; System A core mark still pending
-- **Severity:** Medium · **Status:** In Progress · **Owner:** David Olverson
+- **Severity:** Medium · **Status:** RESOLVED by DEC-007 (2026-07-20) · **Owner:** David Olverson
 - **Detail:** Full keeper set pulled from the Palm6 Discord bot DMs and placed:
   **24 Palm6 department crests** (`01-BRAND/logos/departments/`) + **2 Verano state seals**
   (`01-BRAND/logos/state/`), all registered Candidate. **Still missing:** the **System A
   core identity mark** (the primary ownable Palm6/Verano logo) - a different asset class
   from the department crests and state seals.
 - **Resolution:** (a) DONE - 24 departments + 2 state seals placed + registered.
-  (b) OPEN - supply the System A core mark, place in `01-BRAND/logos/`, register it, and
-  fill the System A specifics in `BRAND-GUIDELINES.md`. The brand half of the Phase 2 gate
-  closes when the System A core mark lands.
+  (b) DONE - System A core mark delivered 2026-07-20, placed in `01-BRAND/logos/core/`,
+  registered + Approved via DEC-007, master vaulted. The brand half of the Phase 2 gate is closed.
 
 ### CD-006: Private-business logo tier rejected, being redone
 - **Severity:** Low · **Status:** In Progress · **Owner:** David Olverson
@@ -92,7 +91,7 @@ Task 3.4 requires every open debt item to be closed or to carry an owner and a t
 
 | Item | Owner | Status | Target |
 |------|-------|--------|--------|
-| CD-001 System A core mark | David (Creative Lead) | In Progress | Next brand session; prompts emailed 2026-07-18 |
+| CD-001 System A core mark | David (Creative Lead) | RESOLVED (DEC-007) | Delivered + Approved 2026-07-20 |
 | CD-002 prop_spawn ensure removal | David (Dev Lead) | Accepted | When txAdmin panel access is available |
 | CD-003 NPC destination coords | David | Open | Next in-game feel-test pass |
 | CD-006 private-business logo redo | David (Creative Lead) | In Progress | Regenerate in ChatGPT per BUSINESS-BRAND-BRIEF |

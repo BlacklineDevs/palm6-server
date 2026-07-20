@@ -22,6 +22,7 @@ at-a-glance index; it is updated in the same change that adds or alters an entry
 | DEC-004 | 2026-07-18 | Phase 0: promote Creative System rc.1 to v1.0.0 (the plan's "DEC-002") | **Approved (Option B), David 2026-07-18** (System A + COLOR-SYSTEM tracked: CD-001, CD-008) | [004](./DECISION-LOG/DECISION-LOG-ENTRY-004.md) |
 | DEC-005 | 2026-07-18 | Resolve DEC-002a: canonical repo identities (Main=BlacklineDevs/gtarp, Bot=BlacklineDevs/palm6-bot, Website=davidolverson/palm6-web, Scripts=BlacklineDevs/palm6-scripts) | Approved (process/identity) | [005](./DECISION-LOG/DECISION-LOG-ENTRY-005.md) |
 | DEC-006 | 2026-07-18 | Execute gtarp Phase 3 (Alignment & Governance) tasks 3.1-3.7; end migration mode; schedule 3.8 review | Approved (3.1-3.7 done; 3.8 pending, handoff locked) | [006](./DECISION-LOG/DECISION-LOG-ENTRY-006.md) |
+| DEC-007 | 2026-07-20 | Approve System A core identity mark (flat P6 master); classify neon primary as System B lockup; close CD-001 | Approved | [007](./DECISION-LOG/DECISION-LOG-ENTRY-007.md) |
 
 > Numbering note: gtarp's local `DEC-002` is the Phase 1 audit, **not** the Creative
 > System promotion the system package reserves `DEC-002` for (Phase 0 has not run in

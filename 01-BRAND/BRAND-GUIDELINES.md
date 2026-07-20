@@ -1,7 +1,7 @@
 # Palm6 Brand Guidelines
 
 **Version:** v1.0.0 (system Approved via DEC-004, 2026-07-18)  
-**Status:** Candidate in gtarp. The Creative System documentation was Approved v1.0.0 via DEC-004 (2026-07-18, Option B), but this brand guideline stays Candidate because its System A specifics depend on the System A core identity mark, which does not exist yet (CD-001). It advances to Approved once that mark lands and passes review. Nothing is Approved without a gtarp Decision Log entry. See `../14-OPERATIONS/README.md`.
+**Status:** Approved (DEC-007, 2026-07-20). The System A core identity mark (the flat P6 master) is delivered and Approved. System A: `01-BRAND/logos/core/palm6-p6-black-master.svg` (one-color) + reversed white; clear space = 1x the width of the P vertical stem on all sides; favicon/official/small-size use only the one-color master. System B color P6 lockup (`palm6-p6-primary.png`) is a marketing treatment, not the identity master. See `01-BRAND/logos/core/README.md`.
 
 ## Overview
 

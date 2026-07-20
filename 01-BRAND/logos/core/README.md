@@ -1,6 +1,6 @@
 # System A Core Identity Mark: Landing Zone (reserved)
 
-**Status:** Reserved slot. The mark does not exist yet (CD-001). This folder is where David's
+**Status:** DELIVERED + Approved (System A core mark, DEC-007, 2026-07-20). Files below. This folder is where David's
 ChatGPT-generated System A files land, and this README is the runbook for placing, approving,
 and propagating them. Brief + prompts: `../../SYSTEM-A-CORE-MARK-BRIEF.md`.
 
@@ -57,4 +57,4 @@ If any answer is no, it stays Candidate and goes back to David for a refined gen
 
 ## Clear-space note (fill on delivery)
 
-_(pending)_
+Clear space: keep at least 1× the width of the P’s vertical stem on every side of the P6 mark.
