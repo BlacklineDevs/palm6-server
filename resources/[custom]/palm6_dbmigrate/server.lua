@@ -434,6 +434,31 @@ ALTER TABLE `palm6_insurance_policies` ADD COLUMN IF NOT EXISTS `tier` VARCHAR(1
     -- repeatable claim faucet. Adding the member at the end is INSTANT + idempotent.
     { name = '0065 insurance policies.status +claimed', sql = [[
 ALTER TABLE `palm6_insurance_policies` MODIFY COLUMN `status` ENUM('active','lapsed','cancelled','claimed') NOT NULL DEFAULT 'active']] },
+    -- 0067: palm6_racing (street racing, Phase 0 rep-only). Leaderboard aggregate +
+    -- a per-finish results log (the log backs the rolling-24h DailyRepCap count).
+    -- No money columns — Phase 0 is rep-only. Both idempotent CREATE IF NOT EXISTS.
+    { name = '0067 racing progression', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_racing_progression` (
+    citizenid VARCHAR(64) NOT NULL,
+    name VARCHAR(64) NULL,
+    rep INT NOT NULL DEFAULT 0,
+    wins INT NOT NULL DEFAULT 0,
+    races INT NOT NULL DEFAULT 0,
+    rank_tier TINYINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    { name = '0067 racing results', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_racing_results` (
+    id INT NOT NULL AUTO_INCREMENT,
+    citizenid VARCHAR(64) NOT NULL,
+    route_id VARCHAR(48) NOT NULL,
+    place TINYINT NOT NULL,
+    rep INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_racing_results_cid_time (citizenid, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
 }
 
 CreateThread(function()
