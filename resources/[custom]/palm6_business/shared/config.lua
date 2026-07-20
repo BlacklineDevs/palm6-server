@@ -31,6 +31,17 @@ Config.Enabled = false
 -- business with no storefront row is indistinguishable from a Phase-0 business).
 Config.Phase1Enabled = false
 
+-- PER-TYPE MECHANICS GATE — gives each business type its own economic identity
+-- (payout / supply cost / cooldown / daily cap / supply cap) and a themed serve
+-- interaction (verb, nouns, skill-check), instead of all five sharing the Phase-0
+-- numbers. INDEPENDENT of the storefront gate. While false, opServe/opBuyStock use
+-- the GLOBAL Config values below EXACTLY as today — the LIVE Phase-0 economy is
+-- byte-for-byte unchanged. Flip true (+ redeploy) only after a per-type feel-test.
+-- Every serve stays bounded the same four ways (cost basis + clocked-in worker +
+-- per-worker cooldown + atomic per-business daily cap); this only changes the
+-- NUMBERS per type, never the invariants — no new faucet, no new exploit surface.
+Config.PerTypeMechanics = false
+
 -- Command that opens the business menu (+ a short alias).
 Config.Command = 'business'
 Config.CommandAlias = 'biz'
@@ -60,13 +71,41 @@ Config.Blocklist = {
 -- `blip` = the DEFAULT map-blip sprite for a new storefront of this type (Phase 1;
 -- the owner can re-pick from Config.Storefront.Sprites). All sprite ids are
 -- validated against the allowlist on write, so an unknown value here is inert.
+--
+-- `service` = the per-type ECONOMIC PROFILE + themed serve interaction, applied
+-- only when Config.PerTypeMechanics is true (else the global Config.* values below
+-- are used for every type — the live Phase-0 numbers). Each profile keeps the same
+-- faucet shape, just different values: fast/cheap/high-volume (restaurant, retail)
+-- vs slow/expensive/big-ticket (garage, dealership). `skill` is the ox_lib
+-- skillCheck spec for that type's serve (difficulty list + input keys). Labels
+-- theme the UI + notifications + ledger memo. dailyCap here overrides the per-type
+-- NPC income ceiling; maxSupply the per-type storage cap.
 Config.Types = {
-    { key = 'restaurant', label = 'Restaurant',   flavor = 'Serve the city. Keep the lights on.',            blip = 93  },
-    { key = 'bar',        label = 'Bar / Venue',  flavor = 'Own the room. Turn a night into an institution.', blip = 93  },
-    { key = 'garage',     label = 'Garage / Shop',flavor = 'A service people come back to.',                  blip = 402 },
-    { key = 'retail',     label = 'Retail Front', flavor = 'A legit storefront on the map.',                  blip = 52  },
-    { key = 'dealership',  label = 'Dealership',   flavor = 'Move product. Build a name.',                     blip = 326 },
+    { key = 'restaurant', label = 'Restaurant',   flavor = 'Serve the city. Keep the lights on.',            blip = 93,
+      service = { payout = 280,  stockCost = 110, cooldown = 30,  dailyCap = 16000, maxSupply = 600,
+                  verb = 'Serve a plate',  serveNoun = 'diner',    supplyNoun = 'ingredients',
+                  skill = { difficulty = { 'easy', 'easy' },            keys = { 'w', 'a', 's', 'd' } } } },
+    { key = 'bar',        label = 'Bar / Venue',  flavor = 'Own the room. Turn a night into an institution.', blip = 93,
+      service = { payout = 320,  stockCost = 120, cooldown = 35,  dailyCap = 16000, maxSupply = 500,
+                  verb = 'Pour a round',   serveNoun = 'patron',   supplyNoun = 'bar stock',
+                  skill = { difficulty = { 'easy', 'medium' },          keys = { 'w', 'a', 's', 'd' } } } },
+    { key = 'garage',     label = 'Garage / Shop',flavor = 'A service people come back to.',                  blip = 402,
+      service = { payout = 650,  stockCost = 260, cooldown = 70,  dailyCap = 15000, maxSupply = 200,
+                  verb = 'Complete a job', serveNoun = 'customer',  supplyNoun = 'parts',
+                  skill = { difficulty = { 'medium', 'medium', 'hard' }, keys = { 'w', 'a', 's', 'd' } } } },
+    { key = 'retail',     label = 'Retail Front', flavor = 'A legit storefront on the map.',                  blip = 52,
+      service = { payout = 240,  stockCost = 95,  cooldown = 28,  dailyCap = 15000, maxSupply = 700,
+                  verb = 'Ring up a sale', serveNoun = 'shopper',   supplyNoun = 'inventory',
+                  skill = { difficulty = { 'easy', 'easy' },            keys = { 'w', 'a', 's', 'd' } } } },
+    { key = 'dealership',  label = 'Dealership',   flavor = 'Move product. Build a name.',                     blip = 326,
+      service = { payout = 1200, stockCost = 520, cooldown = 120, dailyCap = 18000, maxSupply = 80,
+                  verb = 'Close a sale',   serveNoun = 'buyer',     supplyNoun = 'units',
+                  skill = { difficulty = { 'medium', 'hard' },          keys = { 'w', 'a', 's', 'd' } } } },
 }
+
+-- Default serve labels used when Config.PerTypeMechanics is off (matches the
+-- Phase-0 wording so the gate-off UI is unchanged).
+Config.DefaultServeLabels = { verb = 'Serve a walk-in', serveNoun = 'customer', supplyNoun = 'supply' }
 
 -- ---------------------------------------------------------------------------
 -- Roster / roles. Higher number = more authority. OWN ranks (palm6_business_

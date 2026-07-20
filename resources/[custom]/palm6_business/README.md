@@ -43,6 +43,22 @@ NaN/Inf-sanitized before any guard.
 4. **Per-business daily cap** — `DailyNpcIncome` (UTC `day_key` reset), enforced
    atomically in the serve UPDATE.
 
+## Per-type mechanics (ships DARK behind `Config.PerTypeMechanics`)
+Each business type gets its own **economic identity + themed serve** instead of
+all five sharing the Phase-0 numbers — resolved per type by `serviceOf(bizType)`:
+- **Restaurant / Retail** — fast, cheap, high-volume (serve a plate / ring up a
+  sale; easy skill-check).
+- **Bar** — medium rounds.
+- **Garage** — slow, high-value repairs (harder skill-check, pricier parts).
+- **Dealership** — slow, big-ticket sales (few, large, long cooldown).
+
+Each type sets its own `payout / stockCost / cooldown / dailyCap / maxSupply` +
+labels (`verb / serveNoun / supplyNoun`) + `skill` spec in `Config.Types[].service`.
+**Same four faucet bounds, different numbers** — no new faucet, no new exploit
+surface. While the gate is off, `serviceOf` returns the GLOBAL `Config.*` values
+and the Phase-0 wording, so the **live economy is byte-for-byte unchanged**. Flip
+`Config.PerTypeMechanics = true` + redeploy after a per-type feel-test.
+
 ## Player commands
 - `/business` (alias `/biz`) — opens the menu. Non-members can register; owners
   get Account / Employees / Operations / Ledger / Rename; employees get Clock
@@ -87,8 +103,11 @@ Phase 1 adds `loc_x/loc_y/loc_z/loc_h` + `blip_sprite/blip_color` to
 `palm6_businesses` via `0070` (`ADD COLUMN IF NOT EXISTS`, all nullable). All
 idempotent in `palm6_dbmigrate`.
 
-## Still deferred (Phase 1 remainder / Phase 2)
-Per-type mechanics (dealership lot / bar venue window / garage repairs),
-`palm6_protection` extortion of owned businesses, store-SKU cosmetics (nameplate,
-storefront skin, Discord business-registry badge), a manager delegate role, and a
-website `/business` directory page.
+## Still deferred (Phase 2)
+Heavier type-specific *systems* beyond the service profiles above — a dealership
+**vehicle lot** (spawn + ownership transfer), a bar **venue/DJ revenue window**,
+garage **repairs** wired to vehicle damage — each needs its own audit (vehicle
+sales touch real money + ownership). Also: `palm6_protection` extortion of owned
+businesses, store-SKU cosmetics (nameplate, storefront skin, Discord
+business-registry badge), a manager delegate role, and a website `/business`
+directory page.

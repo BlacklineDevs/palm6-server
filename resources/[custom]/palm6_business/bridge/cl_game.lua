@@ -41,10 +41,14 @@ function Game.ShowReport(title, content)
 end
 
 -- The "serve a walk-in customer" active-work moment. A quick skill-check gates
--- the NPC-income serve so it is active play, never AFK minting. Returns true on
--- success. The server re-validates clock-in/supply/cooldown/daily-cap regardless.
-function Game.ServeAction()
-    local ok = lib.skillCheck({ 'easy', 'easy', 'medium' }, { 'w', 'a', 's', 'd' })
+-- the NPC-income serve so it is active play, never AFK minting. `spec` (optional,
+-- Phase per-type) = { difficulty = {...}, keys = {...} } for a themed check per
+-- business type; falls back to the Phase-0 default. Returns true on success. The
+-- server re-validates clock-in/supply/cooldown/daily-cap regardless.
+function Game.ServeAction(spec)
+    local difficulty = (spec and spec.difficulty) or { 'easy', 'easy', 'medium' }
+    local keys = (spec and spec.keys) or { 'w', 'a', 's', 'd' }
+    local ok = lib.skillCheck(difficulty, keys)
     return ok == true
 end
 

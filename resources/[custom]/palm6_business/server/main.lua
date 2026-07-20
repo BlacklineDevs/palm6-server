@@ -158,6 +158,26 @@ local function sendStorefronts(src)
     TriggerClientEvent('palm6_business:storefronts', src, storefrontList())
 end
 
+-- Resolve a business type's serve economics + labels. Per-type profile ONLY when
+-- Config.PerTypeMechanics is on; otherwise every field is the global Config.* value
+-- (the live Phase-0 numbers) and labels are the Phase-0 defaults — so with the gate
+-- off this is byte-for-byte the current economy. The faucet's four bounds are
+-- unchanged; only the numbers differ per type. Always returns a full table.
+local function serviceOf(bizType)
+    local sp = (Config.PerTypeMechanics and typeInfo(bizType) and typeInfo(bizType).service) or nil
+    local dl = Config.DefaultServeLabels or { verb = 'Serve a walk-in', serveNoun = 'customer', supplyNoun = 'supply' }
+    return {
+        payout     = (sp and sp.payout)     or Config.ServePayout,
+        stockCost  = (sp and sp.stockCost)  or Config.StockUnitCost,
+        cooldown   = (sp and sp.cooldown)   or Config.ServeCooldownSec,
+        dailyCap   = (sp and sp.dailyCap)   or Config.DailyNpcIncome,
+        maxSupply  = (sp and sp.maxSupply)  or Config.MaxSupplyUnits,
+        verb       = (sp and sp.verb)       or dl.verb,
+        serveNoun  = (sp and sp.serveNoun)  or dl.serveNoun,
+        supplyNoun = (sp and sp.supplyNoun) or dl.supplyNoun,
+    }
+end
+
 local function rosterOf(businessId)
     return MySQL.query.await(
         'SELECT citizenid, role, wage, clocked_in, name FROM palm6_business_members WHERE business_id = ? ORDER BY role DESC, hired_at ASC',
@@ -275,6 +295,7 @@ local function pushMenu(src)
         local today = dayKey()
         local dayIncome = (m.day_key == today) and (m.day_npc_income or 0) or 0
         local isOwner = m.role >= Config.Role.Owner
+        local svc = serviceOf(m.biz_type)
         data.business = {
             id = m.business_id,
             name = m.business_name,
@@ -284,7 +305,7 @@ local function pushMenu(src)
             supply = m.supply_units or 0,
             clockedIn = m.clocked_in == 1,
             dayIncome = dayIncome,
-            dailyCap = Config.DailyNpcIncome,
+            dailyCap = svc.dailyCap,
         }
         -- Owner-scoped data (coworker citizenids/wages + the account balance) is
         -- attached ONLY for the owner — the SERVER is the authority on what a
@@ -295,10 +316,11 @@ local function pushMenu(src)
             data.business.roster = rosterOf(m.business_id)
         end
         data.cfg = {
-            stockUnitCost = Config.StockUnitCost,
-            servePayout = Config.ServePayout,
-            maxSupply = Config.MaxSupplyUnits,
+            stockUnitCost = svc.stockCost,
+            servePayout = svc.payout,
+            maxSupply = svc.maxSupply,
             maxWage = Config.MaxWage,
+            labels = { verb = svc.verb, serveNoun = svc.serveNoun, supplyNoun = svc.supplyNoun },
         }
         -- Phase 1: storefront state drives the proximity gate + owner controls.
         -- `set`=has a placed location; `atStorefront`=owner/employee is close enough
@@ -423,18 +445,21 @@ local function opBuyStock(src, qty)
     local cid = Bridge.GetCitizenId(src)
     local m = getMembership(cid)
     if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner buys supply.', 'error') end
+    local svc = serviceOf(m.biz_type)
     qty = clampInt(qty, 1, Config.StockMaxPerBuy)
     if not qty or qty < 1 then return notify(src, 'Business', 'Invalid quantity.', 'error') end
-    local room = Config.MaxSupplyUnits - (m.supply_units or 0)
+    local room = svc.maxSupply - (m.supply_units or 0)
     if room <= 0 then return notify(src, 'Business', 'Supply storage is full.', 'error') end
     if qty > room then qty = room end
-    local cost = qty * Config.StockUnitCost
+    local cost = qty * svc.stockCost
     if not Bridge.ChargeBank(src, cost, 'business-stock') then
         return notify(src, 'Business', ('You need $%d for %d supply.'):format(cost, qty), 'error')
     end
+    -- Atomic guard uses the per-type ceiling (same shape; svc.maxSupply == global
+    -- Config.MaxSupplyUnits while PerTypeMechanics is off).
     local aff = MySQL.update.await(
         'UPDATE palm6_businesses SET supply_units = supply_units + ? WHERE id = ? AND supply_units + ? <= ?',
-        { qty, m.business_id, qty, Config.MaxSupplyUnits })
+        { qty, m.business_id, qty, svc.maxSupply })
     if aff ~= 1 then
         Bridge.CreditBankByCitizenId(cid, cost, 'business-stock-refund')
         return notify(src, 'Business', 'Storage filled up. Refunded.', 'error')
@@ -454,15 +479,16 @@ local function opServe(src)
     local m = getMembership(cid)
     if not m then return notify(src, 'Business', 'You do not work anywhere.', 'error') end
     if m.clocked_in ~= 1 then return notify(src, 'Business', 'Clock in first.', 'error') end
+    local svc = serviceOf(m.biz_type)
     if Config.NpcRequiresSupply and (m.supply_units or 0) < 1 then
-        return notify(src, 'Business', 'No supply to serve with.', 'error')
+        return notify(src, 'Business', ('No %s to serve with.'):format(svc.supplyNoun), 'error')
     end
-    if (nowSec() - (m.last_serve_at or 0)) < Config.ServeCooldownSec then
+    if (nowSec() - (m.last_serve_at or 0)) < svc.cooldown then
         return notify(src, 'Business', 'Serving too fast — wait a moment.', 'error')
     end
     local today = dayKey()
     local dayIncome = (m.day_key == today) and (m.day_npc_income or 0) or 0
-    if dayIncome + Config.ServePayout > Config.DailyNpcIncome then
+    if dayIncome + svc.payout > svc.dailyCap then
         return notify(src, 'Business', 'This business hit its daily walk-in limit.', 'error')
     end
     -- Phase 1: a walk-in is served AT the shop. Only bites when Phase 1 is on AND a
@@ -477,8 +503,9 @@ local function opServe(src)
     end
     -- Atomic: consume 1 supply + credit payout + bump today's income, all guarded
     -- on supply>=1 AND the daily cap (WHERE reads the pre-update row). affected=0
-    -- means a race lost the supply or the cap; re-read to message.
-    local pay, cap = Config.ServePayout, Config.DailyNpcIncome
+    -- means a race lost the supply or the cap; re-read to message. pay/cap are the
+    -- per-type values (== global while PerTypeMechanics is off).
+    local pay, cap = svc.payout, svc.dailyCap
     local aff = MySQL.update.await([[
         UPDATE palm6_businesses
            SET supply_units = supply_units - 1,
@@ -493,12 +520,12 @@ local function opServe(src)
         return notify(src, 'Business', 'Could not serve (out of supply or at the daily limit).', 'error')
     end
     local bal = MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { m.business_id }) or 0
-    insertLedger(m.business_id, '__NPC__', 'npc_sale', pay, bal, 'Walk-in customer')
+    insertLedger(m.business_id, '__NPC__', 'npc_sale', pay, bal, ('Walk-in %s'):format(svc.serveNoun))
     MySQL.update.await('UPDATE palm6_business_members SET last_serve_at = ? WHERE citizenid = ?', { nowSec(), cid })
     -- No pushMenu here: serving is a rapid, repeated action and reopening the
     -- root context menu each time would interrupt it. The notify confirms the
     -- payout; /business reopens with fresh supply/day figures.
-    notify(src, 'Business', ('Served a customer (+$%d).'):format(pay), 'success')
+    notify(src, 'Business', ('Served a %s (+$%d).'):format(svc.serveNoun, pay), 'success')
 end
 
 local function opClock(src, wantIn)

@@ -105,11 +105,26 @@ end
 -- ---------------------------------------------------------------------------
 -- Operations submenu (any staff)
 -- ---------------------------------------------------------------------------
-local function doServe()
-    if Game.ServeAction() then
+-- Serve labels/skill resolve from the server-sent cfg (numbers) + shared Config
+-- (skill spec). While PerTypeMechanics is off both reduce to the Phase-0 wording.
+local function serveLabels(cfg)
+    return (cfg and cfg.labels) or { verb = 'Serve a walk-in', serveNoun = 'customer', supplyNoun = 'supply' }
+end
+local function serveSkill(bizType)
+    if Config.PerTypeMechanics then
+        for _, t in ipairs(Config.Types or {}) do
+            if t.key == bizType and t.service then return t.service.skill end
+        end
+    end
+    return nil  -- Game.ServeAction falls back to the default check
+end
+local function cap1(s) return (type(s) == 'string' and #s > 0) and (s:sub(1, 1):upper() .. s:sub(2)) or (s or '') end
+
+local function doServe(b, cfg)
+    if Game.ServeAction(serveSkill(b.biz_type)) then
         TriggerServerEvent('palm6_business:serve')
     else
-        Game.Notify({ title = 'Business', description = 'Fumbled the order.', type = 'error' })
+        Game.Notify({ title = 'Business', description = 'Fumbled it — try again.', type = 'error' })
     end
 end
 
@@ -122,16 +137,19 @@ local function doCharge()
 end
 
 local function renderOperations(b, cfg)
+    local lbl = serveLabels(cfg)
     local opts = {
-        { title = ('Serve a walk-in  (+%s)'):format(money(cfg.servePayout)), description = ('Supply: %d  ·  today %s / %s'):format(b.supply or 0, money(b.dayIncome), money(b.dailyCap)), onSelect = doServe },
+        { title = ('%s  (+%s)'):format(lbl.verb, money(cfg.servePayout)),
+          description = ('%s: %d  ·  today %s / %s'):format(cap1(lbl.supplyNoun), b.supply or 0, money(b.dayIncome), money(b.dailyCap)),
+          onSelect = function() doServe(b, cfg) end },
         { title = 'Charge a nearby customer', description = 'Ring up the closest player', onSelect = doCharge },
     }
     if b.role >= 3 then
         opts[#opts + 1] = {
-            title = ('Buy supply  (%s each)'):format(money(cfg.stockUnitCost)),
+            title = ('Buy %s  (%s each)'):format(lbl.supplyNoun, money(cfg.stockUnitCost)),
             description = ('Storage: %d / %d'):format(b.supply or 0, cfg.maxSupply),
             onSelect = function()
-                local r = Game.InputDialog('Buy supply', { { type = 'number', label = 'Units', required = true, min = 1 } })
+                local r = Game.InputDialog(('Buy %s'):format(lbl.supplyNoun), { { type = 'number', label = 'Units', required = true, min = 1 } })
                 if r and r[1] then TriggerServerEvent('palm6_business:buyStock', math.floor(r[1])) end
             end,
         }
