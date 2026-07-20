@@ -706,19 +706,42 @@ local function opPayroll(src)
     local cid = Bridge.GetCitizenId(src)
     local m = getMembership(cid)
     if not m or m.role < minManageRole() then return notify(src, 'Business', 'You do not have permission to run payroll.', 'error') end
-    -- Pays everyone BELOW owner (employees + managers) at their OWNER-set wage.
-    -- Wages are owner-only to set, so a manager running payroll can only disburse
-    -- amounts the owner already authorised — no delegate-driven account drain.
-    local emps = MySQL.query.await(
-        'SELECT citizenid, wage, name FROM palm6_business_members WHERE business_id = ? AND role < ? AND wage > 0 AND clocked_in = 1',
-        { m.business_id, Config.Role.Owner }) or {}
-    if #emps == 0 then return notify(src, 'Business', 'No clocked-in employees with a wage.', 'error') end
+    -- Payee set = ranks STRICTLY BELOW THE ACTOR (role < m.role), NOT a constant
+    -- Owner. This keeps the actor out of their own payee set: a manager (2) pays
+    -- employees only, never themselves or a peer manager; an owner (3) still pays
+    -- managers + employees (role < 3) — so with ManagerRole off (only the owner
+    -- ever reaches here, m.role=3) the payee set is byte-for-byte the old role<Owner.
+    -- Without this, a manager was inside their own payee set and could pay themselves.
+    --
+    -- DAY-LOCK (only while the delegate feature is on): each member is paid at most
+    -- once per UTC day, so a manager can disburse an owner-set wage only ONCE per
+    -- period — not spam payroll to drain the account to a colluding clocked-in
+    -- employee. Off = live Phase-0 behaviour (no lock), untouched.
+    local today = dayKey()
+    local lockOn = managerEnabled()
+    local sql = 'SELECT citizenid, wage, name FROM palm6_business_members WHERE business_id = ? AND role < ? AND wage > 0 AND clocked_in = 1'
+    local params = { m.business_id, m.role }
+    if lockOn then
+        sql = sql .. ' AND (last_payroll_day IS NULL OR last_payroll_day <> ?)'
+        params[#params + 1] = today
+    end
+    local emps = MySQL.query.await(sql, params) or {}
+    if #emps == 0 then
+        return notify(src, 'Business', lockOn and 'Everyone eligible has already been paid this period.' or 'No clocked-in employees with a wage.', 'error')
+    end
     local paid, total, ranDry = 0, 0, false
     for _, e in ipairs(emps) do
         local bal = debitAccountWithPending(m.business_id, e.wage, e.citizenid)
         if not bal then ranDry = true break end  -- insufficient funds (or a prior payout still settling)
         local res = settlePayout(m.business_id, e.citizenid, e.wage, 'business-payroll')
         if res == 'paid' then
+            -- Stamp AFTER a confirmed pay so a dry-run (no funds) never marks someone
+            -- paid-for-the-day without actually paying them. (A crash between settle
+            -- and this stamp could allow one same-day re-pay of a single wage on the
+            -- next run — rare + bounded; the pending-marker reconcile still pays once.)
+            if lockOn then
+                MySQL.update.await('UPDATE palm6_business_members SET last_payroll_day = ? WHERE citizenid = ? AND business_id = ?', { today, e.citizenid, m.business_id })
+            end
             insertLedger(m.business_id, e.citizenid, 'payroll', -e.wage, bal, ('Wage to %s'):format(e.name or e.citizenid))
             paid = paid + 1
             total = total + e.wage

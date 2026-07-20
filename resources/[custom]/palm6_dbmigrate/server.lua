@@ -558,6 +558,14 @@ ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `blip_sprite` SMALLINT U
 ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `blip_color` TINYINT UNSIGNED NULL]] },
     { name = '0070 business loc index', sql = [[
 CREATE INDEX IF NOT EXISTS `idx_palm6_business_loc` ON `palm6_businesses` (`loc_x`)]] },
+    -- 0071: palm6_business Phase 1 — manager delegate payroll DAY-LOCK. A nullable
+    -- per-member marker of the last UTC day they were paid; opPayroll only enforces
+    -- it while Config.ManagerRole is on, so each member is paid at most once per
+    -- period when delegated management is active (bounds a manager's payroll to the
+    -- owner-authorised wage once/day — no repeat-payroll account drain). Nullable
+    -- ADD COLUMN IF NOT EXISTS (0068 pending pattern); no effect while dark.
+    { name = '0071 business_members last_payroll_day', sql = [[
+ALTER TABLE `palm6_business_members` ADD COLUMN IF NOT EXISTS `last_payroll_day` VARCHAR(10) NULL]] },
 }
 
 CreateThread(function()
