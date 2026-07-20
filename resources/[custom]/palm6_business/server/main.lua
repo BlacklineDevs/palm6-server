@@ -204,12 +204,17 @@ local function insertLedger(businessId, actorCid, action, amount, balanceAfter, 
 end
 
 -- Credit the account by `amount` (amount already came from a real player). Logs.
--- Returns the new balance. NOTE: account_balance itself is always exact (the +=
--- is atomic); the ledger's balance_after snapshot is read-back and is best-effort
--- under simultaneous same-business writes (a concurrent op's delta may be
--- observed). That is a cosmetic audit-trail nuance, never a money error.
+-- Returns the new balance, or NIL if the business row no longer exists (0 rows
+-- affected) — which can only happen if the business was CLOSED (deleted) between a
+-- charge's ChargeBank and this credit landing. Callers that pulled a PLAYER's money
+-- MUST refund on nil so a mid-close charge never destroys the payer's cash. In the
+-- live Phase-0 system (no close feature) a business is never deleted, so this always
+-- affects 1 and returns the balance exactly as before — no behaviour change.
+-- NOTE: account_balance itself is always exact (the += is atomic); the ledger's
+-- balance_after snapshot is read-back and best-effort under simultaneous writes.
 local function creditAccount(businessId, amount, actorCid, action, memo)
-    MySQL.update.await('UPDATE palm6_businesses SET account_balance = account_balance + ? WHERE id = ?', { amount, businessId })
+    local aff = MySQL.update.await('UPDATE palm6_businesses SET account_balance = account_balance + ? WHERE id = ?', { amount, businessId })
+    if aff ~= 1 then return nil end  -- business gone (closed mid-charge) — caller refunds
     local bal = MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { businessId }) or 0
     insertLedger(businessId, actorCid, action, amount, bal, memo)
     return bal
@@ -432,6 +437,10 @@ local function opDeposit(src, amount)
         return notify(src, 'Business', 'Not enough in your bank.', 'error')
     end
     local bal = creditAccount(m.business_id, amount, cid, 'deposit', 'Owner deposit')
+    if not bal then  -- business closed between the charge and the credit — refund
+        Bridge.CreditBankByCitizenId(cid, amount, 'business-deposit-refund')
+        return notify(src, 'Business', 'That business just closed — your deposit was refunded.', 'error')
+    end
     notify(src, 'Business', ('Deposited $%d. Account: $%d.'):format(amount, bal), 'success')
     pushMenu(src)
 end
@@ -768,11 +777,22 @@ local function opClose(src)
         -- Nothing to refund; clear the (zero) marker we set so the row is clean.
         MySQL.update.await('UPDATE palm6_businesses SET pending_cid = NULL, pending_amount = 0, pending_at = 0 WHERE id = ?', { bizId })
     end
-    -- Refund is in the owner's bank (or was zero). Now delete the roster + business.
+    -- Delete the BUSINESS ROW FIRST, guarded on an empty account. The credit paths
+    -- (opServe faucet, creditAccount for charge/deposit) don't hold the pending
+    -- marker, so a serve/charge could have raced money into the account after the
+    -- capture. If so, this DELETE affects 0 rows and the business SURVIVES with that
+    -- residual — the owner already got `amount` back and simply re-closes to sweep
+    -- the rest. We therefore NEVER delete a business that still holds money, so no
+    -- credited money is destroyed. Once the row is gone, getMembership + every credit
+    -- UPDATE (WHERE id=?) affect 0 rows — creditAccount returns nil and its callers
+    -- refund the payer — so members can be removed safely afterwards.
+    local delBiz = MySQL.update.await('DELETE FROM palm6_businesses WHERE id = ? AND account_balance = 0 AND pending_amount = 0', { bizId })
+    if delBiz ~= 1 then
+        return notify(src, 'Business', ('Activity landed mid-close — %s refunded, but funds came in. Close again to finish.'):format(m.business_name), 'inform')
+    end
     -- Ledger rows are kept as an orphaned audit trail (ids never reused).
     local members = MySQL.query.await('SELECT citizenid FROM palm6_business_members WHERE business_id = ?', { bizId }) or {}
     MySQL.update.await('DELETE FROM palm6_business_members WHERE business_id = ?', { bizId })
-    MySQL.update.await('DELETE FROM palm6_businesses WHERE id = ?', { bizId })
     insertLedger(bizId, cid, 'close', -amount, 0, ('Business closed — $%d refunded'):format(amount))
     notify(src, 'Business', ('%s is closed. $%d returned to your bank.'):format(m.business_name, amount), 'success')
     for _, e in ipairs(members) do
@@ -901,7 +921,12 @@ local function opAcceptCharge(src)
         if cs then notify(cs, 'Business', 'Customer could not pay.', 'error') end
         return notify(src, 'Business', 'You could not cover that charge.', 'error')
     end
-    creditAccount(p.businessId, p.amount, customerCid, 'charge', p.memo)
+    if not creditAccount(p.businessId, p.amount, customerCid, 'charge', p.memo) then
+        -- The business was closed between this customer's ChargeBank and the credit
+        -- landing — refund the customer so their real money is never destroyed.
+        Bridge.CreditBankByCitizenId(customerCid, p.amount, 'business-charge-refund')
+        return notify(src, 'Business', 'That business just closed — your payment was refunded.', 'error')
+    end
     notify(src, 'Business', ('Paid $%d to %s.'):format(p.amount, p.businessName), 'success')
     local cs = Bridge.GetSourceByCitizenId(p.cashierCid)
     if cs then notify(cs, 'Business', ('Collected $%d from a customer.'):format(p.amount), 'success') end
@@ -1111,7 +1136,11 @@ exports('Charge', function(businessId, payerCid, amount, memo)
     local psrc = Bridge.GetSourceByCitizenId(payerCid)
     if not psrc then return false end
     if not Bridge.ChargeBank(psrc, amount, 'business-charge-export') then return false end
-    creditAccount(businessId, amount, payerCid, 'charge', (type(memo) == 'string' and memo:sub(1, 64)) or 'Charge')
+    if not creditAccount(businessId, amount, payerCid, 'charge', (type(memo) == 'string' and memo:sub(1, 64)) or 'Charge') then
+        -- Business closed between the charge and the credit — refund the payer.
+        Bridge.CreditBankByCitizenId(payerCid, amount, 'business-charge-export-refund')
+        return false
+    end
     return true
 end)
 
