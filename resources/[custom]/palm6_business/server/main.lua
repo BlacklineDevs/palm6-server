@@ -14,6 +14,10 @@
 
 local function enabled() return Config.Enabled == true end
 
+-- Phase 1 (storefronts) gate. Requires BOTH master + Phase-1 flags so enabling
+-- Phase 0 never auto-lights storefronts. EVERY storefront code path checks this.
+local function phase1() return Config.Enabled == true and Config.Phase1Enabled == true end
+
 -- ---------------------------------------------------------------------------
 -- Utils
 -- ---------------------------------------------------------------------------
@@ -59,6 +63,23 @@ local function typeInfo(key)
     return nil
 end
 
+-- Phase-1 blip cosmetics: build O(1) allowlist sets once (a client can never set
+-- a sprite/colour outside these), and resolve a type's default sprite.
+local ALLOWED_SPRITE, ALLOWED_COLOR = {}, {}
+for _, s in ipairs((Config.Storefront and Config.Storefront.Sprites) or {}) do ALLOWED_SPRITE[s.sprite] = true end
+for _, c in ipairs((Config.Storefront and Config.Storefront.Colors) or {}) do ALLOWED_COLOR[c.color] = true end
+
+local function defaultSprite(typeKey)
+    local ti = typeInfo(typeKey)
+    return (ti and ti.blip) or 52
+end
+local function defaultColor()
+    return (Config.Storefront and Config.Storefront.DefaultColor) or 5
+end
+local function storefrontRadius()
+    return (Config.Storefront and Config.Storefront.Radius) or 30.0
+end
+
 local function notify(src, title, msg, t) Bridge.Notify(src, title, msg, t) end
 
 -- ---------------------------------------------------------------------------
@@ -80,6 +101,61 @@ end
 
 local function getBusinessById(id)
     return MySQL.single.await('SELECT * FROM palm6_businesses WHERE id = ?', { id })
+end
+
+-- Phase-1 storefront row, fetched SEPARATELY from getMembership so Phase 0's hot
+-- per-op membership SELECT is never touched — it can never SQL-error on a DB where
+-- 0070 has not yet applied, and this read only runs behind phase1() (by which
+-- point 0070 has). Returns loc/heading/blip columns, or nil.
+local function storefrontOf(businessId)
+    return MySQL.single.await(
+        'SELECT loc_x, loc_y, loc_z, loc_h, blip_sprite, blip_color FROM palm6_businesses WHERE id = ?',
+        { businessId })
+end
+
+-- A storefront is "placed" only when all three coords are non-null (clearing sets
+-- them null but keeps the chosen blip look for a future re-place).
+local function hasLoc(sf)
+    return sf ~= nil and sf.loc_x ~= nil and sf.loc_y ~= nil and sf.loc_z ~= nil
+end
+
+-- Is `src` within their storefront radius? Server-authoritative (real ped coords).
+local function nearLoc(src, sf)
+    if not hasLoc(sf) then return false end
+    local pc = Bridge.GetCoords(src)
+    if not pc then return false end
+    return Bridge.Distance(pc, { x = sf.loc_x, y = sf.loc_y, z = sf.loc_z }) <= storefrontRadius()
+end
+
+-- Every placed storefront -> the public blip/target list clients render. Behind
+-- phase1() so the whole feature is inert (empty list) until Phase 1 is enabled.
+local function storefrontList()
+    if not phase1() then return {} end
+    local rows = MySQL.query.await([[
+        SELECT id, name, biz_type, loc_x, loc_y, loc_z, blip_sprite, blip_color
+          FROM palm6_businesses
+         WHERE loc_x IS NOT NULL AND loc_y IS NOT NULL AND loc_z IS NOT NULL
+    ]]) or {}
+    local out = {}
+    for _, r in ipairs(rows) do
+        out[#out + 1] = {
+            id = r.id, name = r.name, biz_type = r.biz_type,
+            x = r.loc_x, y = r.loc_y, z = r.loc_z,
+            sprite = r.blip_sprite or defaultSprite(r.biz_type),
+            color = r.blip_color or defaultColor(),
+        }
+    end
+    return out
+end
+
+local function broadcastStorefronts()
+    if not phase1() then return end
+    TriggerClientEvent('palm6_business:storefronts', -1, storefrontList())
+end
+
+local function sendStorefronts(src)
+    if not phase1() then return end
+    TriggerClientEvent('palm6_business:storefronts', src, storefrontList())
 end
 
 local function rosterOf(businessId)
@@ -224,6 +300,26 @@ local function pushMenu(src)
             maxSupply = Config.MaxSupplyUnits,
             maxWage = Config.MaxWage,
         }
+        -- Phase 1: storefront state drives the proximity gate + owner controls.
+        -- `set`=has a placed location; `atStorefront`=owner/employee is close enough
+        -- to manage/serve. When Phase 1 is off, `enabled=false` and the client
+        -- renders exactly the Phase-0 menu (no gate, no storefront controls).
+        if phase1() then
+            local sf = storefrontOf(m.business_id)
+            local set = hasLoc(sf)
+            data.business.storefront = {
+                enabled = true,
+                set = set,
+                atStorefront = (not set) or nearLoc(src, sf),
+                sprite = set and (sf.blip_sprite or defaultSprite(m.biz_type)) or nil,
+                color = set and (sf.blip_color or defaultColor()) or nil,
+            }
+            data.cfg.storefront = {
+                radius = storefrontRadius(),
+                sprites = Config.Storefront.Sprites,
+                colors = Config.Storefront.Colors,
+            }
+        end
     else
         data.cfg = { registrationCost = Config.RegistrationCost }
     end
@@ -368,6 +464,16 @@ local function opServe(src)
     local dayIncome = (m.day_key == today) and (m.day_npc_income or 0) or 0
     if dayIncome + Config.ServePayout > Config.DailyNpcIncome then
         return notify(src, 'Business', 'This business hit its daily walk-in limit.', 'error')
+    end
+    -- Phase 1: a walk-in is served AT the shop. Only bites when Phase 1 is on AND a
+    -- storefront is placed; a business with no storefront serves as it did in Phase 0.
+    -- This is an immersion gate, not a money control — the faucet stays bounded by
+    -- supply/cooldown/daily-cap regardless of where the serve is triggered.
+    if phase1() then
+        local sf = storefrontOf(m.business_id)
+        if hasLoc(sf) and not nearLoc(src, sf) then
+            return notify(src, 'Business', "Serve walk-ins at your storefront — it's marked on your map.", 'error')
+        end
     end
     -- Atomic: consume 1 supply + credit payout + bump today's income, all guarded
     -- on supply>=1 AND the daily cap (WHERE reads the pre-update row). affected=0
@@ -621,6 +727,82 @@ local function opViewLedger(src)
 end
 
 -- ---------------------------------------------------------------------------
+-- Phase 1 — storefront placement + cosmetics + walk-up. All owner-gated (except
+-- the walk-up, which serves staff and passersby differently) and behind phase1().
+-- Location/heading are captured from the caller's REAL server-side ped position,
+-- never a client-supplied coordinate. No money moves in any of these.
+-- ---------------------------------------------------------------------------
+
+local function opSetStorefront(src)
+    if not phase1() then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can place the storefront.', 'error') end
+    local c = Bridge.GetCoords(src)
+    if not c then return notify(src, 'Business', 'Could not read your position — try again.', 'error') end
+    local h = Bridge.GetHeading(src)
+    -- Preserve any previously-chosen blip look; only seed defaults on first placement.
+    local sf = storefrontOf(m.business_id)
+    local sprite = (sf and sf.blip_sprite) or defaultSprite(m.biz_type)
+    local color = (sf and sf.blip_color) or defaultColor()
+    MySQL.update.await(
+        'UPDATE palm6_businesses SET loc_x = ?, loc_y = ?, loc_z = ?, loc_h = ?, blip_sprite = ?, blip_color = ? WHERE id = ?',
+        { c.x, c.y, c.z, h, sprite, color, m.business_id })
+    notify(src, 'Business', "Storefront placed here — it's on the map now.", 'success')
+    broadcastStorefronts()
+    pushMenu(src)
+end
+
+local function opClearStorefront(src)
+    if not phase1() then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can remove the storefront.', 'error') end
+    -- Null the coords (keeps blip_sprite/color so a re-place remembers the look).
+    MySQL.update.await('UPDATE palm6_businesses SET loc_x = NULL, loc_y = NULL, loc_z = NULL, loc_h = NULL WHERE id = ?', { m.business_id })
+    notify(src, 'Business', 'Storefront removed from the map.', 'inform')
+    broadcastStorefronts()
+    pushMenu(src)
+end
+
+local function opSetBlip(src, sprite, color)
+    if not phase1() then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can restyle the blip.', 'error') end
+    sprite = sanitizeInt(sprite)
+    color = sanitizeInt(color)
+    if not sprite or not ALLOWED_SPRITE[sprite] then return notify(src, 'Business', 'That blip icon is not allowed.', 'error') end
+    if not color or not ALLOWED_COLOR[color] then return notify(src, 'Business', 'That blip colour is not allowed.', 'error') end
+    MySQL.update.await('UPDATE palm6_businesses SET blip_sprite = ?, blip_color = ? WHERE id = ?', { sprite, color, m.business_id })
+    notify(src, 'Business', 'Blip updated.', 'success')
+    broadcastStorefronts()
+    pushMenu(src)
+end
+
+-- Walk-up to a storefront target. Staff of THAT business open management (pushMenu
+-- re-computes atStorefront so the proximity gate still applies); anyone else gets a
+-- read-only info card. No membership leak: a passerby never receives roster/balance.
+local function opOpenHere(src, businessId)
+    if not phase1() then return end
+    businessId = sanitizeInt(businessId)
+    if not businessId then return end
+    local b = getBusinessById(businessId)
+    if not b then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = cid and getMembership(cid) or nil
+    if m and m.business_id == businessId then
+        return pushMenu(src)
+    end
+    local ownerName = MySQL.scalar.await(
+        'SELECT name FROM palm6_business_members WHERE business_id = ? AND role = ? ORDER BY hired_at ASC LIMIT 1',
+        { businessId, Config.Role.Owner })
+    TriggerClientEvent('palm6_business:infoCard', src, {
+        name = b.name, biz_type = b.biz_type, owner = ownerName or 'Unknown',
+    })
+end
+
+-- ---------------------------------------------------------------------------
 -- Net events (guarded by palm6_eventguard — ensure order in custom.cfg).
 -- ---------------------------------------------------------------------------
 -- (No palm6_business:openMenu net event: the /business command opens the menu
@@ -643,6 +825,12 @@ RegisterNetEvent('palm6_business:acceptCharge',  function() opAcceptCharge(sourc
 RegisterNetEvent('palm6_business:viewLedger', function() opViewLedger(source) end)
 RegisterNetEvent('palm6_business:rename',     function(name) opRename(source, name) end)
 RegisterNetEvent('palm6_business:resign',     function() opResign(source) end)
+-- Phase 1 storefront net events.
+RegisterNetEvent('palm6_business:setStorefront',   function() opSetStorefront(source) end)
+RegisterNetEvent('palm6_business:clearStorefront', function() opClearStorefront(source) end)
+RegisterNetEvent('palm6_business:setBlip',         function(sprite, color) opSetBlip(source, sprite, color) end)
+RegisterNetEvent('palm6_business:openHere',        function(businessId) opOpenHere(source, businessId) end)
+RegisterNetEvent('palm6_business:requestStorefronts', function() sendStorefronts(source) end)
 
 AddEventHandler('playerDropped', function()
     local s = source
@@ -700,6 +888,15 @@ exports('GetAccountBalance', function(businessId)
     return MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { businessId }) or 0
 end)
 
+-- Phase-1 seam: a business's storefront coords/heading, or nil if unplaced. For a
+-- future greeter ped, delivery target, or palm6_protection "shake down the shop".
+exports('GetStorefront', function(businessId)
+    if not phase1() then return nil end
+    local sf = storefrontOf(businessId)
+    if not hasLoc(sf) then return nil end
+    return { x = sf.loc_x, y = sf.loc_y, z = sf.loc_z, h = sf.loc_h or 0.0 }
+end)
+
 CreateThread(function()
     if enabled() then
         print('[palm6_business] ENABLED — player-owned businesses live.')
@@ -712,4 +909,8 @@ CreateThread(function()
     -- pcall-guarded so a not-yet-created table can never error the resource.
     Wait(12000)
     pcall(reconcilePending)
+    -- Phase 1: push the storefront set to everyone already connected (covers a
+    -- live resource restart; fresh joins pull it via requestStorefronts). No-op
+    -- while Phase 1 is off (broadcastStorefronts early-returns).
+    if phase1() then pcall(broadcastStorefronts) end
 end)

@@ -126,6 +126,14 @@ function Bridge.Distance(a, b)
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
+-- Caller's ped heading (0-360), or 0.0. Phase-1 storefront placement captures it
+-- server-side so a future greeter ped faces the right way — never client-supplied.
+function Bridge.GetHeading(src)
+    local ped = GetPlayerPed(src)
+    if not ped or ped == 0 then return 0.0 end
+    return GetEntityHeading(ped) or 0.0
+end
+
 -- ---------------------------------------------------------------------------
 -- Notify / commands
 -- ---------------------------------------------------------------------------

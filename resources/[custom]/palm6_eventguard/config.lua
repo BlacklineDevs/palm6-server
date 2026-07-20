@@ -284,4 +284,12 @@ Config.Events = {
     ['palm6_business:viewLedger']   = { calls = 20, window_seconds = 60 },
     ['palm6_business:rename']       = { calls = 5,  window_seconds = 60 },
     ['palm6_business:resign']       = { calls = 5,  window_seconds = 60 },
+    -- Phase 1 storefronts. All owner-gated + re-validated server-side; none move
+    -- money. `openHere` is the walk-up (staff open the menu, passersby get a card);
+    -- `requestStorefronts` is a client-load pull, so both get a wider budget.
+    ['palm6_business:setStorefront']      = { calls = 10, window_seconds = 60 },
+    ['palm6_business:clearStorefront']    = { calls = 10, window_seconds = 60 },
+    ['palm6_business:setBlip']            = { calls = 15, window_seconds = 60 },
+    ['palm6_business:openHere']           = { calls = 40, window_seconds = 60 },
+    ['palm6_business:requestStorefronts'] = { calls = 10, window_seconds = 60 },
 }

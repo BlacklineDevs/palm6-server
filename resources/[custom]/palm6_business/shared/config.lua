@@ -23,6 +23,14 @@ Config.Debug = false
 -- with a feel-test. Mirrors the palm6_racing / palm6_fc_core dark-ship idiom.
 Config.Enabled = false
 
+-- PHASE 1 GATE — physical storefronts (map location + blip + walk-up target;
+-- proximity-gated management; storefront-anchored serving). Independent of
+-- Config.Enabled so enabling Phase 0 does NOT auto-enable storefronts: BOTH must
+-- be true for any storefront code path to run. Flip true (+ redeploy) only after
+-- the Phase 1 feel-test. false = Phase 0 behaves exactly as it does today (a
+-- business with no storefront row is indistinguishable from a Phase-0 business).
+Config.Phase1Enabled = false
+
 -- Command that opens the business menu (+ a short alias).
 Config.Command = 'business'
 Config.CommandAlias = 'biz'
@@ -49,12 +57,15 @@ Config.Blocklist = {
 -- Business catalog. `label` shows in the register picker + roster. `flavor` is
 -- cosmetic copy. All types share the same mechanics in Phase 0 (the difference
 -- is roleplay identity + future storefront/venue hooks in Phase 1). Extensible.
+-- `blip` = the DEFAULT map-blip sprite for a new storefront of this type (Phase 1;
+-- the owner can re-pick from Config.Storefront.Sprites). All sprite ids are
+-- validated against the allowlist on write, so an unknown value here is inert.
 Config.Types = {
-    { key = 'restaurant', label = 'Restaurant',   flavor = 'Serve the city. Keep the lights on.' },
-    { key = 'bar',        label = 'Bar / Venue',  flavor = 'Own the room. Turn a night into an institution.' },
-    { key = 'garage',     label = 'Garage / Shop',flavor = 'A service people come back to.' },
-    { key = 'retail',     label = 'Retail Front', flavor = 'A legit storefront on the map.' },
-    { key = 'dealership',  label = 'Dealership',   flavor = 'Move product. Build a name.' },
+    { key = 'restaurant', label = 'Restaurant',   flavor = 'Serve the city. Keep the lights on.',            blip = 93  },
+    { key = 'bar',        label = 'Bar / Venue',  flavor = 'Own the room. Turn a night into an institution.', blip = 93  },
+    { key = 'garage',     label = 'Garage / Shop',flavor = 'A service people come back to.',                  blip = 402 },
+    { key = 'retail',     label = 'Retail Front', flavor = 'A legit storefront on the map.',                  blip = 52  },
+    { key = 'dealership',  label = 'Dealership',   flavor = 'Move product. Build a name.',                     blip = 326 },
 }
 
 -- ---------------------------------------------------------------------------
@@ -115,3 +126,50 @@ Config.DailyNpcIncome = 15000
 -- Require a supply cost basis for NPC income (keep true — this is the faucet's
 -- primary limiter). If ever false, NPC income becomes free-mint: DON'T.
 Config.NpcRequiresSupply = true
+
+-- ---------------------------------------------------------------------------
+-- PHASE 1 — Storefronts. A business becomes a PLACE: the owner marks a location
+-- (server captures their real ped coords/heading — never client-supplied), a
+-- public map blip + a walk-up interaction point spawn there, day-to-day
+-- management is proximity-gated to the storefront, and NPC serving happens AT the
+-- shop. All of this is inert unless Config.Phase1Enabled (+ Config.Enabled).
+--
+-- LOCKOUT SAFETY: registering a business and setting/moving/removing a storefront
+-- are ALWAYS reachable from /business regardless of where the owner stands — only
+-- the recurring management actions require being at the storefront. An owner can
+-- never strand themselves by placing a storefront somewhere awkward.
+-- ---------------------------------------------------------------------------
+Config.Storefront = {
+    -- How close (metres, 3D) a staff member must be to their storefront to manage
+    -- it and to serve walk-ins. Generous so the whole shop interior counts.
+    Radius = 30.0,
+
+    -- Blip appearance defaults + scale. Per-type default sprite lives on
+    -- Config.Types[].blip; DefaultColor applies until the owner customises.
+    DefaultColor = 5,   -- yellow
+    Scale = 0.85,
+
+    -- Owner-selectable blip cosmetics. The server validates every write against
+    -- these two allowlists (a client can't set an arbitrary sprite/colour). Keep
+    -- to well-known-valid ids; an id that renders generically is harmless.
+    Sprites = {
+        { sprite = 52,  label = 'Storefront' },
+        { sprite = 93,  label = 'Restaurant' },
+        { sprite = 431, label = 'Bar' },
+        { sprite = 402, label = 'Garage' },
+        { sprite = 326, label = 'Dealership' },
+        { sprite = 496, label = 'Boutique' },
+        { sprite = 568, label = 'Cafe' },
+        { sprite = 500, label = 'Star' },
+    },
+    Colors = {
+        { color = 5,  label = 'Yellow' },
+        { color = 2,  label = 'Green' },
+        { color = 3,  label = 'Blue' },
+        { color = 1,  label = 'Red' },
+        { color = 27, label = 'Cyan' },
+        { color = 83, label = 'Purple' },
+        { color = 48, label = 'Grey' },
+        { color = 47, label = 'Orange' },
+    },
+}

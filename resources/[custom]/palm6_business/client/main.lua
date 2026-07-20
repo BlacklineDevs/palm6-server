@@ -140,6 +140,44 @@ local function renderOperations(b, cfg)
 end
 
 -- ---------------------------------------------------------------------------
+-- Storefront (Phase 1, owner) — place/move/restyle/remove the shop on the map
+-- ---------------------------------------------------------------------------
+local function renderBlipPicker(b, cfg)
+    local sc = cfg.storefront or {}
+    local sOpts, cOpts = {}, {}
+    for _, s in ipairs(sc.sprites or {}) do sOpts[#sOpts + 1] = { value = s.sprite, label = s.label } end
+    for _, c in ipairs(sc.colors or {}) do cOpts[#cOpts + 1] = { value = c.color, label = c.label } end
+    if #sOpts == 0 or #cOpts == 0 then return end
+    local cur = b.storefront or {}
+    local r = Game.InputDialog('Customize map blip', {
+        { type = 'select', label = 'Icon', options = sOpts, default = cur.sprite, required = true },
+        { type = 'select', label = 'Colour', options = cOpts, default = cur.color, required = true },
+    })
+    if r and r[1] and r[2] then TriggerServerEvent('palm6_business:setBlip', r[1], r[2]) end
+end
+
+local function renderStorefront(b, cfg)
+    local sf = b.storefront or {}
+    local opts = {}
+    if sf.set then
+        opts[#opts + 1] = { title = 'Move storefront here', description = 'Re-place it at your current spot', icon = 'fa-solid fa-location-crosshairs',
+            onSelect = function() TriggerServerEvent('palm6_business:setStorefront') end }
+        opts[#opts + 1] = { title = 'Customize map blip', description = 'Icon and colour', icon = 'fa-solid fa-palette',
+            onSelect = function() renderBlipPicker(b, cfg) end }
+        opts[#opts + 1] = { title = 'Remove storefront', description = 'Take it off the map', icon = 'fa-solid fa-trash',
+            onSelect = function()
+                if Game.Confirm('Remove storefront', 'Remove this storefront from the map?') then
+                    TriggerServerEvent('palm6_business:clearStorefront')
+                end
+            end }
+    else
+        opts[#opts + 1] = { title = 'Place storefront here', description = 'Mark this spot as your shop — puts it on the map', icon = 'fa-solid fa-map-pin',
+            onSelect = function() TriggerServerEvent('palm6_business:setStorefront') end }
+    end
+    Game.OpenMenu('palm6_business_storefront', 'Storefront', opts, 'palm6_business_root')
+end
+
+-- ---------------------------------------------------------------------------
 -- Root
 -- ---------------------------------------------------------------------------
 local function renderRoot(data)
@@ -149,21 +187,45 @@ local function renderRoot(data)
     if not data.business then return renderRegister(data) end
     local b = data.business
     local cfg = data.cfg or {}
+    local sf = b.storefront                              -- nil when Phase 1 is off
+    local isOwner = b.role >= 3
+    -- Placed a storefront but standing away from it -> hide day-to-day management
+    -- (you manage the shop AT the shop). Setting/moving/removing the storefront and
+    -- registering stay reachable regardless, so an owner can never lock themselves out.
+    local gated = sf and sf.set and not sf.atStorefront
+
     local opts = {}
     opts[#opts + 1] = { title = b.name, description = ('%s  ·  you are %s'):format(b.biz_type or '', b.roleName or ''), disabled = true }
 
-    if b.role >= 3 then
-        opts[#opts + 1] = { title = ('Account  ·  %s'):format(money(b.balance)), arrow = true, onSelect = function() renderAccount(b) end }
-        opts[#opts + 1] = { title = 'Employees', description = ('%d on the roster'):format(#(b.roster or {})), arrow = true, onSelect = function() renderEmployees(b) end }
+    if gated then
+        opts[#opts + 1] = { title = 'Head to your storefront to manage', description = "It's marked on your map.", icon = 'fa-solid fa-location-dot', disabled = true }
+    else
+        if isOwner then
+            opts[#opts + 1] = { title = ('Account  ·  %s'):format(money(b.balance)), arrow = true, onSelect = function() renderAccount(b) end }
+            opts[#opts + 1] = { title = 'Employees', description = ('%d on the roster'):format(#(b.roster or {})), arrow = true, onSelect = function() renderEmployees(b) end }
+        end
+        opts[#opts + 1] = { title = 'Operations', description = 'Serve, charge, supply', arrow = true, onSelect = function() renderOperations(b, cfg) end }
+        opts[#opts + 1] = {
+            title = b.clockedIn and 'Clock out' or 'Clock in',
+            description = b.clockedIn and 'You are on the clock' or 'Clock in to serve customers',
+            onSelect = function() TriggerServerEvent('palm6_business:clock', not b.clockedIn) end,
+        }
+        opts[#opts + 1] = { title = 'View ledger', description = 'Recent money movements', onSelect = function() TriggerServerEvent('palm6_business:viewLedger') end }
     end
-    opts[#opts + 1] = { title = 'Operations', description = 'Serve, charge, supply', arrow = true, onSelect = function() renderOperations(b, cfg) end }
-    opts[#opts + 1] = {
-        title = b.clockedIn and 'Clock out' or 'Clock in',
-        description = b.clockedIn and 'You are on the clock' or 'Clock in to serve customers',
-        onSelect = function() TriggerServerEvent('palm6_business:clock', not b.clockedIn) end,
-    }
-    opts[#opts + 1] = { title = 'View ledger', description = 'Recent money movements', onSelect = function() TriggerServerEvent('palm6_business:viewLedger') end }
-    if b.role >= 3 then
+
+    -- Storefront controls (owner + Phase 1) — ALWAYS shown, even when gated, so a
+    -- badly-placed storefront can be moved/removed from anywhere.
+    if isOwner and sf and sf.enabled then
+        opts[#opts + 1] = {
+            title = sf.set and 'Storefront' or 'Place a storefront',
+            description = sf.set and 'Move · restyle · remove' or 'Put your shop on the map',
+            icon = 'fa-solid fa-store', arrow = true,
+            onSelect = function() renderStorefront(b, cfg) end,
+        }
+    end
+
+    -- Rename (owner) — management, hidden while gated.
+    if not gated and isOwner then
         opts[#opts + 1] = {
             title = 'Rename business',
             onSelect = function()
@@ -171,7 +233,10 @@ local function renderRoot(data)
                 if r and r[1] then TriggerServerEvent('palm6_business:rename', r[1]) end
             end,
         }
-    else
+    end
+    -- Resign (staff) — ALWAYS available: quitting a job shouldn't require standing
+    -- in the shop, so it stays reachable even when the storefront gate is active.
+    if not isOwner then
         opts[#opts + 1] = { title = 'Resign', description = 'Leave this business', onSelect = function()
             if Game.Confirm('Resign', 'Leave this business?') then TriggerServerEvent('palm6_business:resign') end
         end }
@@ -203,4 +268,38 @@ end)
 RegisterNetEvent('palm6_business:chargePrompt', function(d)
     local ok = Game.Confirm('Payment', ('**%s** is charging you %s for "%s". Pay?'):format(d.businessName or 'A business', money(d.amount), d.memo or 'a sale'))
     if ok then TriggerServerEvent('palm6_business:acceptCharge') end
+end)
+
+-- ---------------------------------------------------------------------------
+-- Phase 1 — storefront blips/targets + walk-up info card
+-- ---------------------------------------------------------------------------
+
+-- Server pushed the full storefront set (on change, on boot, or on our request).
+RegisterNetEvent('palm6_business:storefronts', function(list)
+    if type(list) ~= 'table' then return end
+    Game.RenderStorefronts(list, Config.Storefront, function(id)
+        TriggerServerEvent('palm6_business:openHere', id)
+    end)
+end)
+
+-- A passerby walked up to a storefront (not their business) -> read-only card.
+RegisterNetEvent('palm6_business:infoCard', function(d)
+    if type(d) ~= 'table' then return end
+    local body = ('# %s\n%s\n\nOwner: **%s**'):format(d.name or 'Business', d.biz_type or '', d.owner or 'Unknown')
+    Game.ShowReport('Storefront', body)
+end)
+
+-- Pull the storefront set once on load (covers fresh joins). Config is shared, so
+-- the client knows whether Phase 1 is live without a round-trip; the server
+-- re-checks phase1() before replying regardless.
+CreateThread(function()
+    Wait(2500)
+    if Config.Enabled and Config.Phase1Enabled then
+        TriggerServerEvent('palm6_business:requestStorefronts')
+    end
+end)
+
+AddEventHandler('onResourceStop', function(res)
+    if res ~= GetCurrentResourceName() then return end
+    Game.ClearStorefronts()
 end)

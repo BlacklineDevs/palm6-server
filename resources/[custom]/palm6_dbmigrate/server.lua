@@ -536,6 +536,28 @@ CREATE TABLE IF NOT EXISTS `allowlist` (
     `enabled`    TINYINT(1) NOT NULL DEFAULT 1,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0070: palm6_business Phase 1 — PHYSICAL STOREFRONTS. Adds a map location +
+    -- blip appearance to an existing business so it becomes a PLACE on the map, not
+    -- just a menu. All columns nullable via ADD COLUMN IF NOT EXISTS (the 0068
+    -- pending-column pattern) so a business with no storefront set behaves exactly
+    -- like Phase 0. NO money columns here — storefronts touch presentation/location
+    -- only; the account/faucet invariants are untouched. loc_h = heading (for a
+    -- future greeter ped); blip_sprite/blip_color are owner cosmetics validated
+    -- server-side against Config.Storefront allowlists before write.
+    { name = '0070 business loc_x', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `loc_x` DOUBLE NULL]] },
+    { name = '0070 business loc_y', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `loc_y` DOUBLE NULL]] },
+    { name = '0070 business loc_z', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `loc_z` DOUBLE NULL]] },
+    { name = '0070 business loc_h', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `loc_h` DOUBLE NULL]] },
+    { name = '0070 business blip_sprite', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `blip_sprite` SMALLINT UNSIGNED NULL]] },
+    { name = '0070 business blip_color', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `blip_color` TINYINT UNSIGNED NULL]] },
+    { name = '0070 business loc index', sql = [[
+CREATE INDEX IF NOT EXISTS `idx_palm6_business_loc` ON `palm6_businesses` (`loc_x`)]] },
 }
 
 CreateThread(function()
