@@ -28,12 +28,26 @@ Config.GuildIdConvar  = 'palm6:discord_guild_id'
 -- Discord role ids permitted to join. A join is admitted if the linked Discord
 -- member holds ANY of these roles (requires the bot token + guild id convars set
 -- below — the boot banner in server/main.lua reports whether they are).
+--
+-- This set MIRRORS the roles the allowlist DB-sync already grants play to
+-- (sync-horizon-allowlist.py / Task HorizonAllowlistSync, guild 1522465866837393418):
+-- the sync writes an `allowlist` DB row for holders of these roles every ~10 min,
+-- which is the CURRENT admit path. Populating AllowedRoles + setting the two
+-- convars below turns on the REAL-TIME role check (no 10-min lag) as a parallel
+-- admit path — it does not remove the DB path.
+--
+-- NB: the Founding Tester role (1528644816890630166) is deliberately NOT here.
+-- Per /beta a founding reservation does NOT bypass whitelist ("approval is still
+-- required before play"), so holding the founding role must not by itself grant
+-- play; a founding tester is admitted only once they complete the whitelist and
+-- receive @Whitelisted (below).
 Config.AllowedRoles = {
-    -- Founding Tester role (guild 1522465866837393418), granted by the founding
-    -- pipeline (palm6-bot /webhooks/founding-grant) — the primary admit path for
-    -- the Founding Beta cohort. Add the general whitelist role id here as well
-    -- once it exists for the public launch.
-    ['1528644816890630166'] = 'founding',
+    ['1524863821725040941'] = 'admin',
+    ['1524863824002420829'] = 'moderator',
+    ['1524863825877405757'] = 'whitelisted',
+    ['1524863833166975009'] = 'member',
+    ['1522473509547282584'] = 'customer',
+    ['1522473510725750906'] = 'investor',
 }
 
 -- Role lookups are cached this many seconds.
