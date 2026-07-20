@@ -97,7 +97,10 @@ local function insertLedger(businessId, actorCid, action, amount, balanceAfter, 
 end
 
 -- Credit the account by `amount` (amount already came from a real player). Logs.
--- Returns the new balance.
+-- Returns the new balance. NOTE: account_balance itself is always exact (the +=
+-- is atomic); the ledger's balance_after snapshot is read-back and is best-effort
+-- under simultaneous same-business writes (a concurrent op's delta may be
+-- observed). That is a cosmetic audit-trail nuance, never a money error.
 local function creditAccount(businessId, amount, actorCid, action, memo)
     MySQL.update.await('UPDATE palm6_businesses SET account_balance = account_balance + ? WHERE id = ?', { amount, businessId })
     local bal = MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { businessId }) or 0
@@ -114,6 +117,59 @@ local function debitAccount(businessId, amount)
         { amount, businessId, amount })
     if aff ~= 1 then return nil end
     return MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { businessId }) or 0
+end
+
+-- Crash-recoverable debit: guarded debit + a durable pending-payout marker set
+-- in the SAME statement. A process kill after this commits (but before the bank
+-- credit lands) leaves pending_amount>0, which reconcilePending() re-drives on
+-- boot — the repo's recoverable-payout idiom (cf. dbmigrate 0054-0063), adapted
+-- to the account->bank direction (withdraw/payroll). Returns new balance | nil.
+-- The single marker is safe because account debits are owner-serial (only
+-- withdraw + payroll touch it, both driven by one owner one action at a time).
+-- The `AND pending_amount = 0` guard means a business can hold at most ONE
+-- unsettled payout marker: a new debit is refused while a prior payout is still
+-- mid-settle (or awaiting boot reconcile), so the single marker can never be
+-- overwritten and lose an owed payment.
+local function debitAccountWithPending(businessId, amount, payeeCid)
+    local aff = MySQL.update.await([[
+        UPDATE palm6_businesses
+           SET account_balance = account_balance - ?,
+               pending_cid = ?, pending_amount = ?, pending_at = ?
+         WHERE id = ? AND account_balance >= ? AND pending_amount = 0
+    ]], { amount, payeeCid, amount, nowSec(), businessId, amount })
+    if aff ~= 1 then return nil end
+    return MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { businessId }) or 0
+end
+
+-- Settle a pending payout exactly once. CLAIM-BEFORE-CREDIT: atomically clear the
+-- marker first (so a crash after the claim can never re-pay -> no double-pay,
+-- matching the repo's claim-before-credit idiom), THEN issue the bank credit;
+-- reverse the account debit if the credit fails in-process. Callable from the
+-- live path OR the boot reconcile — whichever wins the atomic claim pays once.
+-- Returns 'paid' | 'lost' (claimed but credit failed, account refunded) | 'taken'
+-- (another caller already claimed it).
+local function settlePayout(businessId, payeeCid, amount, reason)
+    local claimed = MySQL.update.await(
+        'UPDATE palm6_businesses SET pending_amount = 0, pending_cid = NULL, pending_at = 0 WHERE id = ? AND pending_amount = ? AND pending_cid = ?',
+        { businessId, amount, payeeCid })
+    if claimed ~= 1 then return 'taken' end
+    if Bridge.CreditBankByCitizenId(payeeCid, amount, reason) then return 'paid' end
+    creditAccount(businessId, amount, payeeCid, 'payout-refund', 'Payout reversed (credit failed)')
+    return 'lost'
+end
+
+-- Boot reconcile: re-drive any payout that was debited from an account but whose
+-- bank credit never confirmed before a crash/restart. The atomic claim in
+-- settlePayout guarantees each is paid at most once. Runs regardless of
+-- Config.Enabled so money from a previously-enabled period is always recovered.
+local function reconcilePending()
+    local rows = MySQL.query.await('SELECT id, pending_cid, pending_amount FROM palm6_businesses WHERE pending_amount > 0') or {}
+    for _, r in ipairs(rows) do
+        if r.pending_cid and r.pending_amount and r.pending_amount > 0 then
+            local res = settlePayout(r.id, r.pending_cid, r.pending_amount, 'business-payout-reconcile')
+            print(('[palm6_business] reconcile: business %s owed %s $%s -> %s'):format(r.id, r.pending_cid, r.pending_amount, res))
+        end
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -135,26 +191,33 @@ end
 -- Menu snapshot -> client
 -- ---------------------------------------------------------------------------
 local function pushMenu(src)
+    if not enabled() then return end  -- dark-ship: no reads/emits while disabled
     local cid = Bridge.GetCitizenId(src)
     local m = getMembership(cid)
-    local data = { enabled = enabled(), types = Config.Types }
+    local data = { enabled = true, types = Config.Types }
     if m then
-        local roster = rosterOf(m.business_id)
         local today = dayKey()
         local dayIncome = (m.day_key == today) and (m.day_npc_income or 0) or 0
+        local isOwner = m.role >= Config.Role.Owner
         data.business = {
             id = m.business_id,
             name = m.business_name,
             biz_type = m.biz_type,
             role = m.role,
             roleName = Config.RoleName[m.role] or '?',
-            balance = m.account_balance or 0,
             supply = m.supply_units or 0,
             clockedIn = m.clocked_in == 1,
             dayIncome = dayIncome,
             dailyCap = Config.DailyNpcIncome,
-            roster = roster,
         }
+        -- Owner-scoped data (coworker citizenids/wages + the account balance) is
+        -- attached ONLY for the owner — the SERVER is the authority on what a
+        -- non-owner may receive, not the client's render gate. A role=1 employee
+        -- must never receive the roster or balance in the menuData payload.
+        if isOwner then
+            data.business.balance = m.account_balance or 0
+            data.business.roster = rosterOf(m.business_id)
+        end
         data.cfg = {
             stockUnitCost = Config.StockUnitCost,
             servePayout = Config.ServePayout,
@@ -223,6 +286,13 @@ local function opDeposit(src, amount)
     if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can move the account.', 'error') end
     amount = clampInt(amount, Config.MinAmount, Config.MaxPerAction)
     if not amount or amount < Config.MinAmount then return notify(src, 'Business', 'Invalid amount.', 'error') end
+    -- Charge-before-credit. NOTE: the player-side debit is qbx in-memory
+    -- (persisted on the next player-save), while creditAccount is immediately
+    -- durable. A HARD crash (not a graceful stop, which saves players) after the
+    -- account credit but before that save could keep the account gain without the
+    -- player's debit. This is the SAME in-memory window every ChargeBank->durable
+    -- -write path in this codebase carries (lottery/flashdrop/etc.); a graceful
+    -- deploy-restart is safe. Accepted, codebase-wide; not special-cased here.
     if not Bridge.ChargeBank(src, amount, 'business-deposit') then
         return notify(src, 'Business', 'Not enough in your bank.', 'error')
     end
@@ -238,16 +308,18 @@ local function opWithdraw(src, amount)
     if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can move the account.', 'error') end
     amount = clampInt(amount, Config.MinAmount, Config.MaxPerAction)
     if not amount or amount < Config.MinAmount then return notify(src, 'Business', 'Invalid amount.', 'error') end
-    local bal = debitAccount(m.business_id, amount)
-    if not bal then return notify(src, 'Business', 'The business account cannot cover that.', 'error') end
-    if not Bridge.CreditBankByCitizenId(cid, amount, 'business-withdraw') then
-        -- credit failed: put it back so nothing is lost.
-        creditAccount(m.business_id, amount, cid, 'withdraw-refund', 'Withdraw failed, reversed')
-        return notify(src, 'Business', 'Payout failed, reversed. Try again.', 'error')
+    local bal = debitAccountWithPending(m.business_id, amount, cid)
+    if not bal then return notify(src, 'Business', 'The business account cannot cover that (or a payout is still settling).', 'error') end
+    local res = settlePayout(m.business_id, cid, amount, 'business-withdraw')
+    if res == 'paid' then
+        insertLedger(m.business_id, cid, 'withdraw', -amount, bal, 'Owner withdraw')
+        notify(src, 'Business', ('Withdrew $%d. Account: $%d.'):format(amount, bal), 'success')
+        pushMenu(src)
+    elseif res == 'lost' then
+        notify(src, 'Business', 'Payout failed, reversed. Try again.', 'error')
+    else
+        notify(src, 'Business', 'That payout was already processed.', 'inform')
     end
-    insertLedger(m.business_id, cid, 'withdraw', -amount, bal, 'Owner withdraw')
-    notify(src, 'Business', ('Withdrew $%d. Account: $%d.'):format(amount, bal), 'success')
-    pushMenu(src)
 end
 
 local function opBuyStock(src, qty)
@@ -375,14 +447,24 @@ local function opAcceptHire(src)
     if not cid then return end
     if getMembership(cid) then return notify(src, 'Business', 'You already belong to a business.', 'error') end
     if not getBusinessById(p.businessId) then return notify(src, 'Business', 'That business no longer exists.', 'error') end
-    local count = MySQL.scalar.await('SELECT COUNT(*) FROM palm6_business_members WHERE business_id = ?', { p.businessId }) or 0
-    if count >= (Config.MaxEmployees + 1) then return notify(src, 'Business', 'That roster filled up.', 'error') end
+    -- Atomic conditional insert: the roster-cap COUNT is evaluated INSIDE the
+    -- insert statement (wrapped in a derived table to satisfy MySQL's
+    -- same-table-in-subquery rule), so there is no check-then-insert TOCTOU where
+    -- two concurrent accepts could both pass a stale count and overshoot the cap.
+    -- affected = 1 -> joined; 0 -> the roster was already at cap. The citizenid
+    -- PRIMARY KEY remains the hard backstop against a double-join.
+    local cap = Config.MaxEmployees + 1
+    local affected = 0
     local ok = pcall(function()
-        MySQL.insert.await(
-            'INSERT INTO palm6_business_members (citizenid, business_id, role, wage, clocked_in, name) VALUES (?,?,?,0,0,?)',
-            { cid, p.businessId, Config.Role.Employee, Bridge.GetPlayerName(src) })
+        affected = MySQL.update.await([[
+            INSERT INTO palm6_business_members (citizenid, business_id, role, wage, clocked_in, name)
+            SELECT ?, ?, ?, 0, 0, ?
+              FROM (SELECT COUNT(*) AS cnt FROM palm6_business_members WHERE business_id = ?) AS c
+             WHERE c.cnt < ?
+        ]], { cid, p.businessId, Config.Role.Employee, Bridge.GetPlayerName(src), p.businessId, cap })
     end)
     if not ok then return notify(src, 'Business', 'Could not join.', 'error') end
+    if affected ~= 1 then return notify(src, 'Business', 'That roster filled up.', 'error') end
     notify(src, 'Business', ('You joined %s.'):format(p.businessName), 'success')
     local ownerSrc = Bridge.GetSourceByCitizenId(p.ownerCid)
     if ownerSrc then notify(ownerSrc, 'Business', ('%s joined the team.'):format(Bridge.GetPlayerName(src)), 'success') end
@@ -434,17 +516,17 @@ local function opPayroll(src)
     if #emps == 0 then return notify(src, 'Business', 'No clocked-in employees with a wage.', 'error') end
     local paid, total, ranDry = 0, 0, false
     for _, e in ipairs(emps) do
-        local bal = debitAccount(m.business_id, e.wage)
-        if not bal then ranDry = true break end
-        if not Bridge.CreditBankByCitizenId(e.citizenid, e.wage, 'business-payroll') then
-            creditAccount(m.business_id, e.wage, cid, 'payroll-refund', 'Payroll credit failed, reversed')
-        else
+        local bal = debitAccountWithPending(m.business_id, e.wage, e.citizenid)
+        if not bal then ranDry = true break end  -- insufficient funds (or a prior payout still settling)
+        local res = settlePayout(m.business_id, e.citizenid, e.wage, 'business-payroll')
+        if res == 'paid' then
             insertLedger(m.business_id, e.citizenid, 'payroll', -e.wage, bal, ('Wage to %s'):format(e.name or e.citizenid))
             paid = paid + 1
             total = total + e.wage
             local es = Bridge.GetSourceByCitizenId(e.citizenid)
             if es then notify(es, 'Business', ('Payday: +$%d from %s.'):format(e.wage, m.business_name), 'success') end
         end
+        -- 'lost' (credit failed -> account refunded) and 'taken' both leave money safe; skip.
     end
     notify(src, 'Business', ('Paid %d for $%d%s.'):format(paid, total, ranDry and ' (account ran out)' or ''), ranDry and 'error' or 'success')
     pushMenu(src)
@@ -541,7 +623,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Net events (guarded by palm6_eventguard — ensure order in custom.cfg).
 -- ---------------------------------------------------------------------------
-RegisterNetEvent('palm6_business:openMenu',   function() pushMenu(source) end)
+-- (No palm6_business:openMenu net event: the /business command opens the menu
+-- server-side via cmd()->pushMenu, and every op re-pushes it. A client-triggered
+-- open is only needed once Phase 1 adds a storefront ped/target, and will be
+-- re-added with its eventguard budget then.)
 RegisterNetEvent('palm6_business:register',   function(name, typeKey) opRegister(source, name, typeKey) end)
 RegisterNetEvent('palm6_business:deposit',    function(amt) opDeposit(source, amt) end)
 RegisterNetEvent('palm6_business:withdraw',   function(amt) opWithdraw(source, amt) end)
@@ -587,6 +672,7 @@ end
 
 -- Summary of the caller-cid's business, or nil.
 exports('GetBusinessOf', function(citizenid)
+    if not enabled() then return nil end
     local m = getMembership(citizenid)
     if not m then return nil end
     return {
@@ -610,6 +696,7 @@ exports('Charge', function(businessId, payerCid, amount, memo)
 end)
 
 exports('GetAccountBalance', function(businessId)
+    if not enabled() then return 0 end
     return MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { businessId }) or 0
 end)
 
@@ -619,4 +706,10 @@ CreateThread(function()
     else
         print('[palm6_business] loaded DARK (Config.Enabled=false) — prod-inert.')
     end
+    -- Boot reconcile any account->bank payout stranded by a crash between the
+    -- debit and the bank credit (withdraw/payroll). Runs after dbmigrate 0068 +
+    -- oxmysql are up. Safe while DARK (no pending rows exist if never enabled);
+    -- pcall-guarded so a not-yet-created table can never error the resource.
+    Wait(12000)
+    pcall(reconcilePending)
 end)
