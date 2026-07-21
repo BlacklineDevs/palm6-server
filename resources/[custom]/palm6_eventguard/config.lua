@@ -299,4 +299,8 @@ Config.Events = {
     -- Robbery: server re-validates proximity + per-robber + per-business cooldown +
     -- balance + atomic guarded debit; a tight budget is belt-and-braces over those.
     ['palm6_business:rob']                = { calls = 6,  window_seconds = 60 },
+    -- Starter Pack cosmetics (store SKU). Owner-gated + entitlement-gated +
+    -- validated server-side; cosmetic only, no money. Tight budgets.
+    ['palm6_business:setNameplate']       = { calls = 10, window_seconds = 60 },
+    ['palm6_business:setSkin']            = { calls = 10, window_seconds = 60 },
 }

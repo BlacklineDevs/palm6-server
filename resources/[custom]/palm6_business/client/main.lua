@@ -222,6 +222,32 @@ local function renderBlipPicker(b, cfg)
     if r and r[1] and r[2] then TriggerServerEvent('palm6_business:setBlip', r[1], r[2]) end
 end
 
+-- Starter Pack (store SKU): set/clear the custom nameplate (a placed storefront's
+-- display name). Owner + entitlement are re-validated server-side; a blank submit
+-- clears it. Sanitised server-side, so any text is safe to send.
+local function renderNameplate(b, cfg)
+    local sp = cfg.starterPack or {}
+    local cur = (b.starterPack and b.starterPack.nameplate) or ''
+    local r = Game.InputDialog('Custom nameplate', {
+        { type = 'input', label = 'Nameplate', default = cur, max = sp.nameplateMaxLen or 24,
+          description = 'Shown on your storefront. Leave blank to clear.' },
+    })
+    if r then TriggerServerEvent('palm6_business:setNameplate', r[1] or '') end
+end
+
+-- Starter Pack: choose a premium blip skin (or None to revert to the base blip).
+local function renderSkinPicker(b, cfg)
+    local sp = cfg.starterPack or {}
+    local opts = { { value = '', label = 'None (base blip)' } }
+    for _, s in ipairs(sp.skins or {}) do opts[#opts + 1] = { value = s.key, label = s.label } end
+    if #opts <= 1 then return end
+    local cur = (b.starterPack and b.starterPack.skin) or ''
+    local r = Game.InputDialog('Premium skin', {
+        { type = 'select', label = 'Skin', options = opts, default = cur },
+    })
+    if r then TriggerServerEvent('palm6_business:setSkin', r[1] or '') end
+end
+
 local function renderStorefront(b, cfg)
     local sf = b.storefront or {}
     local opts = {}
@@ -230,6 +256,13 @@ local function renderStorefront(b, cfg)
             onSelect = function() TriggerServerEvent('palm6_business:setStorefront') end }
         opts[#opts + 1] = { title = 'Customize map blip', description = 'Icon and colour', icon = 'fa-solid fa-palette',
             onSelect = function() renderBlipPicker(b, cfg) end }
+        -- Starter Pack cosmetics — only when the server marked the owner unlocked.
+        if b.starterPack and b.starterPack.unlocked then
+            opts[#opts + 1] = { title = 'Custom nameplate', description = 'Name your storefront (Starter Pack)', icon = 'fa-solid fa-signature',
+                onSelect = function() renderNameplate(b, cfg) end }
+            opts[#opts + 1] = { title = 'Premium skin', description = 'Gold, diamond & more (Starter Pack)', icon = 'fa-solid fa-gem',
+                onSelect = function() renderSkinPicker(b, cfg) end }
+        end
         opts[#opts + 1] = { title = 'Remove storefront', description = 'Take it off the map', icon = 'fa-solid fa-trash',
             onSelect = function()
                 if Game.Confirm('Remove storefront', 'Remove this storefront from the map?') then
@@ -371,9 +404,13 @@ RegisterNetEvent('palm6_business:storefronts', function(list)
 end)
 
 -- A passerby walked up to a storefront (not their business) -> read-only card.
+-- A Starter Pack nameplate (server-sent, sanitised) leads as the display name,
+-- with the registered business name shown beneath it.
 RegisterNetEvent('palm6_business:infoCard', function(d)
     if type(d) ~= 'table' then return end
-    local body = ('# %s\n%s\n\nOwner: **%s**'):format(d.name or 'Business', d.biz_type or '', d.owner or 'Unknown')
+    local heading = d.nameplate or d.name or 'Business'
+    local sub = (d.nameplate and d.name and d.nameplate ~= d.name) and (d.name .. '\n') or ''
+    local body = ('# %s\n%s%s\n\nOwner: **%s**'):format(heading, sub, d.biz_type or '', d.owner or 'Unknown')
     Game.ShowReport('Storefront', body)
 end)
 

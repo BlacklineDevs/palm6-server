@@ -80,13 +80,16 @@ function Game.RenderStorefronts(list, cfg, onSelect)
     for _, s in ipairs(list or {}) do
         if s.id and s.x and s.y and s.z then
             sf.list[s.id] = s
+            -- Starter Pack: a custom nameplate (server-sent, already sanitised)
+            -- is the storefront's display name; otherwise the plain business name.
+            local display = s.nameplate or s.name or 'Business'
             local b = AddBlipForCoord(s.x + 0.0, s.y + 0.0, s.z + 0.0)
             SetBlipSprite(b, s.sprite or 52)
             SetBlipColour(b, s.color or 5)
             SetBlipScale(b, scale)
             SetBlipAsShortRange(b, true)
             BeginTextCommandSetBlipName('STRING')
-            AddTextComponentSubstringPlayerName(s.name or 'Business')
+            AddTextComponentSubstringPlayerName(display)
             EndTextCommandSetBlipName(b)
             sf.blips[s.id] = b
             if hasTarget then
@@ -98,7 +101,7 @@ function Game.RenderStorefronts(list, cfg, onSelect)
                     options = { {
                         name = ('palm6_biz_%s'):format(id),
                         icon = 'fa-solid fa-store',
-                        label = s.name or 'Business',
+                        label = display,
                         distance = 2.5,
                         onSelect = function() if sf.onSelect then sf.onSelect(id) end end,
                     } },
@@ -126,7 +129,7 @@ function Game.RenderStorefronts(list, cfg, onSelect)
                     sleep = 0
                     DrawMarker(1, nearS.x, nearS.y, nearS.z - 0.95, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                         0.6, 0.6, 0.4, 90, 160, 255, 120, false, false, 2, false, nil, nil, false)
-                    lib.showTextUI(('[E] %s'):format(nearS.name or 'Business'))
+                    lib.showTextUI(('[E] %s'):format(nearS.nameplate or nearS.name or 'Business'))
                     if IsControlJustReleased(0, 38) and sf.onSelect then sf.onSelect(nearId) end
                 else
                     lib.hideTextUI()

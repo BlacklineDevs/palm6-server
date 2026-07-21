@@ -94,6 +94,47 @@ local function storefrontRadius()
     return (Config.Storefront and Config.Storefront.Radius) or 30.0
 end
 
+-- Phase-1 Starter Pack (store SKU) cosmetics. The gate requires phase1() as well
+-- (the cosmetics dress a PLACED storefront) plus the pack flag, so gate-off =
+-- storefronts render byte-for-byte as today. Build the premium-skin allowlist
+-- (by key) once, like the base blip allowlists above.
+local function starterPackEnabled()
+    return phase1() and Config.StarterPack ~= nil and Config.StarterPack.Enabled == true
+end
+local STARTER_KEY = (Config.StarterPack and Config.StarterPack.Key) or 'starter'
+local SKIN_BY_KEY = {}
+for _, s in ipairs((Config.StarterPack and Config.StarterPack.Skins) or {}) do SKIN_BY_KEY[s.key] = s end
+
+-- Per-owner entitlement lookup. COLD path only (the cosmetic ops + the walk-up
+-- card + the export) — NEVER the getMembership hot path. True when this citizen
+-- holds the Starter Pack (bought via Tebex, or granted by the admin command).
+local function hasStarterEntitlement(cid)
+    if not cid then return false end
+    local row = MySQL.scalar.await(
+        'SELECT 1 FROM palm6_business_entitlements WHERE citizenid = ? AND pack = ?',
+        { cid, STARTER_KEY })
+    return row ~= nil
+end
+
+-- Sanitise a custom nameplate: same character policy as a business name
+-- (alphanumerics + a little punctuation), collapsed whitespace, trimmed, clamped
+-- to NameplateMaxLen, and run through the same word blocklist. Returns the clean
+-- string, or nil if it is empty / all-stripped / blocklisted (callers decide
+-- whether a nil means "clear" or "reject", by pre-checking the raw input).
+local function sanitizeNameplate(raw)
+    if type(raw) ~= 'string' then return nil end
+    local s = raw:gsub("[^%w %&'%.%-]", '')
+    s = s:gsub('%s+', ' '):gsub('^%s+', ''):gsub('%s+$', '')
+    local maxLen = (Config.StarterPack and Config.StarterPack.NameplateMaxLen) or 24
+    if #s > maxLen then s = s:sub(1, maxLen):gsub('%s+$', '') end
+    if #s == 0 then return nil end
+    local low = s:lower()
+    for _, bad in ipairs(Config.Blocklist or {}) do
+        if low:find(bad, 1, true) then return nil end
+    end
+    return s
+end
+
 local function notify(src, title, msg, t) Bridge.Notify(src, title, msg, t) end
 
 -- ---------------------------------------------------------------------------
@@ -145,18 +186,36 @@ end
 -- phase1() so the whole feature is inert (empty list) until Phase 1 is enabled.
 local function storefrontList()
     if not phase1() then return {} end
-    local rows = MySQL.query.await([[
-        SELECT id, name, biz_type, loc_x, loc_y, loc_z, blip_sprite, blip_color
+    -- Only SELECT (and apply) the Starter Pack cosmetic columns when the pack is
+    -- enabled. Gate-off never references nameplate/skin, so a lagged 0073 migration
+    -- can't SQL-error the storefront layer (same defensive split as phase1 vs 0070),
+    -- and the payload is byte-for-byte today's.
+    local starter = starterPackEnabled()
+    local cols = starter
+        and 'id, name, biz_type, loc_x, loc_y, loc_z, blip_sprite, blip_color, nameplate, skin'
+        or  'id, name, biz_type, loc_x, loc_y, loc_z, blip_sprite, blip_color'
+    -- cols is a fixed internal string (never user input), so this format is safe.
+    local rows = MySQL.query.await(([[
+        SELECT %s
           FROM palm6_businesses
          WHERE loc_x IS NOT NULL AND loc_y IS NOT NULL AND loc_z IS NOT NULL
-    ]]) or {}
+    ]]):format(cols)) or {}
     local out = {}
     for _, r in ipairs(rows) do
+        local sprite = r.blip_sprite or defaultSprite(r.biz_type)
+        local color = r.blip_color or defaultColor()
+        local nameplate = nil
+        if starter then
+            -- A premium skin overrides the base blip sprite+colour; an invalid/
+            -- removed skin key is ignored (falls back to the base look).
+            local sk = r.skin and SKIN_BY_KEY[r.skin] or nil
+            if sk then sprite = sk.sprite; color = sk.color end
+            if r.nameplate and r.nameplate ~= '' then nameplate = r.nameplate end
+        end
         out[#out + 1] = {
             id = r.id, name = r.name, biz_type = r.biz_type,
             x = r.loc_x, y = r.loc_y, z = r.loc_z,
-            sprite = r.blip_sprite or defaultSprite(r.biz_type),
-            color = r.blip_color or defaultColor(),
+            sprite = sprite, color = color, nameplate = nameplate,
         }
     end
     return out
@@ -394,6 +453,23 @@ local function pushMenu(src)
                 sprites = Config.Storefront.Sprites,
                 colors = Config.Storefront.Colors,
             }
+            -- Starter Pack (store SKU) cosmetic controls — owner-only, and only
+            -- when the owner holds the entitlement AND the pack layer is enabled.
+            -- The scoped nameplate/skin SELECT runs only here (starterPackEnabled),
+            -- so a lagged 0073 migration never touches gate-off code. The client
+            -- shows "Set nameplate" / "Choose skin" only when starterPack.unlocked.
+            if isOwner and starterPackEnabled() and hasStarterEntitlement(cid) then
+                local cos = MySQL.single.await('SELECT nameplate, skin FROM palm6_businesses WHERE id = ?', { m.business_id })
+                data.business.starterPack = {
+                    unlocked = true,
+                    nameplate = (cos and cos.nameplate ~= '' and cos.nameplate) or nil,
+                    skin = (cos and cos.skin) or nil,
+                }
+                data.cfg.starterPack = {
+                    nameplateMaxLen = Config.StarterPack.NameplateMaxLen,
+                    skins = Config.StarterPack.Skins,
+                }
+            end
         end
     else
         data.cfg = { registrationCost = Config.RegistrationCost }
@@ -1094,6 +1170,53 @@ local function opSetBlip(src, sprite, color)
     pushMenu(src)
 end
 
+-- Starter Pack: set the storefront's custom nameplate. Owner-only + requires the
+-- per-owner Starter Pack entitlement + validated/sanitised server-side. An empty
+-- input CLEARS it; a non-empty input that sanitises away (all-stripped or
+-- blocklisted) is REJECTED (distinct from clear). Cosmetic only — no money.
+local function opSetNameplate(src, raw)
+    if not starterPackEnabled() then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can set the nameplate.', 'error') end
+    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks custom nameplates.', 'error') end
+    local rawTrim = (type(raw) == 'string' and raw:gsub('^%s+', ''):gsub('%s+$', '')) or ''
+    if rawTrim == '' then
+        MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL WHERE id = ?', { m.business_id })
+        notify(src, 'Business', 'Nameplate cleared.', 'success')
+        broadcastStorefronts(); pushMenu(src); return
+    end
+    local plate = sanitizeNameplate(raw)
+    if not plate then return notify(src, 'Business', "That nameplate isn't allowed.", 'error') end
+    MySQL.update.await('UPDATE palm6_businesses SET nameplate = ? WHERE id = ?', { plate, m.business_id })
+    notify(src, 'Business', 'Nameplate updated.', 'success')
+    broadcastStorefronts()
+    pushMenu(src)
+end
+
+-- Starter Pack: set the storefront's premium blip skin. Owner-only + requires the
+-- entitlement + the skin key must be in the Config.StarterPack.Skins allowlist. An
+-- empty key CLEARS it (back to the base blip). Cosmetic only — no money.
+local function opSetSkin(src, skinKey)
+    if not starterPackEnabled() then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can set the skin.', 'error') end
+    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks premium skins.', 'error') end
+    if skinKey == nil or skinKey == '' then
+        MySQL.update.await('UPDATE palm6_businesses SET skin = NULL WHERE id = ?', { m.business_id })
+        notify(src, 'Business', 'Skin cleared.', 'success')
+        broadcastStorefronts(); pushMenu(src); return
+    end
+    if type(skinKey) ~= 'string' or not SKIN_BY_KEY[skinKey] then
+        return notify(src, 'Business', 'That skin is not allowed.', 'error')
+    end
+    MySQL.update.await('UPDATE palm6_businesses SET skin = ? WHERE id = ?', { skinKey, m.business_id })
+    notify(src, 'Business', 'Skin updated.', 'success')
+    broadcastStorefronts()
+    pushMenu(src)
+end
+
 -- Walk-up to a storefront target. Staff of THAT business open management (pushMenu
 -- re-computes atStorefront so the proximity gate still applies); anyone else gets a
 -- read-only info card. No membership leak: a passerby never receives roster/balance.
@@ -1119,8 +1242,15 @@ local function opOpenHere(src, businessId)
     local ownerName = MySQL.scalar.await(
         'SELECT name FROM palm6_business_members WHERE business_id = ? AND role = ? ORDER BY hired_at ASC LIMIT 1',
         { businessId, Config.Role.Owner })
+    -- Starter Pack: a custom nameplate (when the pack is on) rides on the card too.
+    local nameplate = nil
+    if starterPackEnabled() then
+        local p = MySQL.scalar.await('SELECT nameplate FROM palm6_businesses WHERE id = ?', { businessId })
+        if p and p ~= '' then nameplate = p end
+    end
     TriggerClientEvent('palm6_business:infoCard', src, {
         name = b.name, biz_type = b.biz_type, owner = ownerName or 'Unknown',
+        nameplate = nameplate,
     })
 end
 
@@ -1238,6 +1368,8 @@ RegisterNetEvent('palm6_business:setBlip',         function(sprite, color) opSet
 RegisterNetEvent('palm6_business:openHere',        function(businessId) opOpenHere(source, businessId) end)
 RegisterNetEvent('palm6_business:requestStorefronts', function() sendStorefronts(source) end)
 RegisterNetEvent('palm6_business:rob',             function(businessId) opRob(source, businessId) end)
+RegisterNetEvent('palm6_business:setNameplate',    function(text) opSetNameplate(source, text) end)
+RegisterNetEvent('palm6_business:setSkin',         function(key) opSetSkin(source, key) end)
 
 AddEventHandler('playerDropped', function()
     local s = source
@@ -1260,6 +1392,39 @@ end
 Bridge.RegisterCommand(Config.Command, function(source) cmd(source) end)
 if Config.CommandAlias and Config.CommandAlias ~= '' then
     Bridge.RegisterCommand(Config.CommandAlias, function(source) cmd(source) end)
+end
+
+-- Admin grant/revoke of the Starter Pack entitlement — a bridge until the Tebex
+-- -> bot -> web chain writes palm6_business_entitlements directly. ACE-gated
+-- (console/src 0 is always allowed; a player source needs Config.StarterPack.
+-- AdminAce). Server-authoritative. Usage: /grantstarterpack <citizenid> [revoke].
+if Config.StarterPack then
+    Bridge.RegisterCommand('grantstarterpack', function(source, args)
+        if source ~= 0 and not IsPlayerAceAllowed(source, Config.StarterPack.AdminAce) then
+            return notify(source, 'Business', 'Not authorised.', 'error')
+        end
+        local target = args and args[1]
+        if not target or target == '' then
+            if source ~= 0 then notify(source, 'Business', 'Usage: /grantstarterpack <citizenid> [revoke]', 'error') end
+            return
+        end
+        if args[2] == 'revoke' then
+            MySQL.update.await('DELETE FROM palm6_business_entitlements WHERE citizenid = ? AND pack = ?', { target, STARTER_KEY })
+            -- Revocation reverts the cosmetics too (refund honesty): clear the
+            -- nameplate/skin on every business this citizen owns.
+            MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL, skin = NULL WHERE owner_cid = ?', { target })
+            if starterPackEnabled() then pcall(broadcastStorefronts) end
+            if source ~= 0 then notify(source, 'Business', ('Revoked Starter Pack from %s.'):format(target), 'success') end
+            print(('[palm6_business] Starter Pack revoked: %s'):format(target))
+        else
+            MySQL.insert.await(
+                'INSERT INTO palm6_business_entitlements (citizenid, pack, granted_at, source) VALUES (?,?,?,?) ' ..
+                'ON DUPLICATE KEY UPDATE granted_at = VALUES(granted_at), source = VALUES(source)',
+                { target, STARTER_KEY, nowSec(), (source == 0 and 'console' or 'admin') })
+            if source ~= 0 then notify(source, 'Business', ('Granted Starter Pack to %s.'):format(target), 'success') end
+            print(('[palm6_business] Starter Pack granted: %s'):format(target))
+        end
+    end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1307,6 +1472,15 @@ exports('GetStorefront', function(businessId)
     local sf = storefrontOf(businessId)
     if not hasLoc(sf) then return nil end
     return { x = sf.loc_x, y = sf.loc_y, z = sf.loc_z, h = sf.loc_h or 0.0 }
+end)
+
+-- Starter Pack entitlement lookup. The "Discord business-registry badge" perk is
+-- granted Discord-side from this same entitlement; this export lets the bot / web
+-- (or any resource) read whether a citizen holds the pack. Guarded; never throws.
+exports('HasStarterPack', function(citizenid)
+    if type(citizenid) ~= 'string' or citizenid == '' then return false end
+    local ok, res = pcall(hasStarterEntitlement, citizenid)
+    return ok and res or false
 end)
 
 -- ---------------------------------------------------------------------------

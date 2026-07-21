@@ -262,3 +262,47 @@ Config.Storefront = {
         { color = 47, label = 'Orange' },
     },
 }
+
+-- ---------------------------------------------------------------------------
+-- PHASE 1 — Business Starter Pack (the $29.99 store SKU). The site advertises
+-- "storefront cosmetic skins, custom business nameplate, Discord business-
+-- registry badge". This layer delivers the two IN-GAME cosmetics; the Discord
+-- badge is granted Discord-side from the same entitlement (exposed by an export).
+--
+-- ENTITLEMENT: per-OWNER, keyed by citizenid in palm6_business_entitlements
+-- (pack = Config.StarterPack.Key). Granted by the Tebex -> bot -> web chain when
+-- the pack is purchased, or by the admin grant command for testing. A business's
+-- OWNER must hold the entitlement to set a nameplate/skin.
+--
+-- COSMETIC ONLY: this layer moves NO money and never changes what a business
+-- earns. It is inert unless Config.StarterPack.Enabled (+ Config.Enabled +
+-- Config.Phase1Enabled, since the cosmetics dress a placed storefront). Gate off
+-- = behaviour identical to today.
+-- ---------------------------------------------------------------------------
+Config.StarterPack = {
+    Enabled = false,
+
+    -- Entitlement key stored in palm6_business_entitlements.pack.
+    Key = 'starter',
+
+    -- Custom nameplate: shown on the storefront walk-up card and as the blip
+    -- name in place of the plain business name. Clamped + sanitised server-side
+    -- (printable ASCII, trimmed); an empty nameplate clears it.
+    NameplateMaxLen = 24,
+
+    -- Premium blip skins, UNLOCKED ONLY by the pack. The base Config.Storefront
+    -- sprites/colours stay free to every business; these "dress up" extras layer
+    -- on top. The server validates every write against this allowlist by `key`
+    -- and applies the skin's sprite+colour to the storefront blip. Keep to
+    -- well-known-valid ids (a generically-rendering id is harmless).
+    Skins = {
+        { key = 'gold',    sprite = 500, color = 46, label = 'Gold Star' },
+        { key = 'diamond', sprite = 617, color = 27, label = 'Diamond' },
+        { key = 'crown',   sprite = 486, color = 83, label = 'Crown' },
+        { key = 'neon',    sprite = 494, color = 47, label = 'Neon Sign' },
+    },
+
+    -- ACE permission the admin grant/revoke command checks (until the Tebex flow
+    -- is wired). Grant in server.cfg: `add_ace group.admin palm6.business.grantpack allow`.
+    AdminAce = 'palm6.business.grantpack',
+}

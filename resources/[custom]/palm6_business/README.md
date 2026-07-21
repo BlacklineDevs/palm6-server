@@ -172,11 +172,36 @@ Phase 1 adds `loc_x/loc_y/loc_z/loc_h` + `blip_sprite/blip_color` to
 `palm6_businesses` via `0070` (`ADD COLUMN IF NOT EXISTS`, all nullable). All
 idempotent in `palm6_dbmigrate`.
 
+## Starter Pack — store SKU cosmetics (ships DARK behind `Config.StarterPack.Enabled`)
+The $29.99 Business Starter Pack the site advertises. Cosmetic ONLY — moves no
+money and never changes what a business earns. Two in-game cosmetics plus the
+Discord badge seam:
+- **Custom nameplate** — the owner sets a sanitised label that becomes the
+  storefront's display name (blip name + walk-up card). Same character policy +
+  word blocklist as a business name; length-clamped (`NameplateMaxLen`).
+- **Premium blip skin** — an owner picks a skin from `Config.StarterPack.Skins`
+  (gold/diamond/crown/neon); the server validates the key and applies its
+  sprite+colour to the storefront blip, overriding the base look.
+- **Discord business-registry badge** — granted Discord-side from the same
+  entitlement; the game exposes `exports.palm6_business:HasStarterPack(cid)`.
+
+**Entitlement** is per-OWNER, keyed by `citizenid` in `palm6_business_entitlements`
+(`pack='starter'`, migration `0073`) plus nullable `nameplate`/`skin` on
+`palm6_businesses`. Granted by the Tebex -> bot -> web chain on purchase, or by the
+ACE-gated admin command `/grantstarterpack <citizenid> [revoke]` (until that chain
+is wired). Only an entitled OWNER can set a nameplate/skin (server re-checks);
+setting is inert unless `Config.StarterPack.Enabled` (+ `Config.Enabled` +
+`Config.Phase1Enabled`, since the cosmetics dress a placed storefront). **Revoke**
+clears the entitlement AND reverts nameplate/skin on that owner's businesses
+(refund honesty). Gate-off never SELECTs the `0073` columns, so a lagged migration
+can't affect the live storefront layer (same defensive split as phase1 vs `0070`).
+
 ## Still deferred (Phase 2)
 Heavier type-specific *systems* beyond the service profiles above — a dealership
 **vehicle lot** (spawn + ownership transfer), a bar **venue/DJ revenue window**,
 garage **repairs** wired to vehicle damage — each needs its own audit (vehicle
-sales touch real money + ownership). Also: store-SKU cosmetics (nameplate,
-storefront skin, Discord business-registry badge). `palm6_protection` extortion of
-owned businesses, the manager delegate role, and the website `/business` directory
-are now **built** (extortion ships DARK behind `palm6_protection Config.ExtortOwned`).
+sales touch real money + ownership). The Tebex SKU + bot mapping that WRITES the
+`palm6_business_entitlements` row on purchase is David's to wire (needs the Tebex
+panel). `palm6_protection` extortion of owned businesses, the manager delegate
+role, the Starter Pack cosmetics, and the website `/business` directory are now
+**built** (extortion + Starter Pack ship DARK behind their config gates).

@@ -602,6 +602,25 @@ ALTER TABLE `palm6_business_members` ADD COLUMN IF NOT EXISTS `last_payroll_day`
     -- robbery feature is dark.
     { name = '0072 business last_robbed_at', sql = [[
 ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `last_robbed_at` BIGINT UNSIGNED NULL]] },
+    -- 0073: palm6_business Starter Pack (the $29.99 store SKU) cosmetics. A
+    -- per-OWNER entitlement (granted by the Tebex -> bot -> web chain, or the
+    -- admin grant command for testing) unlocks per-BUSINESS cosmetic fields:
+    -- a custom storefront nameplate and a premium blip skin. Cosmetic ONLY:
+    -- touches no money and never changes what a business earns. All inert unless
+    -- Config.StarterPack.Enabled; nameplate/skin are only settable by an entitled
+    -- owner and validated server-side. Nullable/idempotent (0068 pattern).
+    { name = '0073 business_entitlements table', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_business_entitlements` (
+    citizenid VARCHAR(64) NOT NULL,
+    pack VARCHAR(24) NOT NULL,
+    granted_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    source VARCHAR(32) NOT NULL DEFAULT 'unknown',
+    PRIMARY KEY (citizenid, pack)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    { name = '0073 business nameplate', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `nameplate` VARCHAR(32) NULL]] },
+    { name = '0073 business skin', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `skin` VARCHAR(24) NULL]] },
 }
 
 CreateThread(function()
