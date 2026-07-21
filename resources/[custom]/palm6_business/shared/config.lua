@@ -31,7 +31,9 @@ Config.Enabled = true
 -- be true for any storefront code path to run. Flip true (+ redeploy) only after
 -- the Phase 1 feel-test. false = Phase 0 behaves exactly as it does today (a
 -- business with no storefront row is indistinguishable from a Phase-0 business).
-Config.Phase1Enabled = false
+-- *** ENABLED 2026-07-21 for feel-test (gate 1 of 6, per GO-LIVE-RUNBOOK §C).
+-- Rollback = set false + redeploy; storefront rows persist and simply go unused. ***
+Config.Phase1Enabled = true
 
 -- PER-TYPE MECHANICS GATE — gives each business type its own economic identity
 -- (payout / supply cost / cooldown / daily cap / supply cap) and a themed serve
