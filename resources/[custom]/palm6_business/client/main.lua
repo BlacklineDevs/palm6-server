@@ -222,6 +222,20 @@ local function renderBlipPicker(b, cfg)
     if r and r[1] and r[2] then TriggerServerEvent('palm6_business:setBlip', r[1], r[2]) end
 end
 
+-- Interior dressing picker (Phase 1b, owner). Lists the layout styles the server
+-- sent; picking one re-dresses the room on the next entry.
+local function renderLayoutPicker(b, cfg)
+    local ic = cfg.interior or {}
+    local lOpts = {}
+    for _, l in ipairs(ic.layouts or {}) do lOpts[#lOpts + 1] = { value = l.key, label = l.label } end
+    if #lOpts == 0 then return end
+    local cur = b.interior or {}
+    local r = Game.InputDialog('Interior style', {
+        { type = 'select', label = 'Style', options = lOpts, default = cur.layout, required = true },
+    })
+    if r and r[1] then TriggerServerEvent('palm6_business:setLayout', r[1]) end
+end
+
 local function renderStorefront(b, cfg)
     local sf = b.storefront or {}
     local opts = {}
@@ -236,6 +250,14 @@ local function renderStorefront(b, cfg)
                     TriggerServerEvent('palm6_business:clearStorefront')
                 end
             end }
+        -- Interior dressing (Phase 1b). Shown only when the server flags an
+        -- interior is available for this type. Picking a style re-dresses the room
+        -- on the next entry — this is what makes two same-type shops look different.
+        local intr = b.interior
+        if intr and intr.available then
+            opts[#opts + 1] = { title = 'Interior style', description = ('Current: %s'):format(intr.layout or 'bare'), icon = 'fa-solid fa-couch',
+                onSelect = function() renderLayoutPicker(b, cfg) end }
+        end
     else
         opts[#opts + 1] = { title = 'Place storefront here', description = 'Mark this spot as your shop — puts it on the map', icon = 'fa-solid fa-map-pin',
             onSelect = function() TriggerServerEvent('palm6_business:setStorefront') end }
@@ -363,11 +385,31 @@ end)
 -- ---------------------------------------------------------------------------
 
 -- Server pushed the full storefront set (on change, on boot, or on our request).
+-- Two callbacks: walk-up (openHere, the info/manage card) and enter (the interior,
+-- only offered for storefronts the server flagged hasInterior).
 RegisterNetEvent('palm6_business:storefronts', function(list)
     if type(list) ~= 'table' then return end
-    Game.RenderStorefronts(list, Config.Storefront, function(id)
-        TriggerServerEvent('palm6_business:openHere', id)
+    Game.RenderStorefronts(list, Config.Storefront,
+        function(id) TriggerServerEvent('palm6_business:openHere', id) end,
+        function(id) TriggerServerEvent('palm6_business:enterInterior', id) end)
+end)
+
+-- Phase 1b — the server moved us into the business bucket and sent the shell +
+-- layout. Teleport in and dress the room; leaving fires the server exit event
+-- (which resets the routing bucket and teleports us back).
+RegisterNetEvent('palm6_business:onEnterInterior', function(d)
+    Game.EnterInterior(d, function(died)
+        -- died=true (the death watch) tells the server to reset the bucket without
+        -- teleporting us to the door; the respawn handles positioning.
+        TriggerServerEvent('palm6_business:exitInterior', died == true)
     end)
+end)
+
+-- Server acknowledged the exit (return coords), OR the resource is stopping with
+-- us still inside (nil payload -> hard reset, no teleport; the bucket is already
+-- back to the world server-side).
+RegisterNetEvent('palm6_business:onExitInterior', function(d)
+    if d == nil then Game.ForceExitInterior() else Game.ExitInterior(d) end
 end)
 
 -- A passerby walked up to a storefront (not their business) -> read-only card.
@@ -406,4 +448,9 @@ end, false)
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     Game.ClearStorefronts()
+    -- Clear any interior props + exit interaction from THIS client's own teardown,
+    -- rather than relying on the server's onExitInterior push winning the race
+    -- between two resources stopping at once (otherwise frozen props + the exit
+    -- zone orphan in the world, unreachable by the new VM's empty prop table).
+    Game.ForceExitInterior()
 end)

@@ -262,3 +262,133 @@ Config.Storefront = {
         { color = 47, label = 'Orange' },
     },
 }
+
+-- ---------------------------------------------------------------------------
+-- PHASE 1b — INTERIORS. Makes a storefront an actual PLACE you walk into,
+-- instead of a blip over open street ("it's virtually there, there is no actual
+-- building"). Three parts, all inert behind this gate:
+--
+--   1. SHELL      an existing enterable interior, reused as the room.
+--   2. BUCKET     a native routing bucket per business, so every business gets
+--                 a PRIVATE copy of that shell (unlimited businesses, one room).
+--   3. LAYOUT     per-business prop dressing spawned on entry, so two businesses
+--                 in the same shell do NOT look the same.
+--
+-- WHY NOT A CUSTOM MLO PER BUSINESS: a bespoke interior needs an MLO archetype
+-- (rooms/portals/entity sets) plus a BINARY .ymap placement. Neither Sollumz nor
+-- szio can emit a binary ymap headlessly (see fivem-asset-templates/
+-- ASSET-PIPELINE.md §8) — it is a manual CodeWalker step per interior. Runtime
+-- prop spawning needs NO ymap at all, so the LAYOUT tier buys per-business
+-- identity with the fully-headless prop pipeline we already have.
+--
+-- 🔴 bob74_ipl IS NOT INSTALLED on this server (verified: absent from custom.cfg,
+-- absent from server.cfg.example, zero references in docs/deploy/CI; the only
+-- mentions are palm6_counterfeit treating it as optional). So the shell catalog
+-- is restricted to BASE-GAME enterable interiors, which need no IPL. If bob74_ipl
+-- is ever added, extra shells drop into Config.Interior.Shells with no code change.
+--
+-- INDEPENDENT gate. While false: no entry target, no bucket is ever assigned, no
+-- prop is ever spawned, /bizshell refuses. Requires a placed storefront (Phase 1a).
+-- ---------------------------------------------------------------------------
+Config.Interiors = false
+
+Config.Interior = {
+    -- ROUTING BUCKETS. bucket = BucketBase + business id. Verified 2026-07-21 that
+    -- NOTHING else in this server calls SetPlayerRoutingBucket, so the whole range
+    -- is ours and cannot collide. Bucket 0 is the shared world and is NEVER used
+    -- as an interior — a business id of 0 would collide with it, and ids start at 1.
+    -- Base is 10000 (well clear of bucket 0) leaving ample headroom below FiveM's
+    -- bucket-id ceiling; the server also clamps in bucketFor as belt-and-braces.
+    BucketBase = 10000,
+
+    -- 🔴 TRADEOFF David must sign off on before this gate flips: a routing bucket
+    -- is TRUE dimensional isolation, which means staff/admin SPECTATE of a player
+    -- inside a business interior breaks unless the spectating admin is moved into
+    -- the same bucket. qbx_properties chose NetworkConcealPlayer (visual-only) to
+    -- keep staff tooling working. We choose real buckets because concealment does
+    -- not actually instance (every business would share one room). If admin
+    -- spectate matters more than instancing, this is the line to revisit.
+    -- palm6_staff integration is a follow-up, NOT shipped in this gate.
+    AdminBucketFollow = false,
+
+    -- SHELL CATALOG — deliberately EMPTY. Interior coordinates are NEVER hardcoded
+    -- from memory or from a wiki: a wrong coord drops a player inside geometry or
+    -- into the void, and that is exactly the "empty/broken" feel this phase exists
+    -- to kill. Instead an admin STANDS in a real interior and captures it, the same
+    -- way a storefront captures the owner's real ped coords server-side. Captured
+    -- shells persist to palm6_business_shells and load on boot.
+    --
+    -- Shape once captured:
+    --   { key='shell_247', label='24/7 Store', x=, y=, z=, h=, exitDist=, }
+    -- `exitDist` = how far from the entry anchor the exit prompt appears.
+    Shells = {},
+
+    -- Admin capture command (staff-gated server-side; see server/main.lua).
+    -- Usage: stand inside the interior, /bizshell <key> <label...>
+    CaptureCommand = 'bizshell',
+
+    -- Which shell each business type prefers, by shell key. A type with no
+    -- captured shell simply has no interior yet (storefront still works as today).
+    TypeShell = {
+        restaurant = 'shell_restaurant',
+        bar        = 'shell_bar',
+        garage     = 'shell_garage',
+        retail     = 'shell_retail',
+        dealership = 'shell_dealership',
+    },
+
+    -- Entry/exit feel.
+    EntryRadius = 2.0,    -- ox_target sphere at the storefront door
+    FadeMs      = 500,    -- screen fade each way; covers the teleport + prop spawn
+    ExitRadius  = 2.5,    -- target radius on the inside-the-door exit point
+
+    -- WHO MAY ENTER. Owner/manager/employee always may. `PublicEntry` lets any
+    -- citizen walk in (a shop with no customers is not a shop). Server re-checks
+    -- membership on every entry — the client never asserts its own role.
+    -- ⚠️ BALANCE RISK to weigh before flipping the gate: because entry moves a
+    -- player into a TRUE routing bucket that pursuers cannot follow into (admin
+    -- spectate + police chase both), a public interior is an instant escape hatch
+    -- from a pursuit. Options if this bites at feel-test: set PublicEntry=false
+    -- (staff-only rooms), or add a wanted-state check to opEnterInterior. Left true
+    -- by default because the customer-facing shop is the whole point; decide live.
+    PublicEntry = true,
+
+    -- LAYOUTS — per-business prop dressing. Props spawn CLIENT-side and
+    -- NON-NETWORKED: inside a routing bucket each client renders its own local
+    -- copy at identical coords, so the room looks furnished to everyone in it at
+    -- zero server-entity cost and with no ymap.
+    --
+    -- Offsets are RELATIVE to the shell anchor (x,y,z,h), so one layout works in
+    -- any shell. Models are base-game props (always present). A model that fails
+    -- to load is skipped, never fatal — a missing prop must not block entry.
+    MaxPropsPerLayout = 24,   -- hard clamp; a layout cannot grief the client
+    PropLoadTimeoutMs = 3000, -- per-model streaming wait before giving up
+
+    -- Owner-selectable dressing styles. This is the knob that makes two
+    -- restaurants look different. Extend freely; keys are validated on write.
+    Layouts = {
+        { key = 'bare',     label = 'Bare',          props = {} },
+        { key = 'stocked',  label = 'Stocked',       props = {
+            { model = 'prop_boxpile_07d', ox = 1.8,  oy = 1.2,  oz = 0.0, oh = 0.0 },
+            { model = 'prop_boxpile_06b', ox = 2.1,  oy = -0.6, oz = 0.0, oh = 45.0 },
+            { model = 'prop_pallet_02a',  ox = -1.9, oy = 1.5,  oz = 0.0, oh = 90.0 },
+        } },
+        { key = 'lounge',   label = 'Lounge',        props = {
+            { model = 'prop_sofa_02',     ox = -2.2, oy = 0.8,  oz = 0.0, oh = 90.0 },
+            { model = 'prop_table_04',    ox = -1.4, oy = 0.8,  oz = 0.0, oh = 0.0 },
+            { model = 'prop_plant_int_02a', ox = -2.4, oy = -1.1, oz = 0.0, oh = 0.0 },
+        } },
+        { key = 'workshop', label = 'Workshop',      props = {
+            { model = 'prop_toolchest_01', ox = 2.0,  oy = 0.4,  oz = 0.0, oh = 180.0 },
+            { model = 'prop_tool_bench02', ox = 2.2,  oy = -1.3, oz = 0.0, oh = 180.0 },
+            { model = 'prop_roadcone02a',  ox = 0.9,  oy = 2.1,  oz = 0.0, oh = 0.0 },
+        } },
+        { key = 'upscale',  label = 'Upscale',       props = {
+            { model = 'prop_plant_fern_02a', ox = -2.0, oy = 1.6,  oz = 0.0, oh = 0.0 },
+            { model = 'prop_rope_barrier_01', ox = 1.2, oy = 2.0, oz = 0.0, oh = 90.0 },
+            { model = 'prop_ld_rail_01',   ox = 1.9,  oy = 0.2,  oz = 0.0, oh = 0.0 },
+        } },
+    },
+
+    DefaultLayout = 'bare',
+}

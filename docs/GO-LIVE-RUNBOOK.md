@@ -30,6 +30,7 @@ auto-start).
 | **Manager role** (1c) | `e6a5ebc` `de85f42` `a7a91aa` | **DARK** `Config.ManagerRole` | None |
 | **Transfer / close** | `46bc4db` `84e98f7` `ec612db` `828950f` | **DARK** `Config.OwnershipLifecycle` | None |
 | **Register robbery** | `92221f7` | **DARK** `Config.Robbery` | None |
+| **Interiors** (Phase 1b — enterable buildings) | `feat/business-interiors` | **DARK** `Config.Interiors` | None (gated off) |
 | **Extort owned biz** | (this session) | **DARK** `palm6_protection Config.ExtortOwned` | None |
 | Docs | `802e992` `75a6131` this file + specs | docs only | None |
 
@@ -112,8 +113,11 @@ independent and reverts by flipping back to `false` + redeploy.
 | `Config.OwnershipLifecycle = true` (transfer/close) | Transfer to an employee (they become owner, you drop to employee). Close a test business (balance refunds to owner bank, roster + business deleted). | none |
 | `Config.Robbery = true` (`/robstore`) | At a **placed storefront** you don't own, `/robstore` → skill-check → up to 25% of the register (cap $5000) lands CLEAN in your bank → 45-min per-business + 10-min per-robber cooldown → police alert → owner notified if online. **Needs `Phase1Enabled` (a placed storefront).** | `0072` (auto-runs on boot) |
 | `palm6_protection Config.ExtortOwned = true` (`/shakedown`) | Stand at a **placed storefront on a turf zone your gang controls** → `/shakedown` → up to 15% of its real account (never wipes) lands as `black_money` → 30-min cooldown → owner notified if online → ledger shows `extortion`. Off-turf shop / empty register → nothing. **Needs `Phase1Enabled` (storefront to stand at) + turf control.** | none (reuses `palm6_protection_collections`) |
+| `Config.Interiors = true` (Phase 1b — enterable buildings) | **First, capture shells (admin, one-time):** stand INSIDE a base-game enterable interior (24/7, Ammu-Nation, clothing store, etc.) → `/bizshell shell_restaurant 24/7 Store` → repeat per `Config.Interior.TypeShell` key (`shell_restaurant/bar/garage/retail/dealership`). **Then feel-test:** owner places a storefront → an **Enter** target/`[G]` appears at the door → walk in (screen fades, you teleport into the shell, props dress the room) → **[E]/target Leave** returns you to the door → owner menu → Storefront → **Interior style** picks a layout (bare/stocked/lounge/workshop/upscale) → re-enter to see it change. **Instancing:** two players entering the SAME business share one room; two DIFFERENT businesses of the same type do NOT see each other (separate routing buckets). **Needs `Phase1Enabled` (a placed storefront) + at least one captured shell for that type.** | `0073` (auto-runs on boot) |
 
-All six business-side gates live in `palm6_business/shared/config.lua`; the extortion
+**Interiors gotcha:** a business type with NO captured shell simply has no interior — the storefront works exactly as Phase 1a (blip + walk-up), the **Enter** option never appears. So capture the shells BEFORE (or right after) flipping `Config.Interiors`, or the gate looks like it did nothing. `/bizshell` itself is inert until `Config.Interiors = true`. **Two balance calls to make before going live** (both stem from true routing-bucket isolation): (1) **admin spectate** of players inside interiors breaks unless you extend `palm6_staff` (`Config.Interior.AdminBucketFollow`, a follow-up); (2) with `Config.Interior.PublicEntry = true`, a wanted player can duck into any enterable shop and vanish from a **police pursuit** — set `PublicEntry = false` or gate entry on wanted-state if that's abused. Both are documented in the config header.
+
+All **seven** business-side gates live in `palm6_business/shared/config.lua`; the extortion
 gate lives in `palm6_protection/shared/config.lua`. Note that **Robbery** (any player,
 clean-to-bank) and **Extortion** (gang-with-turf, dirty `black_money`) are distinct
 mechanics that can BOTH hit the same storefront — enable them one at a time and feel

@@ -602,6 +602,37 @@ ALTER TABLE `palm6_business_members` ADD COLUMN IF NOT EXISTS `last_payroll_day`
     -- robbery feature is dark.
     { name = '0072 business last_robbed_at', sql = [[
 ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `last_robbed_at` BIGINT UNSIGNED NULL]] },
+    -- 0073: palm6_business Phase 1b — INTERIORS. A storefront becomes a place you
+    -- walk into: a captured interior SHELL, a per-business routing BUCKET, and a
+    -- per-business prop LAYOUT so two businesses in the same shell do not look
+    -- alike. Two pieces of state:
+    --
+    --   palm6_business_shells   admin-captured interior anchors. Coordinates are
+    --                           NEVER hardcoded — an admin stands inside a real
+    --                           interior and /bizshell captures their REAL
+    --                           server-side ped position (the same never-trust-the-
+    --                           client idiom as storefront placement, 0070). A
+    --                           fabricated coord drops players into geometry or the
+    --                           void, which is the exact failure this phase fixes.
+    --   interior_layout         which dressing style a business uses. Nullable;
+    --                           NULL = Config.Interior.DefaultLayout ('bare').
+    --
+    -- Both are inert while Config.Interiors is false — no bucket is assigned and
+    -- no prop spawns, so this migration is safe to apply ahead of the gate.
+    { name = '0073 business_shells', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_business_shells` (
+    `shell_key`  VARCHAR(48)  NOT NULL,
+    `label`      VARCHAR(64)  NOT NULL,
+    `x`          DOUBLE       NOT NULL,
+    `y`          DOUBLE       NOT NULL,
+    `z`          DOUBLE       NOT NULL,
+    `h`          DOUBLE       NOT NULL DEFAULT 0,
+    `captured_by` VARCHAR(64) NULL,
+    `captured_at` BIGINT UNSIGNED NULL,
+    PRIMARY KEY (`shell_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    { name = '0073 business interior_layout', sql = [[
+ALTER TABLE `palm6_businesses` ADD COLUMN IF NOT EXISTS `interior_layout` VARCHAR(32) NULL]] },
 }
 
 CreateThread(function()

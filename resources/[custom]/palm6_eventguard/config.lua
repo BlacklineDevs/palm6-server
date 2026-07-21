@@ -299,4 +299,14 @@ Config.Events = {
     -- Robbery: server re-validates proximity + per-robber + per-business cooldown +
     -- balance + atomic guarded debit; a tight budget is belt-and-braces over those.
     ['palm6_business:rob']                = { calls = 6,  window_seconds = 60 },
+    -- Phase 1b interiors. enter/exit re-validate storefront proximity + membership
+    -- + shell existence server-side and move no money; a player may reasonably
+    -- enter/leave repeatedly, so the budget is generous but still bounded (anti-spam
+    -- on the teleport). setLayout is owner-only + allowlisted, so it is tight.
+    ['palm6_business:enterInterior']      = { calls = 30, window_seconds = 60 },
+    -- exitInterior is the ESCAPE direction: dropping it would strand a player in
+    -- the bucket, so its budget is generous (well above any human enter/exit rate)
+    -- — throttle the enter side, never the way out.
+    ['palm6_business:exitInterior']       = { calls = 120, window_seconds = 60 },
+    ['palm6_business:setLayout']          = { calls = 15, window_seconds = 60 },
 }

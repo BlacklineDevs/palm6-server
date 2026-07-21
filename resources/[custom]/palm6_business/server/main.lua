@@ -18,6 +18,39 @@ local function enabled() return Config.Enabled == true end
 -- Phase 0 never auto-lights storefronts. EVERY storefront code path checks this.
 local function phase1() return Config.Enabled == true and Config.Phase1Enabled == true end
 
+-- Phase 1b (interiors) gate + resolver, HOISTED here because storefrontList()
+-- below needs shellForType() to flag which storefronts are enterable, and a Lua
+-- `local` defined later would not resolve as this function's upvalue. The
+-- interior op code (capture/enter/exit/layout) lives near the bottom and assigns
+-- `shells` via loadShells(); this block only declares the shared state + reads it.
+local function phase1b() return phase1() and Config.Interiors == true end
+local shells = {}  -- shell_key -> { label,x,y,z,h }; populated by loadShells()
+local function shellForType(typeKey)
+    local key = Config.Interior and Config.Interior.TypeShell and Config.Interior.TypeShell[typeKey]
+    return key and shells[key] or nil
+end
+-- Live interior sessions: src -> { businessId, retX, retY, retZ }. HOISTED here
+-- (declaration only) because the storefront proximity gate (serve/manage) below
+-- must count "inside your OWN business's interior" as "at the shop" — otherwise
+-- teleporting into the shell (a different world location) closes the gate on your
+-- own shop. atShop() (defined just after nearLoc) reads it; the enter/exit ops
+-- near the bottom own its lifecycle.
+local inside = {}
+-- In-flight entry guard (src -> true) spanning opEnterInterior's DB yields, so two
+-- enter events in the same frame cannot both pass the `inside`/`entering` check
+-- before either sets `inside`. Cleared when entry resolves.
+local entering = {}
+
+-- Do two online players share a routing bucket? CRITICAL for the nearest-player
+-- scans (hire/charge): once interiors ship, every business of a type teleports to
+-- the SAME shell coords, differing only by bucket, so a raw distance scan would
+-- match a player standing at the identical coords in a DIFFERENT instance. When
+-- interiors are OFF nobody is ever in a non-zero bucket, so this is always true
+-- and the scans behave byte-for-byte as before.
+local function sameBucket(a, b)
+    return GetPlayerRoutingBucket(a) == GetPlayerRoutingBucket(b)
+end
+
 -- Manager delegate gate + the effective minimum role that may run staff/ops
 -- management (hire/fire/payroll/buy supply). When the delegate feature is OFF this
 -- is Owner — byte-for-byte the pre-manager behaviour; when ON, a Manager (role 2)
@@ -141,6 +174,16 @@ local function nearLoc(src, sf)
     return Bridge.Distance(pc, { x = sf.loc_x, y = sf.loc_y, z = sf.loc_z }) <= storefrontRadius()
 end
 
+-- "At the shop" for the proximity gate: physically near the placed storefront OR
+-- standing inside THIS business's own instanced interior. Without the second
+-- clause an owner who walks into their own shop (teleported to the shell, a
+-- different world location) would be told to "go to your storefront" — the
+-- interior would look decorative but dead. Reads the hoisted `inside` table.
+local function atShop(src, sf, businessId)
+    if inside[src] and inside[src].businessId == businessId then return true end
+    return nearLoc(src, sf)
+end
+
 -- Every placed storefront -> the public blip/target list clients render. Behind
 -- phase1() so the whole feature is inert (empty list) until Phase 1 is enabled.
 local function storefrontList()
@@ -157,6 +200,10 @@ local function storefrontList()
             x = r.loc_x, y = r.loc_y, z = r.loc_z,
             sprite = r.blip_sprite or defaultSprite(r.biz_type),
             color = r.blip_color or defaultColor(),
+            -- Enterable only when interiors are on AND this type has a captured
+            -- shell. The client uses this to add the "Enter" target; false =
+            -- storefront renders exactly as it does today (blip + walk-up only).
+            hasInterior = phase1b() and shellForType(r.biz_type) ~= nil or nil,
         }
     end
     return out
@@ -385,7 +432,7 @@ local function pushMenu(src)
             data.business.storefront = {
                 enabled = true,
                 set = set,
-                atStorefront = (not set) or nearLoc(src, sf),
+                atStorefront = (not set) or atShop(src, sf, m.business_id),
                 sprite = set and (sf.blip_sprite or defaultSprite(m.biz_type)) or nil,
                 color = set and (sf.blip_color or defaultColor()) or nil,
             }
@@ -394,6 +441,18 @@ local function pushMenu(src)
                 sprites = Config.Storefront.Sprites,
                 colors = Config.Storefront.Colors,
             }
+            -- Phase 1b: interior state for the owner's layout picker. `available`
+            -- = this type has a captured shell (else there is no interior to style
+            -- yet). `layout` = the current dressing key. Both nil when interiors
+            -- are off, so the client hides the control.
+            if phase1b() then
+                local lay = MySQL.scalar.await('SELECT interior_layout FROM palm6_businesses WHERE id = ?', { m.business_id })
+                data.business.interior = {
+                    available = shellForType(m.biz_type) ~= nil,
+                    layout = lay or Config.Interior.DefaultLayout,
+                }
+                data.cfg.interior = { layouts = Config.Interior.Layouts }
+            end
         end
     else
         data.cfg = { registrationCost = Config.RegistrationCost }
@@ -554,7 +613,7 @@ local function opServe(src)
     -- supply/cooldown/daily-cap regardless of where the serve is triggered.
     if phase1() then
         local sf = storefrontOf(m.business_id)
-        if hasLoc(sf) and not nearLoc(src, sf) then
+        if hasLoc(sf) and not atShop(src, sf, m.business_id) then
             return notify(src, 'Business', "Serve walk-ins at your storefront — it's marked on your map.", 'error')
         end
     end
@@ -608,7 +667,7 @@ local function opHireNearest(src)
     if not myC then return end
     local bestSrc, bestDist
     for _, sid in ipairs(Bridge.GetOnlinePlayers()) do
-        if sid ~= src then
+        if sid ~= src and sameBucket(sid, src) then
             local theirCid = Bridge.GetCitizenId(sid)
             if theirCid and not getMembership(theirCid) then
                 local c = Bridge.GetCoords(sid)
@@ -953,7 +1012,7 @@ local function opChargeNearest(src, amount, memo)
     if not myC then return end
     local bestSrc, bestDist
     for _, sid in ipairs(Bridge.GetOnlinePlayers()) do
-        if sid ~= src then
+        if sid ~= src and sameBucket(sid, src) then
             local c = Bridge.GetCoords(sid)
             if c then
                 local d = Bridge.Distance(myC, c)
@@ -1052,6 +1111,10 @@ local function opSetStorefront(src)
     local cid = Bridge.GetCitizenId(src)
     local m = getMembership(cid)
     if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can place the storefront.', 'error') end
+    -- Guard the interior trap: inside an interior the ped is at the shell world
+    -- coords, so "Move storefront here" would relocate the blip + entry door into
+    -- the shell. Refuse — a storefront is an exterior, street-facing thing.
+    if inside[src] then return notify(src, 'Business', 'Step outside before placing your storefront.', 'error') end
     local c = Bridge.GetCoords(src)
     if not c then return notify(src, 'Business', 'Could not read your position — try again.', 'error') end
     local h = Bridge.GetHeading(src)
@@ -1205,6 +1268,198 @@ local function opRob(src, businessId)
 end
 
 -- ---------------------------------------------------------------------------
+-- Phase 1b — INTERIORS. A storefront becomes a place you walk into.
+--
+-- SHELL   an admin-captured interior anchor (never a hardcoded coordinate).
+-- BUCKET  a native routing bucket per business id, so every business gets a
+--         PRIVATE copy of one shell. This is the unlock: unlimited businesses,
+--         one room, real isolation.
+-- LAYOUT  per-business prop dressing, spawned client-side on entry, so two
+--         businesses sharing a shell do not look the same.
+--
+-- Everything here is inert unless phase1b(). No money moves in any of it.
+-- ---------------------------------------------------------------------------
+
+-- phase1b() / shells / shellForType() are hoisted to the top of this file (they
+-- are needed by storefrontList). loadShells() below fills the shared `shells`
+-- upvalue from the DB — the only source of real interior coordinates.
+local function loadShells()
+    local rows = MySQL.query.await('SELECT shell_key, label, x, y, z, h FROM palm6_business_shells') or {}
+    shells = {}
+    for _, r in ipairs(rows) do shells[r.shell_key] = r end
+    return #rows
+end
+
+-- Bucket id for a business. Clamped to a safe ceiling (FiveM bucket ids are
+-- bounded); a business id large enough to exceed it would be astronomically
+-- beyond any real server, but the clamp means the worst case is two very-high-id
+-- businesses sharing a bucket, never an out-of-range native call.
+local function bucketFor(businessId)
+    local b = (Config.Interior.BucketBase or 10000) + businessId
+    if b > 65000 then b = 65000 end
+    return b
+end
+
+-- Valid layout keys, built once from config. An unknown key from a client is
+-- rejected rather than written (same allowlist discipline as blip sprites).
+local ALLOWED_LAYOUT = {}
+for _, l in ipairs((Config.Interior and Config.Interior.Layouts) or {}) do
+    if l.key then ALLOWED_LAYOUT[l.key] = true end
+end
+
+-- Live interior sessions: src -> { businessId, retX, retY, retZ }. The return
+-- coords are captured from the player's REAL server-side position at entry, so
+-- exit puts them back where they walked in rather than at a guessed doorstep.
+local inside = {}
+
+-- Put a player back in the world bucket. Safe to call unconditionally.
+local function toWorldBucket(src)
+    SetPlayerRoutingBucket(src, 0)
+end
+
+local function opCaptureShell(src, key, label)
+    -- Console (src 0) always allowed; a player needs the admin ace.
+    if src ~= 0 and not IsPlayerAceAllowed(src, 'command.' .. (Config.Interior.CaptureCommand or 'bizshell')) then return end
+    if not phase1b() then
+        if src ~= 0 then notify(src, 'Business', 'Interiors are disabled.', 'error') end
+        return
+    end
+    key = tostring(key or ''):lower():gsub('[^a-z0-9_]', '')
+    if #key < 3 or #key > 48 then
+        if src ~= 0 then notify(src, 'Business', 'Shell key must be 3-48 chars (a-z, 0-9, _).', 'error') end
+        return
+    end
+    if src == 0 then return end  -- console has no ped position to capture
+    local c = Bridge.GetCoords(src)
+    if not c then return notify(src, 'Business', 'Could not read your position — try again.', 'error') end
+    local h = Bridge.GetHeading(src)
+    label = sanitizeName(label) or key
+    MySQL.update.await([[
+        INSERT INTO palm6_business_shells (shell_key, label, x, y, z, h, captured_by, captured_at)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE label = VALUES(label), x = VALUES(x), y = VALUES(y),
+                                z = VALUES(z), h = VALUES(h),
+                                captured_by = VALUES(captured_by), captured_at = VALUES(captured_at)
+    ]], { key, label, c.x, c.y, c.z, h, Bridge.GetCitizenId(src), os.time() })
+    loadShells()
+    notify(src, 'Business', ('Shell "%s" captured here.'):format(key), 'success')
+end
+
+-- Enter the interior of the business whose storefront you are standing at. The
+-- client names a business id; the SERVER re-derives everything else — membership,
+-- the storefront position, proximity, and the shell. Wrapped so the in-flight
+-- `entering` guard is set BEFORE the DB yields and cleared however entry ends,
+-- closing the enter-twice race (two events in one frame both passing the guard).
+local function doEnterInterior(src, businessId)
+    local sf = storefrontOf(businessId)
+    if not sf or not sf.loc_x then return notify(src, 'Business', 'That business has no storefront.', 'error') end
+
+    -- Proximity is re-validated server-side against the caller's real position:
+    -- a client cannot teleport itself in from across the map.
+    local c = Bridge.GetCoords(src)
+    if not c then return notify(src, 'Business', 'Could not read your position — try again.', 'error') end
+    local dx, dy, dz = c.x - sf.loc_x, c.y - sf.loc_y, c.z - sf.loc_z
+    if (dx * dx + dy * dy + dz * dz) > (Config.Storefront.Radius * Config.Storefront.Radius) then
+        return notify(src, 'Business', 'You are not at the storefront.', 'error')
+    end
+
+    local biz = MySQL.single.await('SELECT biz_type, name, interior_layout FROM palm6_businesses WHERE id = ?', { businessId })
+    if not biz then return end
+    local shell = shellForType(biz.biz_type)
+    if not shell then return notify(src, 'Business', 'This business has no interior yet.', 'inform') end
+
+    -- Access: staff of THIS business always; everyone else only if public entry.
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    local isStaff = m and m.business_id == businessId
+    if not isStaff and Config.Interior.PublicEntry ~= true then
+        return notify(src, 'Business', 'This business is not open to the public.', 'error')
+    end
+
+    -- Re-check the guard after the yields: a playerDropped during entry clears
+    -- `entering`, and we must not strand a departed/re-entered slot in a bucket.
+    if not entering[src] or inside[src] then return end
+    inside[src] = { businessId = businessId, retX = c.x, retY = c.y, retZ = c.z }
+    SetPlayerRoutingBucket(src, bucketFor(businessId))
+    TriggerClientEvent('palm6_business:onEnterInterior', src, {
+        x = shell.x, y = shell.y, z = shell.z, h = shell.h,
+        layout = biz.interior_layout or Config.Interior.DefaultLayout,
+        name = biz.name,
+    })
+end
+
+local function opEnterInterior(src, businessId)
+    if not phase1b() then return end
+    businessId = sanitizeInt(businessId)
+    if not businessId or businessId <= 0 then return end
+    if inside[src] or entering[src] then return end  -- already in one / mid-entry
+    entering[src] = true
+    doEnterInterior(src, businessId)
+    entering[src] = nil
+end
+
+-- Leave the interior. `silent` (death path) resets the bucket but sends a nil
+-- payload so the client does NOT teleport to the door — the respawn/ambulance
+-- system positions the player instead. The normal path returns them to the door
+-- coords captured at entry.
+local function opExitInterior(src, silent)
+    if not phase1b() then return end
+    local s = inside[src]
+    if not s then return end
+    inside[src] = nil
+    toWorldBucket(src)
+    if silent then
+        TriggerClientEvent('palm6_business:onExitInterior', src, nil)
+    else
+        TriggerClientEvent('palm6_business:onExitInterior', src, { x = s.retX, y = s.retY, z = s.retZ })
+    end
+end
+
+local function opSetLayout(src, layoutKey)
+    if not phase1b() then return end
+    local cid = Bridge.GetCitizenId(src)
+    local m = getMembership(cid)
+    if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can restyle the interior.', 'error') end
+    layoutKey = tostring(layoutKey or '')
+    if not ALLOWED_LAYOUT[layoutKey] then return notify(src, 'Business', 'That interior style is not allowed.', 'error') end
+    MySQL.update.await('UPDATE palm6_businesses SET interior_layout = ? WHERE id = ?', { layoutKey, m.business_id })
+    notify(src, 'Business', 'Interior style updated — re-enter to see it.', 'success')
+    pushMenu(src)
+end
+
+-- LEAK GUARDS. A routing bucket is sticky: a player left in one sees an empty
+-- world, so every path out of an interior must reset it. On drop we also reset
+-- the bucket defensively — a recycled server id must never inherit a stale
+-- non-zero bucket (a fresh connection would spawn into an empty world with no
+-- `inside` entry, hence no exit path).
+AddEventHandler('playerDropped', function()
+    local src = source
+    if inside[src] or entering[src] then
+        inside[src] = nil
+        entering[src] = nil
+        SetPlayerRoutingBucket(src, 0)
+    end
+end)
+
+-- If this resource stops while players are inside, they would be stranded in a
+-- bucket with no code left to pull them out. Reset every live session first.
+AddEventHandler('onResourceStop', function(res)
+    if res ~= GetCurrentResourceName() then return end
+    for src in pairs(inside) do
+        toWorldBucket(src)
+        TriggerClientEvent('palm6_business:onExitInterior', src, nil)
+    end
+    inside = {}
+end)
+
+CreateThread(function()
+    if not phase1b() then return end
+    Wait(4000)  -- let palm6_dbmigrate apply 0073 first
+    local n = loadShells()
+    print(('[palm6_business] interiors: loaded %d shell anchor(s)'):format(n))
+end)
+
+-- ---------------------------------------------------------------------------
 -- Net events (guarded by palm6_eventguard — ensure order in custom.cfg).
 -- ---------------------------------------------------------------------------
 -- (No palm6_business:openMenu net event: the /business command opens the menu
@@ -1238,6 +1493,18 @@ RegisterNetEvent('palm6_business:setBlip',         function(sprite, color) opSet
 RegisterNetEvent('palm6_business:openHere',        function(businessId) opOpenHere(source, businessId) end)
 RegisterNetEvent('palm6_business:requestStorefronts', function() sendStorefronts(source) end)
 RegisterNetEvent('palm6_business:rob',             function(businessId) opRob(source, businessId) end)
+-- Phase 1b interior net events.
+RegisterNetEvent('palm6_business:enterInterior', function(businessId) opEnterInterior(source, businessId) end)
+RegisterNetEvent('palm6_business:exitInterior',  function(died) opExitInterior(source, died == true) end)
+RegisterNetEvent('palm6_business:setLayout',     function(layoutKey) opSetLayout(source, layoutKey) end)
+
+-- Admin shell-capture command. Raw registration + in-handler ace gate (the
+-- palm6_fc.debug idiom): stand inside a real interior, /bizshell <key> <label...>.
+RegisterCommand(Config.Interior.CaptureCommand or 'bizshell', function(src, args)
+    local key = args[1]
+    local label = args[2] and table.concat(args, ' ', 2) or nil
+    opCaptureShell(src, key, label)
+end, false)
 
 AddEventHandler('playerDropped', function()
     local s = source
