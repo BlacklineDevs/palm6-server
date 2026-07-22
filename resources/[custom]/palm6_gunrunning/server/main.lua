@@ -114,6 +114,17 @@ local function cmdBuyWeapon(src, args)
     end
 
     Bridge.Notify(src, 'Dealer', ('Bought a %s for $%d.'):format(entry.label, entry.price), 'success')
+
+    -- Persistent police attention: acquiring an untraceable black-market weapon
+    -- is a crime. Keyed to the buyer (cid) so it follows them after they log.
+    -- Fires only after the sale row + item grant committed above. Soft-dep +
+    -- pcall — a stopped palm6_heat never touches the purchase path.
+    if GetResourceState('palm6_heat') == 'started' then
+        pcall(function()
+            exports.palm6_heat:AddHeat(cid, Config.HeatOnBuy, 'gun_deal')
+        end)
+    end
+
     dbg(('%s bought %s for $%d, serial %s'):format(cid, entry.weapon, entry.price, serial))
 end
 

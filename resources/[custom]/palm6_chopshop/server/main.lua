@@ -245,6 +245,20 @@ local function cmdSellStolen(src)
     end
 
     Bridge.Notify(src, 'Chop Shop', ('Sold for $%d.'):format(payout), 'success')
+
+    -- Persistent police attention: fencing a car is a crime, and fencing one
+    -- that was reported STOLEN is hotter than dumping your own. Keyed to the
+    -- seller (cid) so it follows them after they log. Fires only after the sale
+    -- committed above. Soft-dep + pcall — a stopped palm6_heat never touches
+    -- the sale path.
+    if GetResourceState('palm6_heat') == 'started' then
+        pcall(function()
+            exports.palm6_heat:AddHeat(cid,
+                Config.HeatOnSale + (stolenRow and Config.HeatStolenBonus or 0),
+                'chopshop')
+        end)
+    end
+
     dbg(('%s sold %s (class %d) for $%d, stolen=%s'):format(cid, plate, class, payout, tostring(stolenRow ~= nil)))
 end
 

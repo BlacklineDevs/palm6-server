@@ -36,6 +36,14 @@ Config.ClassPayout = {
     [20] = 2800,  -- Commercial
 }
 
+-- Persistent police attention (palm6_heat) added to the seller on a completed
+-- sale. Fencing a car is a crime; fencing one that was reported STOLEN is hotter
+-- than dumping your own. Keyed to the character, so it follows them after they
+-- log (drives the /heat board, season Most-Wanted, dispatch priority). Soft-dep
+-- — a no-op if palm6_heat is stopped. Mirrors palm6_heat Config.Suggested.chopshop.
+Config.HeatOnSale      = 10  -- base heat for any chop-shop sale
+Config.HeatStolenBonus = 6   -- extra when the plate had a live stolen report
+
 -- Own guard, independent of palm6_eventguard. Both /reportstolen and
 -- /sellstolen are chat commands, not net events — eventguard's
 -- Config.Events doesn't cover chat commands (confirmed this session,

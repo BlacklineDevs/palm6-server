@@ -157,6 +157,62 @@ RegisterNetEvent('palm6_brain:reply', function(npcId, text)
     if ped then sayBubble(ped, text) end
 end)
 
+-- ── World-state snapshot ────────────────────────────────────────────────────
+-- Gathered client-side (the client owns the game clock, weather, and knows who's
+-- rendered nearby) and sent along with the player's line so the NPC can answer
+-- "what time is it / what day / what's the weather / anyone around". This is FLAVOR
+-- only — a spoofed value just makes an NPC say the wrong time, no security impact,
+-- so it's trusted as-is on the server. Kept tiny to stay cheap in the LLM context.
+local DAYS = { [0]='Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday' }
+local MONTHS = { [0]='January','February','March','April','May','June','July',
+                 'August','September','October','November','December' }
+
+-- Map the standard GTA weather hashes to plain-English labels. Built once at load
+-- (joaat of each name) so we can reverse-lookup GetPrevWeatherTypeHashName().
+local WEATHER_LABEL = {}
+do
+    local m = {
+        EXTRASUNNY = 'clear and hot', CLEAR = 'clear', NEUTRAL = 'clear',
+        CLOUDS = 'cloudy', OVERCAST = 'overcast', SMOG = 'smoggy', FOGGY = 'foggy',
+        RAIN = 'raining', CLEARING = 'clearing up', THUNDER = 'a thunderstorm',
+        SNOW = 'snowing', SNOWLIGHT = 'snowing', BLIZZARD = 'a blizzard', XMAS = 'snowy',
+        HALLOWEEN = 'eerie',
+    }
+    for name, label in pairs(m) do WEATHER_LABEL[joaat(name)] = label end
+end
+
+local function weatherLabel()
+    local ok, hash = pcall(GetPrevWeatherTypeHashName)
+    if ok and hash then return WEATHER_LABEL[hash] end
+    return nil
+end
+
+-- Rough "people around": real players rendered within 60m of me (excludes self).
+local function nearbyPlayers()
+    local me = PlayerPedId()
+    local mc = GetEntityCoords(me)
+    local n = 0
+    for _, pl in ipairs(GetActivePlayers()) do
+        local pped = GetPlayerPed(pl)
+        if pped ~= me and DoesEntityExist(pped) and #(GetEntityCoords(pped) - mc) < 60.0 then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+local function worldContext()
+    return {
+        h    = GetClockHours(),
+        m    = GetClockMinutes(),
+        day  = DAYS[GetClockDayOfWeek()] or nil,
+        dom  = GetClockDayOfMonth(),
+        mon  = MONTHS[GetClockMonth()] or nil,
+        wx   = weatherLabel(),
+        near = nearbyPlayers(),
+    }
+end
+
 local function openDialogue(npc, ped)
     local input = lib.inputDialog(('Talk to %s'):format(npc.name or 'NPC'), {
         { type = 'input', label = 'Say something', required = true, max = 200 },
@@ -167,7 +223,7 @@ local function openDialogue(npc, ped)
     if #(GetEntityCoords(p) - GetEntityCoords(ped)) > (Config.TalkRange or 3.0) + 1.0 then
         return
     end
-    TriggerServerEvent('palm6_brain:say', npc.id, input[1])
+    TriggerServerEvent('palm6_brain:say', npc.id, input[1], worldContext())
 end
 
 local hasTarget = GetResourceState('ox_target') == 'started'

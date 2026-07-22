@@ -44,8 +44,34 @@ local function cleanReply(s)
     return s:sub(1, 240)
 end
 
+-- Turn the client's world snapshot into one plain-English line the NPC can draw on
+-- (so "what time is it / what day / weather / anyone around" get real answers). All
+-- fields optional — a missing snapshot just omits the line and nothing breaks.
+local function worldLine(w)
+    if type(w) ~= 'table' then return nil end
+    local parts = {}
+    local h, m = tonumber(w.h), tonumber(w.m)
+    if h then
+        local ampm = h < 12 and 'AM' or 'PM'
+        local h12 = h % 12; if h12 == 0 then h12 = 12 end
+        parts[#parts + 1] = ('it is %d:%02d %s'):format(h12, m or 0, ampm)
+    end
+    if w.day then
+        parts[#parts + 1] = w.dom and w.mon
+            and ('%s, %s %d'):format(w.day, w.mon, w.dom) or tostring(w.day)
+    end
+    if w.wx then parts[#parts + 1] = 'the weather is ' .. tostring(w.wx) end
+    local near = tonumber(w.near)
+    if near then
+        parts[#parts + 1] = near == 0 and 'the street is empty right now'
+            or ('%d other %s nearby'):format(near, near == 1 and 'person is' or 'people are')
+    end
+    if #parts == 0 then return nil end
+    return 'Current moment in the city: ' .. table.concat(parts, ', ') .. '.'
+end
+
 -- Ask GLM for an in-character line. cb(reply|nil). nil => caller uses canned.
-local function askBrain(src, npc, playerText, cb)
+local function askBrain(src, npc, playerText, world, cb)
     local key = glmKey()
     if key == '' then return cb(nil) end   -- not wired yet -> stub fallback
 
@@ -54,6 +80,12 @@ local function askBrain(src, npc, playerText, cb)
     local sys = ([[You are %s, a character in a Grand Theft Auto V roleplay city (Los Santos). %s Personality: %s.
 Stay fully in character. Reply with ONE short spoken line only (max 25 words) — no narration, no stage directions, no quotes, no emojis. React naturally to what the player says.]])
         :format(npc.name, npc.role or '', npc.personality or '')
+
+    local wl = worldLine(world)
+    if wl then
+        sys = sys .. '\n' .. wl ..
+            ' If asked about the time, day, weather, or who is around, answer naturally from this — never say you do not know.'
+    end
 
     local messages = { { role = 'system', content = sys } }
     for _, m in ipairs(hist) do messages[#messages + 1] = m end
@@ -90,7 +122,7 @@ end
 
 local lastSay = {}  -- src -> epoch seconds (light anti-spam; eventguard is the real gate)
 
-RegisterNetEvent('palm6_brain:say', function(npcId, text)
+RegisterNetEvent('palm6_brain:say', function(npcId, text, world)
     if not (Config.Enabled and Config.NamedEnabled) then return end
     local src = source
     local now = os.time()
@@ -101,7 +133,7 @@ RegisterNetEvent('palm6_brain:say', function(npcId, text)
     if not npc then return end
     text = tostring(text or ''):sub(1, 200)
 
-    askBrain(src, npc, text, function(reply)
+    askBrain(src, npc, text, world, function(reply)
         if not reply or reply == '' then reply = cannedFor(npc) end  -- graceful fallback
         TriggerClientEvent('palm6_brain:reply', src, npc.id, reply)
     end)

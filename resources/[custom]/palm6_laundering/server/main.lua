@@ -163,6 +163,19 @@ local function cmdLaunder(src)
 
     Bridge.Notify(src, 'Laundromat',
         ('Washed $%d — $%d landed clean in your account.'):format(amount, cleanOut), 'success')
+
+    -- Persistent police attention: moving dirty money is a crime, and a run the
+    -- law flagged (police alerted + evidence filed) bumps the launderer harder
+    -- than a quiet wash. Keyed to the character (cid) so it follows them after
+    -- they log. Soft-dep + pcall — a stopped palm6_heat never touches the wash.
+    if GetResourceState('palm6_heat') == 'started' then
+        pcall(function()
+            exports.palm6_heat:AddHeat(cid,
+                Config.PlayerHeat.Base + (flagged and Config.PlayerHeat.FlaggedBonus or 0),
+                'launder')
+        end)
+    end
+
     dbg(('%s washed $%d -> $%d clean (flagged=%s, heat=%.1f)'):format(cid, amount, cleanOut, tostring(flagged), frontHeat))
 end
 

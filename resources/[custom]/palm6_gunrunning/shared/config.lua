@@ -39,6 +39,13 @@ Config.BuyCooldownSec = 10
 -- as palm6_counterfeit's "CF-" wad serials.
 Config.SerialPrefix = 'GR'
 
+-- Persistent police attention (palm6_heat) added to the BUYER on a completed
+-- purchase — acquiring an untraceable black-market weapon is a crime. Keyed to
+-- the character so it follows them after they log (drives /heat, season
+-- Most-Wanted, dispatch priority). Soft-dep — a no-op if palm6_heat is stopped.
+-- Mirrors palm6_heat Config.Suggested.gun_deal.
+Config.HeatOnBuy = 10
+
 -- Discoverable dealer NPC at the drop point (presentation only — the buy still
 -- re-runs the full server authority: proximity, price, charge, grant). Anchored
 -- to Config.DropPoint.coords so the ped IS the proximity zone. Was command-only

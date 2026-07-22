@@ -37,6 +37,13 @@ Config.RequireWeapon = true
 Config.Dispatch = { blipSprite = 161, blipColour = 1, blipScale = 1.2,
                     label = 'Robbery in progress', durationSeconds = 90 }
 
+-- Persistent police attention (palm6_heat) added to the robber on a successful
+-- job. An ATM is petty crime, so a small bump — but it still puts you on the
+-- /heat board and follows your character after you log. Soft-dep: if palm6_heat
+-- is stopped this is a no-op and the payout is untouched. Mirrors the weight in
+-- palm6_heat Config.Suggested.atm_robbery.
+Config.HeatOnRob = 8
+
 -- ---------------------------------------------------------------------------
 -- ATMs — small payout, short hold, short cooldown.
 -- ---------------------------------------------------------------------------

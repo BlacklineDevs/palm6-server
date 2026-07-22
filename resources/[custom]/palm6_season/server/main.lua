@@ -261,6 +261,35 @@ Ladders.pulse = { subject = 'citizen', run = function(startsAt, limit)
     return out
 end }
 
+-- Ladder F: Most Wanted — durable police attention from palm6_heat. This is the
+-- ladder that was deferred until a lasting wanted score existed; palm6_heat is
+-- now that score. Reads the decay-correct EFFECTIVE heat via palm6_heat's frozen
+-- GetTop export (NEVER the raw palm6_heat_state table — stored heat ignores
+-- decay). NOT season-windowed: heat is a live decaying snapshot, so startsAt is
+-- intentionally unused. Soft — if palm6_heat is stopped the board is simply
+-- empty, never an error (the season "empty ladder" contract). noPrize in
+-- Config.Ladders because heat is added on every crime and paying it a clean-cash
+-- prize would be a farm (the same reason 'rep' pays nothing) — Most Wanted is
+-- pure bragging rights.
+Ladders.wanted = { subject = 'citizen', run = function(_startsAt, limit)
+    local out = {}
+    if GetResourceState('palm6_heat') ~= 'started' then return out end
+    local ok, top = pcall(function() return exports.palm6_heat:GetTop(limit) end)
+    if not ok or type(top) ~= 'table' then return out end
+    for _, e in ipairs(top) do
+        local score = tonumber(e.heat) or 0
+        if score > 0 then
+            out[#out + 1] = {
+                subject_id = e.citizenid,
+                label      = (e.name and e.name ~= '') and e.name or Bridge.GetCitizenName(e.citizenid),
+                score      = score,
+                display    = ('%d heat (%s)'):format(score, e.tier or '?'),
+            }
+        end
+    end
+    return out
+end }
+
 -- Serve a ladder's top MaxTopN rows from cache (per season), sliced by callers.
 local function getLadder(key, s)
     local c = ladderCache[key]
