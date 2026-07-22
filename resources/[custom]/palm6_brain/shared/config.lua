@@ -193,7 +193,7 @@ Config.Director = {
     -- MASTER GATE for the whole Director tier. false = the tick loop never
     -- starts. Independent of Config.Enabled so the ambient/dialogue tiers and
     -- the Director can be lit up separately.
-    Enabled = false,
+    Enabled = true,   -- LIVE feel-test: Director tick + mover materialization ON
 
     -- DRY-RUN. true = accepted actions are only LOGGED and discarded (the tick
     -- proves the LLM→validate pipeline with zero state change). false = accepted
@@ -203,7 +203,7 @@ Config.Director = {
     -- is still NO ped movement, money, or dispatch until the client executor and
     -- the Money/Crime gates land; a committed goal with no consumer is inert.
     -- Stays true until the client executor exists AND is browser-walked.
-    DryRun = true,
+    DryRun = false,   -- LIVE: commit goals -> movers actuate them
 
     -- Goal Time-To-Live = TickSeconds * this. A committed goal auto-expires after
     -- this many ticks with no refresh, so a Director outage (GLM down) can never
@@ -222,8 +222,8 @@ Config.Director = {
     --   CrimeEnabled → verbs that would call the police-dispatch bus
     --       (rob, attack, deal). Gate off until rate-limits + CountOnDutyPolice
     --       gating are wired so off-peak crime can't spam on-duty officers.
-    MoneyEnabled = false,
-    CrimeEnabled = false,
+    MoneyEnabled = false,   -- HELD: real money faucet — flip only after the AFK-printer browser-walk (docs/AI-NPC-RUNBOOK.md §6)
+    CrimeEnabled = true,    -- LIVE: throttled 911s to on-duty cops (audited safe; MinOnDutyPolice gates it, throttle caps rate)
 
     -- Seconds between Director ticks. Roadmap costs are computed at 30–60s; a
     -- slow tick is what keeps this ~free (one batched call, not per-ped).

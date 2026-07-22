@@ -42,7 +42,7 @@
 --                 evicted to make room, so the table can never grow unbounded.
 --   DigestMax     max grudge lines folded into one tick's prompt (keeps it short).
 local CFG = {
-    Enabled      = false,   -- DARK: registers no hooks, keeps no state, until flipped true.
+    Enabled      = true,    -- LIVE: grudge tracking + emergent-retaliation context (inert until crime happens).
     GrudgeTtlSec = 1800,    -- 30 min: a grudge decays/expires after this many seconds.
     MaxGrudges   = 20,      -- bounded store: evict oldest beyond this many grudges.
     DigestMax    = 4,       -- at most this many grudge lines injected into the prompt.

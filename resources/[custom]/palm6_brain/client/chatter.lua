@@ -28,7 +28,7 @@
 
 -- Dark-ship config. A coordinator may promote this to Config.Chatter and repoint.
 local CFG = {
-    Enabled     = false,  -- MASTER: false = inert (no scan, no render). Flip true to feel-test.
+    Enabled     = true,   -- LIVE: ambient overheard chatter ON (also requires Config.Enabled).
     IntervalSec = 12,     -- Global floor between chatter events (hard anti-spam throttle).
     Range       = 25.0,   -- Only peds within this many metres of the PLAYER may chatter (must be observed).
     BubbleSeconds = 4.0,  -- How long each overheard line floats above a ped's head.
