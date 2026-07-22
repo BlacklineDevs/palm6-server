@@ -234,6 +234,19 @@ local function cmdShakedown(src)
     collectLock[business.id] = nil
     Bridge.Notify(src, 'Protection',
         ('Shook down %s for $%d (dirty). Get it washed.'):format(business.label, amount), 'success')
+
+    -- Persistent police attention: extortion is a gang crime, and a reported
+    -- (flagged) shakedown runs hotter. Keyed to the collector (cid) so it
+    -- follows them after they log. Fires only after the payout committed above.
+    -- Soft-dep + pcall — a stopped palm6_heat never touches the shakedown path.
+    if GetResourceState('palm6_heat') == 'started' then
+        pcall(function()
+            exports.palm6_heat:AddHeat(cid,
+                Config.HeatOnShakedown + (flagged and Config.HeatFlaggedBonus or 0),
+                'shakedown')
+        end)
+    end
+
     dbg(('%s (%s) shook %s for $%d, flagged=%s'):format(cid, gang.name, business.id, amount, tostring(flagged)))
 end
 

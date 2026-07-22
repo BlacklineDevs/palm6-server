@@ -54,6 +54,13 @@ Config.CollectIntervalSec = 1800   -- 30 minutes per business
 -- evidence case.
 Config.ReportChance = 0.20
 
+-- Persistent police attention (palm6_heat) added to the collector on a
+-- successful shakedown — extortion is a gang crime, and one the business
+-- reported (native alert + evidence) runs hotter. Keyed to the character so it
+-- follows them after they log. Soft-dep — a no-op if palm6_heat is stopped.
+Config.HeatOnShakedown  = 6
+Config.HeatFlaggedBonus = 6
+
 -- /shakedown and /rackets are chat commands, not net events — so (like
 -- palm6_chopshop/laundering/numbers) eventguard's Config.Events doesn't cover
 -- them; the per-character CooldownSec + the per-business interval + the
