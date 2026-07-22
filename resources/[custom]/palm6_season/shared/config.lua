@@ -54,8 +54,11 @@ Config.Ladders = {
     drugs = { title = 'Drug Empire',            subject = 'citizen' },
     dirty = { title = 'Dirtiest Hustler',       subject = 'citizen' },
     pulse = { title = 'City Pulse (most active)', subject = 'citizen' },
-    -- wanted = { title = 'Most Wanted',        subject = 'citizen' },  -- D2 variant
+    -- Most Wanted: durable police attention from palm6_heat (GetTop). noPrize —
+    -- heat is added on every crime, so a clean-cash prize would be a farm (same
+    -- reason 'rep' pays nothing). Bragging rights only. Empty if palm6_heat off.
+    wanted = { title = 'Most Wanted', subject = 'citizen', noPrize = true },
 }
 
 -- Deterministic display / archive order (string-keyed tables are unordered).
-Config.LadderOrder = { 'rep', 'turf', 'drugs', 'dirty', 'pulse' }
+Config.LadderOrder = { 'rep', 'turf', 'drugs', 'dirty', 'pulse', 'wanted' }
