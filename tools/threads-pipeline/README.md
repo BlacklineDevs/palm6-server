@@ -12,39 +12,49 @@ Headless chain: PNG → DDS (texconv) → `.ytd` (CodeWalker.Core) → base `.yd
 - **texconv:** TODO (Task 2) — DirectXTex release exe.
 - **gtautil:** TODO (Task 6 / Stage B) — gizzdev/gtautil.
 
-## ⚠️ BLOCKER surfaced: CodeWalker.Core sourcing (Task 3)
+## ✅ RESOLVED: CodeWalker.Core sourcing (Task 3)
 
-The research assumed `CodeWalker.Core` is a clean NuGet targeting .NET Standard 2.0.
-**Reality on nuget.org:** the `CodeWalker.Core` package (versions 1.0.0–1.0.3) is
-**unlisted** (appears in the flat-container index but not in search/registration) AND
-**incompatible with net8.0** — `dotnet add package` → `NU1100: Unable to resolve` /
-`incompatible with 'all' frameworks`. It almost certainly targets **.NET Framework 4.x**
-(dexyfex's CodeWalker.Core is historically net48), not netstandard2.0.
+**Root cause of the initial failures was NOT the package — it was that this machine had
+NO NuGet source configured** (`dotnet nuget list source` → "No sources found"). Every
+restore failed with `NU1100 Unable to resolve` for *every* package (even
+`Microsoft.NETFramework.ReferenceAssemblies`). Fix, applied once:
 
-### Resolution options (decide before continuing Task 3)
+```powershell
+& "$env:USERPROFILE\.dotnet\dotnet.exe" nuget add source https://api.nuget.org/v3/index.json -n nuget.org
+```
 
-1. **Target the tool at `net48` instead of `net8.0`** (LIKELY SIMPLEST). The `YtdBuild`
-   tool only needs to run on the Windows worker; it does not need net8. Retarget
-   `YtdBuild.csproj` to `net48`, add `Microsoft.NETFramework.ReferenceAssemblies` if the
-   targeting pack is missing, then reference the `net48` CodeWalker.Core assembly
-   (`--version 1.0.3`, which should restore for a net48 TFM). Verify the 1.0.x package is
-   the genuine dexyfex library (exposes `Texture`, `TextureDictionary`, `YtdFile`,
-   `DDSIO`) and not a squat — inspect the restored DLL with `ildasm`/ILSpy.
-2. **Build CodeWalker.Core from source** — clone `dexyfex/CodeWalker`, build the
-   `CodeWalker.Core` project, reference the resulting DLL directly. The `CodeWalker API`
-   (.NET 9) project proves Core can run under modern .NET, but may require the Core csproj
-   to be retargeted to netstandard2.0 first. More work, cleaner long-term.
-3. **Fork/extract grzyClothTool's texture-add path** (GPL-3.0 — accept the license or use
-   as reference only). grzyClothTool already references a working CodeWalker.Core; its
-   `.csproj` shows exactly which assembly/version works.
+After that, `CodeWalker.Core 1.0.3` **restores cleanly**. Verified facts:
+- The package targets **netstandard2.0** (so it loads under BOTH net8.0 and net48 — the
+  earlier "incompatible with all frameworks" was a red herring from the missing source).
+  `YtdBuild.csproj` is currently `net48`; net8.0 would also work.
+- It is the **genuine dexyfex library** — reflection confirms
+  `CodeWalker.GameFiles.{YtdFile, TextureDictionary, Texture, JenkHash, JenkIndex}` are all
+  present. Not a squat.
 
-**Recommendation:** try option 1 first (retarget net48) — a ~10-minute change that likely
-unblocks the whole packer. If the 1.0.x package turns out to be a squat/stale, fall back
-to option 2 (source build).
+### Verified API (reflected from the 1.0.3 assembly)
+
+- `YtdFile`: `.TextureDict` (get/set), `.Load(byte[])`, `.Save() -> byte[]`.
+- `TextureDictionary`: **`.BuildFromTextureList(List<Texture>)`** (this builds the hash
+  table — the part we feared; the lib handles it), `.Lookup(uint hash) -> Texture`,
+  `.Textures`, `.TextureNameHashes`.
+- `Texture` settable props: `Width, Height, Depth, Stride, Format, Levels` (mip count),
+  `Data` (a `TextureData` whose `.FullData` holds the raw block-compressed bytes),
+  `Name, NameHash, Usage, UsageFlags`.
+- `JenkHash.GenHash(string)` / `JenkIndex.Ensure(string)` for the name hash.
+
+### ⚠️ Remaining Task-3 work (well-scoped, not a blocker)
+
+**`DDSIO` is NOT in this build** — there is no one-call DDS→Texture helper. So `Program.cs`
+must **parse the DDS header itself** (magic `DDS `, width, height, mip count, and the
+pixelformat FourCC → map `DXT1/DXT5/BC7` to CodeWalker's `TextureFormat` enum), set
+`Texture.{Width,Height,Stride,Format,Levels}` and `Texture.Data.FullData = <all bytes after
+the 128-byte DDS header>` (or 148 for DX10/BC7 headers), then `BuildFromTextureList` +
+`YtdFile.Save()`. This is a standard DDS parse (~100 lines). **grzyClothTool's texture-add
+path is the exact reference** for the DDS→Texture field mapping (GPL — reference, don't
+copy). This is the one piece left to write + validate in-game.
 
 ### Current state of `YtdBuild/`
 
-Scaffolded as a net8.0 console (`dotnet new console`). `CodeWalker.Core` PackageReference
-was added but does NOT restore (incompatible TFM). `Program.cs` is still the default
-`dotnet new` stub — the real DDS→.ytd code (per the plan Task 3) is NOT yet written,
-pending the sourcing decision above.
+`net48` console, `CodeWalker.Core 1.0.3` + `Microsoft.NETFramework.ReferenceAssemblies`
+referenced and **restoring cleanly**. `Program.cs` is still the `dotnet new` stub — the DDS
+parser + build code (above) is the next thing to write.
