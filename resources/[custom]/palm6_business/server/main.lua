@@ -115,14 +115,16 @@ local STARTER_KEY = (Config.StarterPack and Config.StarterPack.Key) or 'starter'
 local SKIN_BY_KEY = {}
 for _, s in ipairs((Config.StarterPack and Config.StarterPack.Skins) or {}) do SKIN_BY_KEY[s.key] = s end
 
--- Per-owner entitlement lookup. COLD path only (the cosmetic ops + the walk-up
--- card + the export) — NEVER the getMembership hot path. True when this citizen
--- holds the Starter Pack (bought via Tebex, or granted by the admin command).
-local function hasStarterEntitlement(cid)
-    if not cid then return false end
+-- Per-Discord-ACCOUNT entitlement lookup. COLD path only (the cosmetic ops + the
+-- walk-up card + the export) — NEVER the getMembership hot path. `discord` is a
+-- raw discord id. True when this account holds the Starter Pack (bought via Tebex,
+-- or granted by the admin command). Account-level so it survives a purchase made
+-- before a character exists and covers every business the buyer owns.
+local function hasStarterEntitlement(discord)
+    if not discord or discord == '' then return false end
     local row = MySQL.scalar.await(
-        'SELECT 1 FROM palm6_business_entitlements WHERE citizenid = ? AND pack = ?',
-        { cid, STARTER_KEY })
+        'SELECT 1 FROM palm6_business_entitlements WHERE discord_id = ? AND pack = ?',
+        { discord, STARTER_KEY })
     return row ~= nil
 end
 
@@ -465,7 +467,7 @@ local function pushMenu(src)
             -- The scoped nameplate/skin SELECT runs only here (starterPackEnabled),
             -- so a lagged 0073 migration never touches gate-off code. The client
             -- shows "Set nameplate" / "Choose skin" only when starterPack.unlocked.
-            if isOwner and starterPackEnabled() and hasStarterEntitlement(cid) then
+            if isOwner and starterPackEnabled() and hasStarterEntitlement(Bridge.GetDiscordId(src)) then
                 local cos = MySQL.single.await('SELECT nameplate, skin FROM palm6_businesses WHERE id = ?', { m.business_id })
                 data.business.starterPack = {
                     unlocked = true,
@@ -864,11 +866,13 @@ local function opTransfer(src, targetCid)
     MySQL.update.await('UPDATE palm6_business_members SET role = ? WHERE citizenid = ? AND business_id = ? AND role = ?',
         { Config.Role.Employee, cid, bizId, Config.Role.Owner })
     MySQL.update.await('UPDATE palm6_businesses SET owner_cid = ? WHERE id = ?', { targetCid, bizId })
-    -- Starter Pack: premium cosmetics belong to the OWNER's entitlement, so they
-    -- must not outlive a transfer to someone who didn't buy the pack. Clear the
-    -- nameplate/skin unless the NEW owner is entitled. Guarded by starterPackEnabled()
-    -- so a gate-off transfer never references the 0073 columns.
-    if starterPackEnabled() and not hasStarterEntitlement(targetCid) then
+    -- Starter Pack: premium cosmetics belong to the OWNER's Discord account, so
+    -- they don't outlive a transfer. Clear the nameplate/skin on ANY transfer; the
+    -- new owner re-applies them if their account holds the pack. (Clearing
+    -- unconditionally avoids resolving an offline new owner's Discord id, and is
+    -- the honest default — a cosmetic is personal to whoever set it.) Guarded by
+    -- starterPackEnabled() so a gate-off transfer never references the 0073 columns.
+    if starterPackEnabled() then
         MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL, skin = NULL WHERE id = ?', { bizId })
     end
     insertLedger(bizId, cid, 'transfer', 0,
@@ -1201,7 +1205,7 @@ local function opSetNameplate(src, raw)
         notify(src, 'Business', 'Nameplate cleared.', 'success')
         broadcastStorefronts(); pushMenu(src); return
     end
-    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks custom nameplates.', 'error') end
+    if not hasStarterEntitlement(Bridge.GetDiscordId(src)) then return notify(src, 'Business', 'The Business Starter Pack unlocks custom nameplates.', 'error') end
     local plate = sanitizeNameplate(raw)
     if not plate then return notify(src, 'Business', "That nameplate isn't allowed.", 'error') end
     MySQL.update.await('UPDATE palm6_businesses SET nameplate = ? WHERE id = ?', { plate, m.business_id })
@@ -1225,7 +1229,7 @@ local function opSetSkin(src, skinKey)
         notify(src, 'Business', 'Skin cleared.', 'success')
         broadcastStorefronts(); pushMenu(src); return
     end
-    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks premium skins.', 'error') end
+    if not hasStarterEntitlement(Bridge.GetDiscordId(src)) then return notify(src, 'Business', 'The Business Starter Pack unlocks premium skins.', 'error') end
     if type(skinKey) ~= 'string' or not SKIN_BY_KEY[skinKey] then
         return notify(src, 'Business', 'That skin is not allowed.', 'error')
     end
@@ -1415,7 +1419,8 @@ end
 -- Admin grant/revoke of the Starter Pack entitlement — a bridge until the Tebex
 -- -> bot -> web chain writes palm6_business_entitlements directly. ACE-gated
 -- (console/src 0 is always allowed; a player source needs Config.StarterPack.
--- AdminAce). Server-authoritative. Usage: /grantstarterpack <citizenid> [revoke].
+-- AdminAce). Server-authoritative. Usage: /grantstarterpack <discordId> [revoke].
+-- The entitlement is per-Discord-ACCOUNT, so the argument is a raw discord id.
 if Config.StarterPack then
     Bridge.RegisterCommand('grantstarterpack', function(source, args)
         if source ~= 0 and not IsPlayerAceAllowed(source, Config.StarterPack.AdminAce) then
@@ -1423,7 +1428,7 @@ if Config.StarterPack then
         end
         local target = args and args[1]
         if not target or target == '' then
-            if source ~= 0 then notify(source, 'Business', 'Usage: /grantstarterpack <citizenid> [revoke]', 'error') end
+            if source ~= 0 then notify(source, 'Business', 'Usage: /grantstarterpack <discordId> [revoke]', 'error') end
             return
         end
         -- pcall-wrap the 0073-schema writes: this command is usable before the pack
@@ -1432,24 +1437,32 @@ if Config.StarterPack then
         -- raw SQL error (mirrors the HasStarterPack export's lagged-migration guard).
         if args[2] == 'revoke' then
             local ok = pcall(function()
-                MySQL.update.await('DELETE FROM palm6_business_entitlements WHERE citizenid = ? AND pack = ?', { target, STARTER_KEY })
-                -- Revocation reverts the cosmetics too (refund honesty): clear the
-                -- nameplate/skin on every business this citizen CURRENTLY owns. (A
-                -- business they transferred to an unentitled owner was already
-                -- cleared at transfer time, so this covers the whole refund case.)
-                MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL, skin = NULL WHERE owner_cid = ?', { target })
+                MySQL.update.await('DELETE FROM palm6_business_entitlements WHERE discord_id = ? AND pack = ?', { target, STARTER_KEY })
+                -- Refund honesty: revert the cosmetics on every business owned by any
+                -- of this Discord account's characters. owner_cid is a citizenid, so
+                -- resolve discord -> characters via qbx_core (users.discord =
+                -- 'discord:<id>', players.userId = users.userId). Best-effort inside
+                -- the pcall; the entitlement is already removed regardless.
+                MySQL.update.await([[
+                    UPDATE palm6_businesses SET nameplate = NULL, skin = NULL
+                     WHERE owner_cid IN (
+                        SELECT p.citizenid FROM players p
+                          JOIN users u ON p.userId = u.userId
+                         WHERE u.discord = ?
+                     )
+                ]], { 'discord:' .. target })
             end)
             if not ok then
                 if source ~= 0 then notify(source, 'Business', 'Starter Pack storage not migrated yet.', 'error') end
                 return
             end
             if starterPackEnabled() then pcall(broadcastStorefronts) end
-            if source ~= 0 then notify(source, 'Business', ('Revoked Starter Pack from %s.'):format(target), 'success') end
-            print(('[palm6_business] Starter Pack revoked: %s'):format(target))
+            if source ~= 0 then notify(source, 'Business', ('Revoked Starter Pack from discord %s.'):format(target), 'success') end
+            print(('[palm6_business] Starter Pack revoked: discord %s'):format(target))
         else
             local ok = pcall(function()
                 MySQL.insert.await(
-                    'INSERT INTO palm6_business_entitlements (citizenid, pack, granted_at, source) VALUES (?,?,?,?) ' ..
+                    'INSERT INTO palm6_business_entitlements (discord_id, pack, granted_at, source) VALUES (?,?,?,?) ' ..
                     'ON DUPLICATE KEY UPDATE granted_at = VALUES(granted_at), source = VALUES(source)',
                     { target, STARTER_KEY, nowSec(), (source == 0 and 'console' or 'admin') })
             end)
@@ -1457,8 +1470,8 @@ if Config.StarterPack then
                 if source ~= 0 then notify(source, 'Business', 'Starter Pack storage not migrated yet.', 'error') end
                 return
             end
-            if source ~= 0 then notify(source, 'Business', ('Granted Starter Pack to %s.'):format(target), 'success') end
-            print(('[palm6_business] Starter Pack granted: %s'):format(target))
+            if source ~= 0 then notify(source, 'Business', ('Granted Starter Pack to discord %s.'):format(target), 'success') end
+            print(('[palm6_business] Starter Pack granted: discord %s'):format(target))
         end
     end)
 end
@@ -1510,12 +1523,13 @@ exports('GetStorefront', function(businessId)
     return { x = sf.loc_x, y = sf.loc_y, z = sf.loc_z, h = sf.loc_h or 0.0 }
 end)
 
--- Starter Pack entitlement lookup. The "Discord business-registry badge" perk is
--- granted Discord-side from this same entitlement; this export lets the bot / web
--- (or any resource) read whether a citizen holds the pack. Guarded; never throws.
-exports('HasStarterPack', function(citizenid)
-    if type(citizenid) ~= 'string' or citizenid == '' then return false end
-    local ok, res = pcall(hasStarterEntitlement, citizenid)
+-- Starter Pack entitlement lookup, keyed by Discord id (per-account). The "Discord
+-- business-registry badge" perk is granted Discord-side from this same entitlement;
+-- this export lets any resource read whether an account holds the pack. Guarded;
+-- never throws.
+exports('HasStarterPack', function(discordId)
+    if type(discordId) ~= 'string' or discordId == '' then return false end
+    local ok, res = pcall(hasStarterEntitlement, discordId)
     return ok and res or false
 end)
 

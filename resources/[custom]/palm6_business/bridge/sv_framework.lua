@@ -28,6 +28,17 @@ function Bridge.GetCitizenId(src)
     return p and p.PlayerData and p.PlayerData.citizenid or nil
 end
 
+-- The player's raw Discord id (no 'discord:' prefix), or nil. Used only by the
+-- Starter Pack entitlement (per-Discord-account, mirrors how the website links
+-- identity). Same helper as palm6_founder's bridge.
+function Bridge.GetDiscordId(src)
+    local ids = GetPlayerIdentifiers(src) or {}
+    for i = 1, #ids do
+        if ids[i]:sub(1, 8) == 'discord:' then return ids[i]:sub(9) end
+    end
+    return nil
+end
+
 -- Character display name for the roster / ledger. NB: the :gsub-count leak that
 -- broke gang create/join is avoided by assigning to a local before returning.
 function Bridge.GetPlayerName(src)

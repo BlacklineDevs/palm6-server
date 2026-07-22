@@ -269,10 +269,12 @@ Config.Storefront = {
 -- registry badge". This layer delivers the two IN-GAME cosmetics; the Discord
 -- badge is granted Discord-side from the same entitlement (exposed by an export).
 --
--- ENTITLEMENT: per-OWNER, keyed by citizenid in palm6_business_entitlements
--- (pack = Config.StarterPack.Key). Granted by the Tebex -> bot -> web chain when
--- the pack is purchased, or by the admin grant command for testing. A business's
--- OWNER must hold the entitlement to set a nameplate/skin.
+-- ENTITLEMENT: per-Discord-ACCOUNT, keyed by discord_id in
+-- palm6_business_entitlements (pack = Config.StarterPack.Key). Account-level
+-- because a purchase is account-wide and can precede a character. Granted by the
+-- Tebex -> bot -> web chain when the pack is purchased, or by the admin grant
+-- command for testing. A business's OWNER must hold the entitlement (checked via
+-- their Discord id) to set a nameplate/skin.
 --
 -- COSMETIC ONLY: this layer moves NO money and never changes what a business
 -- earns. It is inert unless Config.StarterPack.Enabled (+ Config.Enabled +
