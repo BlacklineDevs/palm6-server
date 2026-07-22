@@ -301,3 +301,27 @@ Config.Director = {
         PerBusinessCooldownSec = 300,
     },
 }
+
+-- ===========================================================================
+-- NETWORKED SERVER-OWNED PEDS (the roadmap's "hard part" — FOUNDATION).
+--
+-- The live movers (client/main.lua) are CLIENT-LOCAL: great theater, but each
+-- exists on only one machine, so a player can't directly rob/interact with one.
+-- Networked peds are SERVER-CREATED + OneSync-replicated — EVERY player sees the
+-- SAME ped — which is the prerequisite for crime/money NPCs players can interact
+-- with. The catch is ownership: a networked ped "thinks" only on the client that
+-- currently owns it, and tasks drop on ownership migration. The fix (server/
+-- client netped.lua) is to store the ped's GOAL in a REPLICATED STATE BAG and
+-- have whichever client owns it apply + re-assert the task.
+--
+-- This is a FOUNDATION: manual test commands (/netpedtest /netpedgoto /netpedclear)
+-- to validate the networked+ownership+state-bag mechanism in-game BEFORE wiring
+-- the Director / crime / money onto it. Dark by default; fully isolated from the
+-- live client-local mover system (does not touch it).
+-- ===========================================================================
+Config.NetPed = {
+    Enabled = true,    -- ARMED for validation: handler + re-assert loop run, but NOTHING spawns until /netpedtest (inert idle).
+
+    Model   = 'a_m_y_business_01',   -- default test model
+    WalkSpeed = 1.0,                 -- 1.0 walk, ~2.0 run (TaskFollowNavMeshToCoord)
+}
