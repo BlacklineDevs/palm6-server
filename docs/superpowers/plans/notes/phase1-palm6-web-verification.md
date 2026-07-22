@@ -40,6 +40,26 @@ Tasks 3–7.
 ## palm6-web write isolation
 
 palm6-web shared checkout was on `feat/system-a-favicon` with uncommitted work at recon
-time. Threads web code (Tasks 3–7) MUST be written in an **isolated palm6-web worktree**
-(branch `feat/palm6-threads`), NOT the shared checkout — same discipline as the gtarp
-worktree. Record that worktree path + each Task's palm6-web commit hash here as they land.
+time. Threads web code (Tasks 3–7) was written in an **isolated palm6-web worktree**:
+
+- **Worktree:** `C:\Users\Mgtda\Projects\Active\palm6-web-threads`, branch
+  `feat/palm6-threads` off `origin/main` (base `56c3b7b`). node_modules is a **junction**
+  to the main checkout — ⚠️ STRIP the junction before any `git worktree remove` (the
+  junction-follow data-loss landmine), and Turbopack `next build` rejects the junction
+  ("symlink out of filesystem root") → use `next build --webpack` here (tsc + vitest
+  follow the junction fine).
+
+**palm6-web commit hashes (branch feat/palm6-threads):**
+| Task | Commit | Contents |
+|------|--------|----------|
+| Task 3 | `bd76a57` | catalog.ts + library + validate + db.ts + seed.ts (12 tests) |
+| Task 4 | `b2910b9` | entitlement.ts + tests (12 tests) |
+| Task 5 | `2ed6697` | designs.ts lifecycle + allocator + designs/db tests (→40 tests) |
+| Tasks 6+7 | `487ff61` | API routes + editor + admin queue + actions (→47 tests) |
+
+**Verification:** `tsc --noEmit` clean (0 errors); 47 vitest tests green;
+`next build --webpack` COMPILED OK, all 4 threads routes emitted dynamic.
+
+**gtarp worktree commits (branch feat/palm6-threads):** Task 1+decisions `58ea936`,
+Task 2 migration `e5d814c`, Task 8 FiveM equip `99b814c`. Neither repo's branch is
+pushed yet (awaiting David).
