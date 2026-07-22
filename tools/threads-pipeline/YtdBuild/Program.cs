@@ -25,10 +25,77 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        // --list <ytd>: open an existing .ytd and print each texture's Name/Width/Height/Format.
+        // Used to read a base clothing pack's INTERNAL texture name so our generated .ytd can
+        // reuse the exact name the base .ydd looks up.
+        string listPath = Arg(args, "--list");
+        if (listPath != null)
+        {
+            if (!File.Exists(listPath)) { Console.Error.WriteLine("ytd not found: " + listPath); return 2; }
+            var yf = new YtdFile();
+            try { yf.Load(File.ReadAllBytes(listPath)); }
+            catch (Exception e) { Console.Error.WriteLine("YTD load failed: " + e.Message); return 1; }
+            var dict = yf.TextureDict;
+            if (dict == null) { Console.Error.WriteLine("no TextureDictionary in " + listPath); return 1; }
+            var texs = dict.Textures?.data_items;
+            int n = texs?.Length ?? 0;
+            Console.WriteLine($"YTD {listPath}  textures={n}");
+            if (texs != null)
+            {
+                foreach (var t in texs)
+                {
+                    if (t == null) continue;
+                    Console.WriteLine($"  name={t.Name}  hash=0x{t.NameHash:X8}  {t.Width}x{t.Height}  fmt={t.Format}  levels={t.Levels}  stride={t.Stride}");
+                }
+            }
+            return 0;
+        }
+
+        // --yddtex <ydd>: open a drawable dictionary (.ydd) and print, per drawable, the
+        // texture NAMES its shaders reference. A clothing .ydd carries no embedded texture -
+        // it looks the texture up BY NAME at render time in whatever .ytd is loaded for its
+        // slot. That referenced name is the ground truth our generated .ytd must reproduce.
+        string yddPath = Arg(args, "--yddtex");
+        if (yddPath != null)
+        {
+            if (!File.Exists(yddPath)) { Console.Error.WriteLine("ydd not found: " + yddPath); return 2; }
+            var yd = new YddFile();
+            try { yd.Load(File.ReadAllBytes(yddPath)); }
+            catch (Exception e) { Console.Error.WriteLine("YDD load failed: " + e.Message); return 1; }
+            var drawables = yd.DrawableDict?.Drawables?.data_items;
+            int dn = drawables?.Length ?? 0;
+            Console.WriteLine($"YDD {yddPath}  drawables={dn}");
+            var seen = new HashSet<string>();
+            if (drawables != null)
+            {
+                for (int di = 0; di < drawables.Length; di++)
+                {
+                    var d = drawables[di];
+                    var shaders = d?.ShaderGroup?.Shaders?.data_items;
+                    if (shaders == null) continue;
+                    foreach (var sh in shaders)
+                    {
+                        var pars = sh?.ParametersList?.Parameters;
+                        if (pars == null) continue;
+                        foreach (var p in pars)
+                        {
+                            var tb = p.Data as TextureBase;
+                            if (tb == null) continue;
+                            string tag = $"draw[{di}] shader={sh.Name} texName={tb.Name} hash=0x{tb.NameHash:X8}";
+                            if (seen.Add(tag)) Console.WriteLine("  " + tag);
+                        }
+                    }
+                }
+            }
+            if (seen.Count == 0) Console.WriteLine("  (no TextureBase references found)");
+            return 0;
+        }
+
         string dds = Arg(args, "--dds"), name = Arg(args, "--name"), outp = Arg(args, "--out");
         if (dds == null || name == null || outp == null)
         {
             Console.Error.WriteLine("usage: YtdBuild --dds <in.dds> --name <textureName> --out <out.ytd>");
+            Console.Error.WriteLine("   or: YtdBuild --list <in.ytd>");
             return 2;
         }
         if (!File.Exists(dds)) { Console.Error.WriteLine("dds not found: " + dds); return 2; }
