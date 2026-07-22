@@ -53,8 +53,37 @@ the 128-byte DDS header>` (or 148 for DX10/BC7 headers), then `BuildFromTextureL
 path is the exact reference** for the DDS→Texture field mapping (GPL — reference, don't
 copy). This is the one piece left to write + validate in-game.
 
-### Current state of `YtdBuild/`
+## ✅ PHASE 0 TASK 2 + TASK 3 PROVEN (2026-07-22)
 
-`net48` console, `CodeWalker.Core 1.0.3` + `Microsoft.NETFramework.ReferenceAssemblies`
-referenced and **restoring cleanly**. `Program.cs` is still the `dotnet new` stub — the DDS
-parser + build code (above) is the next thing to write.
+The make-or-break (headless PNG → valid GTA `.ytd`) is proven at the structural level.
+
+**Tools present** (`vendor/`, git-ignored): `texconv.exe` (DirectXTex release `may2026`).
+GPU BC7 compression works here (DirectCompute on RTX 4060), so BC7 is fast.
+
+**Task 2 — PNG → DDS:** `scripts/png-to-dds.ps1 -In x.png -Out x.dds -Format BC7_UNORM`
+wraps texconv. Verified: 256×256 PNG → 65,684-byte BC7 DDS with a DX10 header.
+
+**Task 3 — DDS → `.ytd`:** `YtdBuild/Program.cs` parses the DDS header by hand (DDSIO absent),
+maps fourCC/DXGI → `TextureFormat`, computes `Stride = slicePitch/height`, strips the
+128/148-byte header into `Texture.Data.FullData`, builds the dict via
+`TextureDictionary.BuildFromTextureList`, and `YtdFile.Save()`s. It then re-opens the saved
+`.ytd` and asserts the texture round-trips (matching dims + format). **Both formats verified:**
+- 64×64 hand-crafted **DXT1** (legacy fourCC) → `OK ... fmt=D3DFMT_DXT1 stride=32 exit=0`
+- 256×256 **BC7** (DX10 header, real texconv output) → `OK ... fmt=D3DFMT_BC7 stride=256 exit=0`
+
+Field mapping mirrors CodeWalker's own `DDSIO.GetTexture` (fetched from source as the reference).
+
+**Invoke:** `& "$env:USERPROFILE\.dotnet\dotnet.exe"` for builds;
+`YtdBuild\bin\Release\net48\YtdBuild.exe --dds <in.dds> --name <tex> --out <out.ytd>`.
+
+### ⚠️ What "proven" does and does NOT mean
+- **DOES:** the `.ytd` is a well-formed CodeWalker resource — re-openable, correct texture
+  metadata (name hash, dims, format, stride, mips). The DDS→`.ytd` automation works headlessly.
+- **DOES NOT:** prove the texture *renders on a ped in-game*. That is Phase 0 **Task 5** and can
+  only be confirmed by David wearing it on PALM6 (no local FXServer exists).
+
+### Remaining Phase 0 (Stage B → in-game)
+- A **base garment `.ydd`** to copy into a reserved drawable slot (from a known-good addon pack).
+- **gtautil `genpeddefs --fivem`** to emit the component `.ymt` (verify gtautil runs on this box).
+- Assemble the `palm6_threads` resource (stream/ + meta/ + fxmanifest) and deploy.
+- **Task 5 in-game gate (David):** does it wear + persist.
