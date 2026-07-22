@@ -82,6 +82,14 @@ Config.Heat = {
     SweepSec      = 60,      -- decay cadence (server thread)
 }
 
+-- Persistent PLAYER heat (palm6_heat) — distinct from the front heat above.
+-- Config.Heat is this front's transient bust-probability; PlayerHeat is the
+-- durable, per-character police attention that follows the launderer after they
+-- log (drives the /heat board, season Most-Wanted, dispatch priority). A quiet
+-- wash adds Base; a run the law flagged (police alerted + evidence filed) adds
+-- Base + FlaggedBonus. Soft-dep — if palm6_heat is stopped this is a no-op.
+Config.PlayerHeat = { Base = 5, FlaggedBonus = 8 }
+
 -- ---------------------------------------------------------------------------
 -- Evidence (palm6_evidence v2 frozen exports). A flagged run opens/updates a
 -- case bucketed to a 5-minute window so a burst of runs shares one case.

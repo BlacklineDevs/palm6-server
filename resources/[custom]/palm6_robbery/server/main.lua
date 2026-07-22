@@ -80,6 +80,21 @@ RegisterNetEvent('palm6_robbery:complete', function(index)
 
     Bridge.Notify(src, 'Robbery', ('You got away with $%d.'):format(reward), 'success')
 
+    -- Persistent police attention: an ATM job is petty (a small heat bump) but
+    -- it still puts the robber on the /heat board and follows the character
+    -- after they log. Fires only AFTER every completion gate above passed.
+    -- Soft-dep + pcall (same shape as the cityfeed hook below): a stopped or
+    -- broken palm6_heat never touches the payout path — heat is keyed to the
+    -- character, so we need the citizenid.
+    if GetResourceState('palm6_heat') == 'started' then
+        local citizenid = Bridge.GetCitizenId(src)
+        if citizenid then
+            pcall(function()
+                exports.palm6_heat:AddHeat(citizenid, Config.HeatOnRob, 'atm_robbery')
+            end)
+        end
+    end
+
     -- In-world civic bulletin (public facts only) via the palm6-bot feed. The
     -- bot narrates a reported robbery into its heist channel. This fires only
     -- AFTER every completion gate above passed (real pending reservation, hold
