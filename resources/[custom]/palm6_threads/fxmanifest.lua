@@ -2,24 +2,36 @@ fx_version 'cerulean'
 game 'gta5'
 
 name 'palm6_threads'
-description 'PALM6 Threads - player custom clothing (Phase 0 spike)'
+description 'PALM6 Threads - player custom clothing (Phase 1 curated core loop, inert)'
 author 'MGT'
-version '0.0.1'
+version '0.1.0'
 
 shared_script 'shared/config.lua'
-client_script 'client/debug.lua'
 
--- Stage A spike is REPLACEMENT-style, not addon-DLC, so NO SHOP_PED_APPAREL_META_FILE
--- is needed: we overwrite the base game's existing male-torso jbib drawable 0. The base
--- game's own shop meta already declares that slot, so it stays selectable at a fixed,
--- deterministic index (component 11, drawable 0, texture 0) with no appended-index guessing.
+-- Server: framework bridge (identity) + read-only deliverable-design fetch.
+server_scripts {
+    'bridge/sv_framework.lua',
+    'server/main.lua',
+}
+
+-- Client: illenium game adapter + equip path + the Stage A spike debug command.
+-- client/debug.lua (the /threads_spike Stage A visual check) is KEPT until David's
+-- Stage A in-game gate passes; it is inert while Config.Enabled = false. The Phase 1
+-- equip path lives in client/main.lua and is likewise inert until the flip.
+client_scripts {
+    'bridge/cl_game.lua',
+    'client/main.lua',
+    'client/debug.lua',
+}
+
+dependency 'oxmysql'
+
+-- Stage A stream/ contents (auto-mounted, no manifest entry needed):
+--   mp_m_freemode_01^jbib_000_u.ydd           -- known-good Rockstar torso geometry
+--   mp_m_freemode_01^jbib_diff_000_a_uni.ytd  -- OUR YtdBuild-generated texture
 --
--- stream/ contents (auto-mounted, no manifest entry needed):
---   mp_m_freemode_01^jbib_000_u.ydd           -- known-good Rockstar torso geometry (base .ydd)
---   mp_m_freemode_01^jbib_diff_000_a_uni.ytd  -- OUR YtdBuild-generated texture (internal
---                                                name 'jbib_diff_000_a_uni', the exact name
---                                                the base .ydd looks up -> hash 0x7CDD0A9B)
---
--- Phase 1 (real per-character addon delivery via illenium-appearance) will switch to a true
--- addon-DLC pack with its own SHOP_PED_APPAREL_META_FILE; that scaffold is intentionally
--- omitted here to keep the spike's only variable "does our .ytd render".
+-- Phase 1 delivery abstraction: the equip path applies whatever {component, drawable,
+-- texture} a deployed design row declares; it does NOT care whether the .ytd arrived
+-- via the Stage A base-drawable replacement or a future Stage B addon-DLC. The Stage B
+-- generator (which appends addon .ytd/.ydd/.ymt into stream/ at the reserved index) is
+-- out of scope for Phase 1 (gated on the un-passed in-game render test).
