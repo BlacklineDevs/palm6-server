@@ -63,3 +63,34 @@ time. Threads web code (Tasks 3–7) was written in an **isolated palm6-web work
 **gtarp worktree commits (branch feat/palm6-threads):** Task 1+decisions `58ea936`,
 Task 2 migration `e5d814c`, Task 8 FiveM equip `99b814c`. Neither repo's branch is
 pushed yet (awaiting David).
+
+## Self-review — verified seams + known Phase 1 limitations
+
+**Verified clean:**
+- Cross-repo SQL contract: every column db.ts / server/main.lua reference exists in the
+  0074 schema; status enum ('deployed') + citizenid (VARCHAR64/string) align across both.
+- Authority: create uses `session.cid` (server), submit checks design ownership vs
+  `session.cid`, admin actions gate `atLeast(MODERATOR)`, the game resource resolves
+  citizenid via the bridge — never client-asserted anywhere.
+- Allocator: append-only MAX+1 under `FOR UPDATE`, PK `(component_id, drawable_index)` is
+  the hard never-reused guard, ER_DUP_ENTRY retry advances. 5 allocator tests.
+- illenium shape: `appearance.components[] = {component_id, drawable, texture}` (standard
+  illenium/qb format; palm6_fc_combat uses the same exports in production).
+- No regressions: full palm6-web suite 214 tests pass; tsc 0 errors; webpack build OK.
+
+**Known Phase 1 limitations (acceptable, documented):**
+- **Slot grant scope:** `syncPerkGrants` auto-grants the FOUNDER slot on designer entry
+  (from the founding grant). Donor / business-owner need the member's Discord role ids
+  (not in the session) → wired via env role ids but only granted when role data is passed;
+  Phase 1 relies on founder auto-grant + admin/SQL grant (runbook 2e).
+- **Double-approve race:** ✅ FIXED. `transitionDesignStatus` does a conditional
+  `UPDATE ... WHERE status=<from>`; approve claims `submitted→approved` atomically BEFORE
+  allocating, so a concurrent approver loses the claim and never allocates — no wasted
+  index. All lifecycle transitions (submit/approve/deploy/reject) are now atomic. Tested.
+- **Cross-relog persistence:** within-session respawn is covered by the deferred live
+  re-apply; persistence across a full relog/resource-restart rides on illenium's saved
+  skin (setPedAppearance applies; whether it saves to the framework DB is validated at the
+  gate — if not, cross-relog needs an explicit illenium save export).
+- **Physical asset:** a `deployed` design's custom texture at index 4000+ needs the Stage B
+  generator (out of scope). The Task 9 runbook proves the loop by pointing the test band at
+  the Stage A drawable (comp 11, drawable 0) so equip renders the proven Stage A texture.
