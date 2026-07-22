@@ -28,6 +28,13 @@ Config.Debug = false
 
 Config.DirtyItem = 'black_money'   -- runs pay out dirty
 
+-- Persistent police attention (palm6_heat) added to the runner on a completed
+-- delivery. A cross-map contraband run is a serious crime — keyed to the
+-- character so it follows them after they log (drives the /heat board, season
+-- Most-Wanted, dispatch priority). Soft-dep — a no-op if palm6_heat is stopped.
+-- Mirrors palm6_heat Config.Suggested.smuggle_run.
+Config.HeatOnDeliver = 12
+
 -- Hidden pickup — no blip, word-of-mouth RP (like palm6_chopshop/laundering).
 -- Tier 3 placeholder (Elysian Island docks) — retune in-game.
 Config.Pickup = {

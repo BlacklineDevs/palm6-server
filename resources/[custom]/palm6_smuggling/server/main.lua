@@ -166,6 +166,17 @@ local function cmdDeliver(src)
         })
     end
     Bridge.Notify(src, 'Smuggling', ('Dropped. $%d dirty — get it laundered.'):format(payout), 'success')
+
+    -- Persistent police attention: a cross-map contraband run is a serious
+    -- crime. Keyed to the runner (cid) so it follows them after they log. Fires
+    -- only after the atomic delivery claim + payout above. Soft-dep + pcall — a
+    -- stopped palm6_heat never touches the delivery path.
+    if GetResourceState('palm6_heat') == 'started' then
+        pcall(function()
+            exports.palm6_heat:AddHeat(cid, Config.HeatOnDeliver, 'smuggle_run')
+        end)
+    end
+
     dbg(('%s delivered run %d for $%d'):format(cid, run.id, payout))
 end
 
