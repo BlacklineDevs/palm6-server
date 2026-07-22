@@ -58,15 +58,25 @@ end
 local function nowSec() return os.time() end
 local function dayKey() return os.date('!%Y-%m-%d') end  -- UTC bucket
 
+-- Blocklist check that resists separator evasion (f.u.c.k / f-u-c-k / f a g):
+-- test BOTH the lowercased string and a form with every non-alphanumeric stripped,
+-- so a blocked token spelled with allowed separators is still caught. Used by both
+-- the business name and the Starter Pack nameplate (public-rendered text).
+local function hasBlockedWord(s)
+    local low = s:lower()
+    local squashed = low:gsub('[^%w]', '')
+    for _, bad in ipairs(Config.Blocklist or {}) do
+        if low:find(bad, 1, true) or squashed:find(bad, 1, true) then return true end
+    end
+    return false
+end
+
 local function sanitizeName(raw)
     if type(raw) ~= 'string' then return nil end
     local s = raw:gsub("[^%w %&'%-]", '')
     s = s:gsub('%s+', ' '):gsub('^%s+', ''):gsub('%s+$', '')
     if #s < Config.NameMinLen or #s > Config.NameMaxLen then return nil end
-    local low = s:lower()
-    for _, bad in ipairs(Config.Blocklist) do
-        if low:find(bad, 1, true) then return nil end
-    end
+    if hasBlockedWord(s) then return nil end
     return s
 end
 
@@ -128,10 +138,7 @@ local function sanitizeNameplate(raw)
     local maxLen = (Config.StarterPack and Config.StarterPack.NameplateMaxLen) or 24
     if #s > maxLen then s = s:sub(1, maxLen):gsub('%s+$', '') end
     if #s == 0 then return nil end
-    local low = s:lower()
-    for _, bad in ipairs(Config.Blocklist or {}) do
-        if low:find(bad, 1, true) then return nil end
-    end
+    if hasBlockedWord(s) then return nil end
     return s
 end
 
@@ -857,6 +864,13 @@ local function opTransfer(src, targetCid)
     MySQL.update.await('UPDATE palm6_business_members SET role = ? WHERE citizenid = ? AND business_id = ? AND role = ?',
         { Config.Role.Employee, cid, bizId, Config.Role.Owner })
     MySQL.update.await('UPDATE palm6_businesses SET owner_cid = ? WHERE id = ?', { targetCid, bizId })
+    -- Starter Pack: premium cosmetics belong to the OWNER's entitlement, so they
+    -- must not outlive a transfer to someone who didn't buy the pack. Clear the
+    -- nameplate/skin unless the NEW owner is entitled. Guarded by starterPackEnabled()
+    -- so a gate-off transfer never references the 0073 columns.
+    if starterPackEnabled() and not hasStarterEntitlement(targetCid) then
+        MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL, skin = NULL WHERE id = ?', { bizId })
+    end
     insertLedger(bizId, cid, 'transfer', 0,
         MySQL.scalar.await('SELECT account_balance FROM palm6_businesses WHERE id = ?', { bizId }) or 0,
         ('Ownership transferred to %s'):format(targetCid))
@@ -1179,13 +1193,15 @@ local function opSetNameplate(src, raw)
     local cid = Bridge.GetCitizenId(src)
     local m = getMembership(cid)
     if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can set the nameplate.', 'error') end
-    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks custom nameplates.', 'error') end
     local rawTrim = (type(raw) == 'string' and raw:gsub('^%s+', ''):gsub('%s+$', '')) or ''
+    -- CLEAR is always allowed for an owner (even without the entitlement) so a
+    -- cosmetic can never get stuck. Setting a NEW nameplate requires the pack.
     if rawTrim == '' then
         MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL WHERE id = ?', { m.business_id })
         notify(src, 'Business', 'Nameplate cleared.', 'success')
         broadcastStorefronts(); pushMenu(src); return
     end
+    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks custom nameplates.', 'error') end
     local plate = sanitizeNameplate(raw)
     if not plate then return notify(src, 'Business', "That nameplate isn't allowed.", 'error') end
     MySQL.update.await('UPDATE palm6_businesses SET nameplate = ? WHERE id = ?', { plate, m.business_id })
@@ -1202,12 +1218,14 @@ local function opSetSkin(src, skinKey)
     local cid = Bridge.GetCitizenId(src)
     local m = getMembership(cid)
     if not m or m.role < Config.Role.Owner then return notify(src, 'Business', 'Only the owner can set the skin.', 'error') end
-    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks premium skins.', 'error') end
+    -- CLEAR is always allowed for an owner (even without the entitlement); setting
+    -- a premium skin requires the pack.
     if skinKey == nil or skinKey == '' then
         MySQL.update.await('UPDATE palm6_businesses SET skin = NULL WHERE id = ?', { m.business_id })
         notify(src, 'Business', 'Skin cleared.', 'success')
         broadcastStorefronts(); pushMenu(src); return
     end
+    if not hasStarterEntitlement(cid) then return notify(src, 'Business', 'The Business Starter Pack unlocks premium skins.', 'error') end
     if type(skinKey) ~= 'string' or not SKIN_BY_KEY[skinKey] then
         return notify(src, 'Business', 'That skin is not allowed.', 'error')
     end
@@ -1408,19 +1426,37 @@ if Config.StarterPack then
             if source ~= 0 then notify(source, 'Business', 'Usage: /grantstarterpack <citizenid> [revoke]', 'error') end
             return
         end
+        -- pcall-wrap the 0073-schema writes: this command is usable before the pack
+        -- is enabled (to pre-seed test entitlements), so if it runs on a box where
+        -- migration 0073 hasn't landed yet, degrade to a clear message instead of a
+        -- raw SQL error (mirrors the HasStarterPack export's lagged-migration guard).
         if args[2] == 'revoke' then
-            MySQL.update.await('DELETE FROM palm6_business_entitlements WHERE citizenid = ? AND pack = ?', { target, STARTER_KEY })
-            -- Revocation reverts the cosmetics too (refund honesty): clear the
-            -- nameplate/skin on every business this citizen owns.
-            MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL, skin = NULL WHERE owner_cid = ?', { target })
+            local ok = pcall(function()
+                MySQL.update.await('DELETE FROM palm6_business_entitlements WHERE citizenid = ? AND pack = ?', { target, STARTER_KEY })
+                -- Revocation reverts the cosmetics too (refund honesty): clear the
+                -- nameplate/skin on every business this citizen CURRENTLY owns. (A
+                -- business they transferred to an unentitled owner was already
+                -- cleared at transfer time, so this covers the whole refund case.)
+                MySQL.update.await('UPDATE palm6_businesses SET nameplate = NULL, skin = NULL WHERE owner_cid = ?', { target })
+            end)
+            if not ok then
+                if source ~= 0 then notify(source, 'Business', 'Starter Pack storage not migrated yet.', 'error') end
+                return
+            end
             if starterPackEnabled() then pcall(broadcastStorefronts) end
             if source ~= 0 then notify(source, 'Business', ('Revoked Starter Pack from %s.'):format(target), 'success') end
             print(('[palm6_business] Starter Pack revoked: %s'):format(target))
         else
-            MySQL.insert.await(
-                'INSERT INTO palm6_business_entitlements (citizenid, pack, granted_at, source) VALUES (?,?,?,?) ' ..
-                'ON DUPLICATE KEY UPDATE granted_at = VALUES(granted_at), source = VALUES(source)',
-                { target, STARTER_KEY, nowSec(), (source == 0 and 'console' or 'admin') })
+            local ok = pcall(function()
+                MySQL.insert.await(
+                    'INSERT INTO palm6_business_entitlements (citizenid, pack, granted_at, source) VALUES (?,?,?,?) ' ..
+                    'ON DUPLICATE KEY UPDATE granted_at = VALUES(granted_at), source = VALUES(source)',
+                    { target, STARTER_KEY, nowSec(), (source == 0 and 'console' or 'admin') })
+            end)
+            if not ok then
+                if source ~= 0 then notify(source, 'Business', 'Starter Pack storage not migrated yet.', 'error') end
+                return
+            end
             if source ~= 0 then notify(source, 'Business', ('Granted Starter Pack to %s.'):format(target), 'success') end
             print(('[palm6_business] Starter Pack granted: %s'):format(target))
         end
