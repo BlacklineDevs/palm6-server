@@ -117,15 +117,22 @@ RegisterCommand('threads', function()
     end)
 end, false)
 
--- Re-apply equipped items live on (re)spawn. illenium's saved-skin persistence is
--- the primary mechanism; this is a belt-and-suspenders live re-apply. Inert when dark.
+-- Re-apply equipped items live on (re)spawn. illenium loads ITS saved skin on spawn
+-- too; if that load lands AFTER an immediate re-apply, our component is lost. So the
+-- re-apply is deferred a beat to win the ordering race (the class of lifecycle bug an
+-- immediate apply silently loses). Within-session respawn is covered here; cross-relog
+-- persistence rides on illenium's saved skin (validate at the gate). Inert when dark.
 AddEventHandler('playerSpawned', function()
     if not enabled() then return end
     requestDesigns()
-    local ped = Game.MyPed()
-    for component, e in pairs(equipped) do
-        Game.ApplyComponent(ped, component, e.drawable, e.texture)
-    end
+    CreateThread(function()
+        Wait(1500)
+        if not enabled() then return end
+        local ped = Game.MyPed()
+        for component, e in pairs(equipped) do
+            Game.ApplyComponent(ped, component, e.drawable, e.texture)
+        end
+    end)
 end)
 
 -- Warm the cache once on resource start so /threads is responsive. Inert when dark.
