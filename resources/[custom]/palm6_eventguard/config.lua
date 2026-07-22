@@ -313,4 +313,8 @@ Config.Events = {
     -- server re-checks the admin ace, so a non-admin spamming this is rejected;
     -- the budget is a blunt backstop on top of that.
     ['palm6_business:captureShell']       = { calls = 20, window_seconds = 60 },
+    -- palm6_brain Phase 1 — a player talking to a named NPC. Server returns a
+    -- canned line now (LLM later); a generous budget covers a normal conversation
+    -- pace, the light per-src anti-spam handles the rest. Inert while dark.
+    ['palm6_brain:say']                   = { calls = 40, window_seconds = 60 },
 }

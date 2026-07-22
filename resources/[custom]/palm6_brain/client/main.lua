@@ -8,7 +8,10 @@
 -- ============================================================================
 
 local spawned = {}   -- sceneIndex -> { peds = { pedHandle, ... } }
-local running = false
+-- Master "resource is active" flag. Set at load from the gate (so BOTH the scene
+-- loop and the named-NPC loop see a stable value with no start-order race);
+-- cleared on resource stop.
+local running = (Config.Enabled == true)
 
 local function dbg(msg) if Config.Debug then print('[palm6_brain] ' .. msg) end end
 
@@ -100,6 +103,131 @@ CreateThread(function()
     end
 end)
 
+-- ---------------------------------------------------------------------------
+-- PHASE 1 — named NPCs you can talk to (stub brain; real LLM wires in server-side)
+-- ---------------------------------------------------------------------------
+local named = {}     -- id -> ped
+local speech = {}    -- ped -> { text = , expire = }  (floating reply bubbles)
+local speechThread = false
+
+local function drawText3D(x, y, z, text)
+    SetDrawOrigin(x + 0.0, y + 0.0, z + 0.0, 0)
+    SetTextScale(0.34, 0.34)
+    SetTextFont(4)
+    SetTextProportional(true)
+    SetTextColour(255, 255, 255, 215)
+    SetTextCentre(true)
+    SetTextEntry('STRING')
+    AddTextComponentSubstringPlayerName(text)
+    DrawText(0.0, 0.0)
+    ClearDrawOrigin()
+end
+
+local function startSpeechThread()
+    if speechThread then return end
+    speechThread = true
+    CreateThread(function()
+        while speechThread do
+            local now = GetGameTimer()
+            local any = false
+            for ped, b in pairs(speech) do
+                if not DoesEntityExist(ped) or now > b.expire then
+                    speech[ped] = nil
+                else
+                    any = true
+                    local c = GetEntityCoords(ped)
+                    drawText3D(c.x, c.y, c.z + 1.1, b.text)
+                end
+            end
+            if not any then speechThread = false break end
+            Wait(0)
+        end
+    end)
+end
+
+local function sayBubble(ped, text)
+    if not (ped and DoesEntityExist(ped)) then return end
+    speech[ped] = { text = text, expire = GetGameTimer() + math.floor((Config.BubbleSeconds or 7.0) * 1000) }
+    startSpeechThread()
+end
+
+-- Server pushed an NPC's reply (stub canned line now; LLM later — same path).
+RegisterNetEvent('palm6_brain:reply', function(npcId, text)
+    local ped = named[npcId]
+    if ped then sayBubble(ped, text) end
+end)
+
+local function openDialogue(npc, ped)
+    local input = lib.inputDialog(('Talk to %s'):format(npc.name or 'NPC'), {
+        { type = 'input', label = 'Say something', required = true, max = 200 },
+    })
+    if not input or not input[1] then return end
+    -- still close enough?
+    local p = PlayerPedId()
+    if #(GetEntityCoords(p) - GetEntityCoords(ped)) > (Config.TalkRange or 3.0) + 1.0 then
+        return
+    end
+    TriggerServerEvent('palm6_brain:say', npc.id, input[1])
+end
+
+local hasTarget = GetResourceState('ox_target') == 'started'
+
+local function spawnNamed(npc)
+    if named[npc.id] then return end
+    if pedCount() >= Config.MaxPeds then return end
+    local hash = loadModel(npc.model)
+    if not hash then return end
+    local pz = groundZ(npc.x, npc.y, npc.z)
+    local ped = CreatePed(4, hash, npc.x + 0.0, npc.y + 0.0, pz, (npc.heading or 0.0) + 0.0, false, true)
+    SetModelAsNoLongerNeeded(hash)
+    if not ped or ped == 0 then return end
+    SetEntityAsMissionEntity(ped, true, true)
+    SetBlockingOfNonTemporaryEvents(ped, true)  -- named NPCs stay put, don't wander off
+    FreezeEntityPosition(ped, true)
+    SetPedCanRagdollFromPlayerImpact(ped, false)
+    TaskStartScenarioInPlace(ped, pick(npc.scenarios or Config.ScenarioPool), 0, true)
+    named[npc.id] = ped
+    if hasTarget then
+        exports.ox_target:addLocalEntity(ped, { {
+            name = 'palm6_brain_talk_' .. npc.id,
+            icon = 'fa-solid fa-comment',
+            label = ('Talk to %s'):format(npc.name or 'NPC'),
+            distance = Config.TalkRange or 3.0,
+            onSelect = function() openDialogue(npc, ped) end,
+        } })
+    end
+    dbg('named spawned: ' .. npc.id)
+end
+
+local function despawnNamed(id)
+    local ped = named[id]
+    if not ped then return end
+    if hasTarget and DoesEntityExist(ped) then pcall(function() exports.ox_target:removeLocalEntity(ped) end) end
+    if DoesEntityExist(ped) then DeletePed(ped) end
+    speech[ped] = nil
+    named[id] = nil
+end
+
+-- Fold named-NPC materialisation into the same distance loop as scenes.
+CreateThread(function()
+    if not (Config.Enabled and Config.NamedEnabled) then return end
+    while running ~= false do
+        local ped = PlayerPedId()
+        local pc = (ped ~= 0) and GetEntityCoords(ped) or nil
+        if pc then
+            for _, npc in ipairs(Config.NamedNpcs or {}) do
+                local d = #(pc - vector3(npc.x + 0.0, npc.y + 0.0, npc.z + 0.0))
+                if d <= Config.SpawnDist and not named[npc.id] then
+                    spawnNamed(npc)
+                elseif d > Config.DespawnDist and named[npc.id] then
+                    despawnNamed(npc.id)
+                end
+            end
+        end
+        Wait(Config.TickMs or 2000)
+    end
+end)
+
 -- /brainscene [label...] — prints a paste-ready scene block for wherever you're
 -- standing, so ambient spots are captured from real positions, never guessed.
 -- Add the printed line to Config.Scenes and redeploy. Coord-printer only (harmless).
@@ -120,5 +248,7 @@ end, false)
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     running = false
-    clearAll()
+    speechThread = false
+    clearAll()                                   -- scene peds
+    for id in pairs(named) do despawnNamed(id) end  -- named peds + their ox_target zones
 end)
