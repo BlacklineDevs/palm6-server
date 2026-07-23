@@ -66,6 +66,13 @@ function Game.PlayerPose()
     return c.x, c.y, c.z, GetEntityHeading(ped)
 end
 
+-- Distance from the local player to the station center (metres). Drives the
+-- proximity gate that materialises / culls the scene.
+function Game.DistToStation(cx, cy, cz)
+    local p = GetEntityCoords(PlayerPedId())
+    return #(vector3(p.x, p.y, p.z) - vector3(cx + 0.0, cy + 0.0, cz + 0.0))
+end
+
 function Game.Notify(msg)
     if lib and lib.notify then
         lib.notify({ title = 'PD Life', description = msg, type = 'inform' })
