@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CMapParentTxds>
+ <txdRelationships>
+  <Item>
+   <parent>nteammrpdtxt1</parent>
+   <child>nteammrpdtxt</child>
+  </Item>
+  <Item>
+   <parent>nteammrpdtxt2</parent>
+   <child>nteammrpdtxt1</child>
+  </Item>
+  <Item>
+   <parent>nteammrpdtxt3</parent>
+   <child>nteammrpdtxt2</child>
+  </Item>
+  <Item>
+   <parent>nteammrpdtxt4</parent>
+   <child>nteammrpdtxt3</child>
+  </Item>
+   <Item>
+   <parent>nteammrpdtxt5</parent>
+   <child>nteammrpdtxt4</child>
+  </Item>
+ </txdRelationships>
+</CMapParentTxds>
