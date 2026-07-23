@@ -16,6 +16,7 @@ client_scripts {
     'client/chatter.lua',    -- Phase 5: ambient NPC-to-NPC chatter (dark)
     'client/netped.lua',     -- Networked server-owned peds: owner-applies-task (dark)
     'client/talk.lua',       -- INTEL+ talk-to-ANY-ped: target any ped -> GLM dialogue (dark)
+    'client/crimewatch.lua', -- INTEL+ detect player crimes vs peds -> Social event bus
 }
 
 server_scripts {
@@ -32,6 +33,7 @@ server_scripts {
     'server/snitch.lua',     -- witnesses report crimes to police dispatch
     'server/alibi.lua',      -- static NPCs vouch for a player's whereabouts
     'server/talk.lua',       -- talk-to-ANY-ped: GLM dialogue through the Social persona/context
+    'server/crimewatch.lua', -- player-crime -> Social event bus (auto-triggers witness/gossip/snitch)
 }
 
 dependencies {
