@@ -83,3 +83,110 @@ end
 function Game.Chat(tag, line)
     TriggerEvent('chat:addMessage', { args = { tag, line } })
 end
+
+-- ---------------------------------------------------------------------------
+-- Duty layer (Phase B) natives. Everything the interactive post/sit/duty layer
+-- touches on the client goes through these, keeping client/duty.lua native-free.
+-- ---------------------------------------------------------------------------
+
+local hasTarget = GetResourceState('ox_target') == 'started'
+
+-- A proximity interaction at a fixed point. ox_target sphere when available,
+-- else an ox_lib point with an E-prompt. Returns an opaque handle to remove.
+function Game.CreateInteraction(id, coords, radius, label, icon, onSelect)
+    if hasTarget then
+        local zoneId = exports.ox_target:addSphereZone({
+            coords = vector3(coords.x, coords.y, coords.z),
+            radius = radius,
+            options = {
+                {
+                    name = ('palm6_pd_life_%s'):format(id),
+                    icon = icon or 'fas fa-user-shield',
+                    label = label,
+                    onSelect = onSelect,
+                    distance = radius,
+                },
+            },
+        })
+        return { kind = 'target', zoneId = zoneId }
+    end
+    local point = lib.points.new({ coords = vector3(coords.x, coords.y, coords.z), distance = 12.0 })
+    function point:nearby()
+        if self.currentDistance < radius then
+            BeginTextCommandDisplayHelp('STRING')
+            AddTextComponentSubstringPlayerName(('Press ~INPUT_PICKUP~ %s'):format(label))
+            EndTextCommandDisplayHelp(0, false, true, -1)
+            if IsControlJustReleased(0, 38) then onSelect() end
+        end
+    end
+    return { kind = 'point', point = point }
+end
+
+function Game.RemoveInteraction(handle)
+    if not handle then return end
+    if handle.kind == 'target' and handle.zoneId then
+        pcall(function() exports.ox_target:removeZone(handle.zoneId) end)
+    elseif handle.kind == 'point' and handle.point and handle.point.remove then
+        handle.point:remove()
+    end
+end
+
+-- The local player's job name + duty flag (menu UX only; server is the gate).
+function Game.PlayerJob()
+    local ok, pd = pcall(function() return exports.qbx_core:GetPlayerData() end)
+    local job = ok and pd and pd.job or nil
+    if not job then return nil, false end
+    return job.name, job.onduty == true
+end
+
+-- Seat/stand the local player at a manned post and run its scenario. Snaps to
+-- the exact baked post coord+heading, then plays the scenario in place.
+function Game.EnterPostPose(x, y, z, heading, scenario)
+    local ped = PlayerPedId()
+    ClearPedTasksImmediately(ped)
+    SetEntityCoordsNoOffset(ped, x + 0.0, y + 0.0, z + 0.0, false, false, false)
+    SetEntityHeading(ped, heading + 0.0)
+    Wait(50)
+    if scenario and scenario ~= '' then
+        TaskStartScenarioInPlace(ped, scenario, 0, true)
+    end
+end
+
+function Game.ExitPostPose()
+    ClearPedTasksImmediately(PlayerPedId())
+end
+
+-- Sit the local player on a targeted chair entity (generic /sit via ox_target).
+function Game.SitOnEntity(entity, scenario)
+    if not entity or not DoesEntityExist(entity) then return end
+    local ped = PlayerPedId()
+    local c = GetEntityCoords(entity)
+    local h = GetEntityHeading(entity)
+    ClearPedTasksImmediately(ped)
+    SetEntityCoordsNoOffset(ped, c.x, c.y, c.z + 0.1, false, false, false)
+    SetEntityHeading(ped, h + 180.0)   -- face away from the chair back
+    Wait(50)
+    TaskStartScenarioInPlace(ped, scenario or 'PROP_HUMAN_SEAT_CHAIR_MP', 0, true)
+end
+
+-- ox_target on chair MODELS so any such chair in the world is sittable.
+function Game.AddSitModels(models, onSelect)
+    if not hasTarget or not models or #models == 0 then return false end
+    exports.ox_target:addModel(models, {
+        {
+            name = 'palm6_pd_life_sit',
+            icon = 'fas fa-chair',
+            label = 'Sit',
+            distance = 1.6,
+            onSelect = onSelect,
+        },
+    })
+    return true
+end
+
+-- Remove the sit option from those models (teardown). removeModel takes the
+-- models + the option name, per ox_target (see ox_inventory_overrides).
+function Game.RemoveSitModels(models)
+    if not hasTarget or not models then return end
+    pcall(function() exports.ox_target:removeModel(models, 'palm6_pd_life_sit') end)
+end

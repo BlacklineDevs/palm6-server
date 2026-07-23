@@ -14,6 +14,17 @@ Config = {}
 Config.Brand = 'PBPD'
 Config.DevPlacement = true
 
+-- Interactive duty layer (Phase B). Police may man a post (relieving its ambient
+-- NPC) and toggle duty. PoliceJob matches the rest of the palm6 police stack.
+Config.PoliceJob = 'police'
+
+-- Chair models that become sittable via ox_target /sit. The station's resolved
+-- seating props (extracted from the MLO) plus common base-game office chairs.
+Config.SitModels = {
+    'nteammrpdlobbyseat', 'nteam_mrpd_bench', 'prop_off_chair_05',
+    'prop_off_chair_04', 'v_corp_offchair', 'prop_chair_08',
+}
+
 -- Station proximity gate. The whole scene (plaza + every interior room) only
 -- materialises while a player is near the building, and despawns past the outer
 -- ring — so the ~75 client-local scene peds cost NOTHING when nobody is at PD.

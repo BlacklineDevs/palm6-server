@@ -14,6 +14,12 @@ shared_scripts {
 client_scripts {
     'bridge/cl_game.lua',   -- game natives isolated here (bridge pattern)
     'client/main.lua',
+    'client/duty.lua',      -- interactive posts / sit / duty (Phase B)
+}
+
+server_scripts {
+    'bridge/sv_framework.lua',   -- qbx_core adapter (duty predicate + setter)
+    'server/duty.lua',           -- authoritative post + duty registry
 }
 
 dependencies {
