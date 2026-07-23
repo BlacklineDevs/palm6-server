@@ -27,17 +27,12 @@ end
 function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, freeze)
     local hash = loadModel(model)
     if not hash then return nil end
+    -- Spawn at the exact given Z (per-zone flat-floor value). No ground-snap:
+    -- GetGroundZFor_3dCoord mis-fired on the multi-floor interior (dropped
+    -- mezzanine peds to the lobby). Config Z values are the real floor per zone.
     local ped = CreatePed(4, hash, x + 0.0, y + 0.0, z + 0.0, heading + 0.0, false, false)
     SetModelAsNoLongerNeeded(hash)
     if not DoesEntityExist(ped) then return nil end
-    -- Ground-snap: frozen scenario peds stay at their spawn Z, so pin them to the
-    -- real floor under the point or they float. Search downward from just above.
-    RequestCollisionAtCoord(x + 0.0, y + 0.0, z + 0.0)
-    local found, gz = GetGroundZFor_3dCoord(x + 0.0, y + 0.0, z + 1.5, false)
-    if found then
-        z = gz
-        SetEntityCoordsNoOffset(ped, x + 0.0, y + 0.0, z + 0.02, false, false, false)
-    end
     SetEntityAsMissionEntity(ped, true, true)
     SetPedCanRagdoll(ped, false)
     SetPedDiesWhenInjured(ped, false)

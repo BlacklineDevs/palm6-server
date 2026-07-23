@@ -22,16 +22,15 @@ Config.Types = {
     phone   = { models = { 'a_m_y_business_02', 'a_f_y_business_01', 'a_m_y_hipster_02' },                                          scenario = 'WORLD_HUMAN_STAND_MOBILE',    freeze = true },
 }
 
--- ZONES. Each scatters `count` peds within `radius` (metres) of `center`, drawing
--- types by weight. Flat-floor: every ped uses center.z (lobby ~30.24, mezzanine
--- ~33.6). Centers are seeded around the working left-lobby anchor + estimates for
--- the rest of the station — tuned via the screenshot loop.
+-- ZONES scatter STANDING peds only (sitting scenarios float without a chair under
+-- them, so benchers are placed explicitly below / via /pdnpc). Flat-floor: every
+-- ped uses center.z (lobby ~30.24, mezzanine ~33.6). No ground-snap.
 Config.Zones = {
-    {   name = 'waiting_left',  center = vector3(451.0, -953.0, 30.24), radius = 5.0, count = 7,
-        mix = { bencher = 4, waiting = 2, phone = 1 } },
+    {   name = 'waiting_left',  center = vector3(451.0, -953.0, 30.24), radius = 5.0, count = 5,
+        mix = { waiting = 2, phone = 1, cop = 1, meeting = 1 } },
 
-    {   name = 'waiting_right', center = vector3(459.5, -957.0, 30.24), radius = 5.0, count = 6,
-        mix = { bencher = 3, waiting = 2, phone = 1 } },
+    {   name = 'waiting_right', center = vector3(459.5, -957.0, 30.24), radius = 5.0, count = 4,
+        mix = { waiting = 2, phone = 2 } },
 
     {   name = 'lobby_center',  center = vector3(447.0, -961.0, 30.24), radius = 8.0, count = 6,
         mix = { waiting = 2, cop = 2, phone = 1, meeting = 1 } },
@@ -43,6 +42,12 @@ Config.Zones = {
         mix = { copidle = 2, meeting = 2, phone = 1 } },
 }
 
--- Scatter uses a fixed sequence of offsets (no Math.random dependency for the
--- distribution seed — varied per index in client/main.lua).
-Config.SpawnZOffset = 0.0       -- nudge all peds up/down if they sink/float
+-- Explicit fixed placements — known-good SEATED spots (a scattered bencher floats;
+-- these two sat correctly in the first test). Add more with /pdnpc bencher on a
+-- real chair, then paste the logged lines here.
+Config.Fixed = {
+    { type = 'bencher', coords = vector4(453.6, -953.6, 30.24, 200.0) },
+    { type = 'bencher', coords = vector4(454.6, -954.4, 30.24, 200.0) },
+}
+
+Config.SpawnZOffset = 0.0

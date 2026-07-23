@@ -61,6 +61,10 @@ local function buildScene()
     for _, zone in ipairs(Config.Zones) do
         fillZone(zone)
     end
+    -- explicit fixed placements (seated NPCs on real chairs)
+    for _, e in ipairs(Config.Fixed or {}) do
+        spawnOne(e.type, e.coords.x, e.coords.y, e.coords.z, e.coords.w)
+    end
 end
 
 local function clearScene()
