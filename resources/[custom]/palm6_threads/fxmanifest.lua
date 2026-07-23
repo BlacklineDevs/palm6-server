@@ -14,24 +14,22 @@ server_scripts {
     'server/main.lua',
 }
 
--- Client: illenium game adapter + equip path + the Stage A spike debug command.
--- client/debug.lua (the /threads_spike Stage A visual check) is KEPT until David's
--- Stage A in-game gate passes; it is inert while Config.Enabled = false. The Phase 1
--- equip path lives in client/main.lua and is likewise inert until the flip.
+-- Client: illenium game adapter + equip path.
 client_scripts {
     'bridge/cl_game.lua',
     'client/main.lua',
-    'client/debug.lua',
 }
 
 dependency 'oxmysql'
 
--- Stage A stream/ contents (auto-mounted, no manifest entry needed):
---   mp_m_freemode_01^jbib_000_u.ydd           -- known-good Rockstar torso geometry
---   mp_m_freemode_01^jbib_diff_000_a_uni.ytd  -- OUR YtdBuild-generated texture
+-- stream/ is intentionally EMPTY for prod. The Phase-0 Stage A spike assets
+-- (mp_m_freemode_01^jbib_*.ydd/.ytd) were REMOVED because they are REPLACEMENT-style
+-- (they overwrite a BASE-GAME torso texture globally for every player) — unsafe on a
+-- live server. They remain in git history (commit 331833b) for a test-server render
+-- proof if ever wanted.
 --
 -- Phase 1 delivery abstraction: the equip path applies whatever {component, drawable,
--- texture} a deployed design row declares; it does NOT care whether the .ytd arrived
--- via the Stage A base-drawable replacement or a future Stage B addon-DLC. The Stage B
--- generator (which appends addon .ytd/.ydd/.ymt into stream/ at the reserved index) is
--- out of scope for Phase 1 (gated on the un-passed in-game render test).
+-- texture} a deployed design row declares. Stage B (the addon-DLC generator) will append
+-- ADDON-style .ytd/.ydd/.ymt (a SHOP_PED_APPAREL_META_FILE at the reserved index 4000+)
+-- into stream/ + meta/ — additive, so it is prod-safe (adds a drawable, never replaces a
+-- base one). That generator is out of scope for Phase 1.

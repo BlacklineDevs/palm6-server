@@ -26,11 +26,3 @@ Config.Bands = {
 Config.Garments = {
     -- [1] = { component = 11 }, -- Male Torso Tee (ids assigned at seed time)
 }
-
--- ---------------------------------------------------------------------------
--- Stage A spike (Phase 0) — KEPT until David's in-game Stage A gate passes.
--- The REPLACEMENT-style spike overwrites base male-torso jbib drawable 0 so its
--- own generated .ytd renders via /threads_spike (client/debug.lua). Removed in the
--- commit that records a PASSing Stage A gate. Independent of the Phase 1 equip path.
--- ---------------------------------------------------------------------------
-Config.Spike = { component = 11, drawable = 0, texture = 0 }
