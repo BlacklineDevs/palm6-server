@@ -27,6 +27,9 @@
 
 local READY = false            -- flips true once the table is confirmed present
 local lastAction = {}          -- [src] = { [key] = ts } rate-limit ledger
+-- Reclaim the rate-limit entry on disconnect so the ledger can't grow unbounded
+-- with stale sources (the palm6_wanted / palm6_laundering convention).
+AddEventHandler('playerDropped', function() lastAction[source] = nil end)
 
 local function now() return os.time() end
 

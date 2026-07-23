@@ -216,6 +216,18 @@ Config.DailyNpcIncome = 15000
 -- primary limiter). If ever false, NPC income becomes free-mint: DON'T.
 Config.NpcRequiresSupply = true
 
+-- PASSIVE NPC INCOME (AI-NPC living world, docs/AI-NPC-ROADMAP.md). When true,
+-- exports('AccrueNpcPassive') lets the AI Director's mover walk-ins credit a
+-- business EVEN WHILE THE OWNER IS AWAY — so a growing server's economy keeps
+-- ticking off-peak. This is NOT a new faucet: the passive path runs the EXACT
+-- same atomic, supply-consuming, ledgered credit as the owner-present serve, and
+-- shares the SAME day_npc_income column + DailyNpcIncome cap. So an absent owner
+-- can never earn MORE than a present one, never exceeds the daily ceiling, and
+-- never mints free money (it always consumes pre-bought supply, ALWAYS — stricter
+-- than NpcRequiresSupply). Off by default: this is the live-economy gate David
+-- browser-walks (the AFK-printer attack path) BEFORE flipping. See RUNBOOK.
+Config.NpcPassiveIncome = false
+
 -- ---------------------------------------------------------------------------
 -- PHASE 1 — Storefronts. A business becomes a PLACE: the owner marks a location
 -- (server captures their real ped coords/heading — never client-supplied), a

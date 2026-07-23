@@ -20,3 +20,9 @@ Game.OnPlayerLoaded(function()
         type = Config.Welcome.type or 'inform',
     })
 end)
+
+-- Admin placement tool: the server (ace-gated /p6tp) authorises a teleport and
+-- hands the destination here. The native call lives in the bridge.
+RegisterNetEvent('server_base:teleport', function(x, y, z)
+    Game.Teleport(x + 0.0, y + 0.0, z + 0.0)
+end)
