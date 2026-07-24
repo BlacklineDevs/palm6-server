@@ -204,6 +204,24 @@ RegisterCommand('mapexport', function(_, args)
     Game.Chat('[mapeditor]', ('exported %d objects as %s'):format(#placed, name))
 end, false)
 
+RegisterCommand('mapload', function(_, args)
+    if not editing then Game.Notify('open the editor first (/mapedit)') return end
+    if not args[1] then Game.Notify('usage: /mapload <filename>', 'error') return end
+    TriggerServerEvent('palm6_mapeditor:load', args[1])
+end, false)
+
+RegisterNetEvent('palm6_mapeditor:loaded', function(body)
+    local ok, data = pcall(json.decode, body)
+    if not ok or type(data) ~= 'table' then Game.Notify('bad save file', 'error') return end
+    local n = 0
+    for _, o in ipairs(data.objects or {}) do
+        spawnProp(o.model, o.x, o.y, o.z, o.rx or 0.0, o.ry or 0.0, o.rz or 0.0)
+        n = n + 1
+    end
+    if MapEd.addLight then for _, l in ipairs(data.lights or {}) do MapEd.addLight(l) end end
+    Game.Notify(('loaded %d objects + %d lights'):format(n, #(data.lights or {})), 'success')
+end)
+
 -- ---- commands -------------------------------------------------------------
 RegisterCommand(Config.Command, function()
     editing = not editing

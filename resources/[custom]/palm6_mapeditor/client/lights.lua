@@ -50,7 +50,17 @@ RegisterCommand('matlightrange', function(_, args) local l = lrec(); if l then l
 RegisterCommand('matlightint', function(_, args) local l = lrec(); if l then l.intensity = math.max(0.1, tonumber(args[1]) or l.intensity) end end, false)
 RegisterCommand('matlightdel', function() local l = table.remove(lights); if l and lsel and lsel > #lights then lsel = #lights > 0 and #lights or nil end Game.Notify('light removed (' .. #lights .. ')') end, false)
 
--- --- export hook (main.lua's /mapexport folds these in) --------------------
+-- --- hooks (main.lua's export folds these in; load re-adds them) -----------
 if MapEd then
     function MapEd.getLights() return lights end
+    -- l is the raw JSON form { x,y,z, r,g,b, range, intensity, kind }.
+    function MapEd.addLight(l)
+        if type(l) ~= 'table' or not l.x then return end
+        lights[#lights + 1] = {
+            x = l.x + 0.0, y = l.y + 0.0, z = l.z + 0.0,
+            r = l.r or 255, g = l.g or 200, b = l.b or 140,
+            range = l.range or 8.0, intensity = l.intensity or 5.0, kind = l.kind or 'point',
+        }
+        lsel = #lights
+    end
 end

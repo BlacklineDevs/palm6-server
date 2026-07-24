@@ -22,3 +22,18 @@ RegisterNetEvent('palm6_mapeditor:save', function(name, luaText, jsonText, ymapX
     TriggerClientEvent('ox_lib:notify', src, { title = 'Map Editor', description = 'saved ' .. base .. ' (.lua/.json/.ymap.xml)', type = 'success' })
     print(('[palm6_mapeditor] %s saved export %s'):format(GetPlayerName(src) or src, base))
 end)
+
+-- Load a saved export back into the editor (save/load sessions).
+RegisterNetEvent('palm6_mapeditor:load', function(fileName)
+    local src = source
+    if not isAllowed(src) then return end
+    local safe = (tostring(fileName or '')):gsub('[^%w_%-%.]', '')
+    if safe == '' then return end
+    if not safe:find('%.json$') then safe = safe .. '.json' end
+    local body = LoadResourceFile(GetCurrentResourceName(), 'data/exports/' .. safe)
+    if not body then
+        TriggerClientEvent('ox_lib:notify', src, { title = 'Map Editor', description = 'not found: ' .. safe, type = 'error' })
+        return
+    end
+    TriggerClientEvent('palm6_mapeditor:loaded', src, body)
+end)

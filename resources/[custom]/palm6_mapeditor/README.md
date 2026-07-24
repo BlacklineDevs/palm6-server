@@ -33,6 +33,9 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/matgrid <rows> <cols> <spacing>` | mass grid-spawn the selected model |
 | `/materase` / `/materaseundo` | hide the vanilla world prop you look at / restore |
 | `/mapexport [name]` | export Lua + JSON + CodeWalker ymap.xml |
+| `/mapload <file>` | reload a saved export back into the editor (sessions) |
+| `/matlight [point\|spot]` + `/matlightcolor/range/int` | light editor |
+| `/matareadel <radius>` | delete placed props within radius of aim |
 
 Live keys (something selected): **LMB** carry · **Arrows** move · **Shift+Up/Dn**
 height · **Q/E** rotate · **Space** snap · **Esc** exit.
