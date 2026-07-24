@@ -36,8 +36,9 @@
 --   live:list        ()                           ACE -> summary notify
 -- ============================================================================
 
-local READY = false       -- flips true once the table is confirmed present
+local READY = false       -- flips true once the tables are confirmed present
 local live = {}           -- [id] = { id, map, model, x, y, z, rx, ry, rz }
+local hides = {}          -- [id] = { id, x, y, z, radius, model }  (world-prop erases)
 
 -- Writes are admin-only (same ACE the /mapedit command is gated on); reads
 -- (requestSync) are open so every player sees the built map. src 0 = console.
@@ -104,6 +105,22 @@ local function wire(r)
     return { id = r.id, model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
 end
 
+local function wireHide(h)
+    return { id = h.id, x = h.x, y = h.y, z = h.z, radius = h.radius, model = h.model }
+end
+
+-- A model HASH (uint32) as sent from the client's GetEntityModel — kept numeric,
+-- never a name here (world props are identified by hash). Rejects garbage.
+local function cleanHash(m)
+    m = math.floor(tonumber(m) or 0)
+    if m <= 0 or m > 0xFFFFFFFF then return nil end
+    return m
+end
+
+local function fullHideBatch()
+    local out = {}; for _, h in pairs(hides) do out[#out + 1] = wireHide(h) end; return out
+end
+
 -- ---------------------------------------------------------------------------
 -- Boot: self-create the table, then hydrate `live` from it. Guarded and
 -- idempotent; the surface stays inert (READY=false) until the table is
@@ -128,6 +145,19 @@ CreateThread(function()
                 KEY `idx_map` (`map`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ]])
+        MySQL.query.await([[
+            CREATE TABLE IF NOT EXISTS `palm6_mapeditor_hides` (
+                `id`         INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+                `x`          DOUBLE          NOT NULL,
+                `y`          DOUBLE          NOT NULL,
+                `z`          DOUBLE          NOT NULL,
+                `radius`     DOUBLE          NOT NULL DEFAULT 1,
+                `model`      BIGINT UNSIGNED NOT NULL,
+                `created_by` VARCHAR(96)     DEFAULT NULL,
+                `created_at` TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]])
         local rows = MySQL.query.await('SELECT id, map, model, x, y, z, rx, ry, rz FROM palm6_mapeditor_props') or {}
         for _, row in ipairs(rows) do
             live[row.id] = {
@@ -136,8 +166,13 @@ CreateThread(function()
                 rx = row.rx + 0.0, ry = row.ry + 0.0, rz = row.rz + 0.0,
             }
         end
+        local hrows = MySQL.query.await('SELECT id, x, y, z, radius, model FROM palm6_mapeditor_hides') or {}
+        for _, row in ipairs(hrows) do
+            hides[row.id] = { id = row.id, x = row.x + 0.0, y = row.y + 0.0, z = row.z + 0.0, radius = row.radius + 0.0, model = math.floor(row.model) }
+        end
         local n = 0; for _ in pairs(live) do n = n + 1 end
-        print(('[palm6_mapeditor] live map ready — %d persisted prop(s) loaded'):format(n))
+        local hn = 0; for _ in pairs(hides) do hn = hn + 1 end
+        print(('[palm6_mapeditor] live map ready — %d persisted prop(s), %d world-erase(s) loaded'):format(n, hn))
     end)
     if ok then
         READY = true
@@ -146,6 +181,7 @@ CreateThread(function()
         TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, (function()
             local out = {}; for _, r in pairs(live) do out[#out + 1] = wire(r) end; return out
         end)(), true)
+        TriggerClientEvent('palm6_mapeditor:live:hideBatch', -1, fullHideBatch(), true)
     else
         print(('[palm6_mapeditor] FATAL: could not create palm6_mapeditor_props (%s). Live map is inert until the DB is reachable.'):format(tostring(err)))
     end
@@ -159,7 +195,8 @@ RegisterNetEvent('palm6_mapeditor:live:requestSync', function()
     local src = source
     local out = {}
     for _, r in pairs(live) do out[#out + 1] = wire(r) end
-    TriggerClientEvent('palm6_mapeditor:live:addBatch', src, out, true)   -- full=true
+    TriggerClientEvent('palm6_mapeditor:live:addBatch', src, out, true)      -- full=true
+    TriggerClientEvent('palm6_mapeditor:live:hideBatch', src, fullHideBatch(), true)
 end)
 
 -- ---------------------------------------------------------------------------
@@ -264,5 +301,51 @@ RegisterNetEvent('palm6_mapeditor:live:list', function()
     if #names == 0 then notify(src, 'no live maps yet — build a session and /mapcommit', 'inform'); return end
     local lines = {}
     for _, m in ipairs(names) do lines[#lines + 1] = ('%s — %d'):format(m, counts[m]) end
-    notify(src, 'live maps:\n' .. table.concat(lines, '\n'), 'inform')
+    local hn = 0; for _ in pairs(hides) do hn = hn + 1 end
+    notify(src, ('live maps:\n%s\n(world-erases: %d)'):format(table.concat(lines, '\n'), hn), 'inform')
+end)
+
+-- ---------------------------------------------------------------------------
+-- World-erase sync. /materase is a personal, client-local suppression of a
+-- vanilla map prop (session/undo-local); /mapworlderase makes it REAL: the hide
+-- is stored and replayed on every client (and every future joiner), so admins
+-- can carve out vanilla geometry to drop custom builds in and everyone sees it.
+-- A model here is a HASH (world props aren't spawned by us, so we never have a
+-- name) — kept numeric and range-checked.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:eraseWorld', function(x, y, z, radius, model)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    local hash = cleanHash(model)
+    if not hash then notify(src, 'invalid world prop', 'error'); return end
+    local h = {
+        x = num(x, -20000.0, 20000.0, 0.0), y = num(y, -20000.0, 20000.0, 0.0), z = num(z, -2000.0, 5000.0, 0.0),
+        radius = num(radius, 0.1, 50.0, 1.0), model = hash,
+    }
+    local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
+    local id
+    local wrote = pcall(function()
+        id = MySQL.insert.await(
+            'INSERT INTO palm6_mapeditor_hides (x, y, z, radius, model, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+            { h.x, h.y, h.z, h.radius, h.model, who })
+    end)
+    if not (wrote and id) then notify(src, 'DB write failed', 'error'); return end
+    h.id = id
+    hides[id] = h
+    TriggerClientEvent('palm6_mapeditor:live:hide', -1, wireHide(h))
+    notify(src, 'world prop erased for everyone (/mapworldrestore to undo)', 'success')
+end)
+
+-- Restore a persisted world-erase. The client sends the id it matched by aim.
+RegisterNetEvent('palm6_mapeditor:live:restoreWorld', function(id)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    id = tonumber(id)
+    if not id or not hides[id] then notify(src, 'no world-erase with that id', 'error'); return end
+    local ok = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_hides WHERE id = ?', { id }) end)
+    if not ok then notify(src, 'DB delete failed', 'error'); return end
+    hides[id] = nil
+    TriggerClientEvent('palm6_mapeditor:live:unhide', -1, id)
+    notify(src, 'world prop restored for everyone', 'success')
 end)

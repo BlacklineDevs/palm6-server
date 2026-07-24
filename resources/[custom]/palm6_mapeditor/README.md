@@ -40,6 +40,8 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/maplist` | list live maps and their prop counts |
 | `/maplivedel` | remove the LIVE prop you aim at (everywhere, from the DB) |
 | `/mapwipe <map>` | delete an entire live map (everywhere, from the DB) |
+| `/mapworlderase` | erase the vanilla world prop you aim at **for everyone** (persisted) |
+| `/mapworldrestore` | restore the nearest persisted world-erase (everywhere) |
 
 Live keys (something selected): **LMB** carry · **Arrows** move · **Shift+Up/Dn**
 height · **Q/E** rotate · **Space** snap · **Esc** exit.
@@ -54,7 +56,14 @@ Workflow: build a session in the editor → `/mapcommit downtown` publishes it a
 your session (the props come back as live objects everyone sees). Commit **appends**, so
 `/mapcommit downtown` again grows the map. `/maplivedel` removes one prop, `/mapwipe
 downtown` clears the map. Bounds: `Config.LiveMaxCommit` per commit, `Config.LiveMaxProps`
-per map. Lights and world-erase hides remain client-local (session/export only) for now.
+per map. Lights remain client-local (session/export only) for now.
+
+**World-erase sync:** `/materase` is a personal, session-local suppression of a vanilla map
+prop; **`/mapworlderase` makes it real** — the hide is stored (`palm6_mapeditor_hides`) and
+replayed on every client and every future joiner, so you can carve out vanilla geometry to
+drop a custom build in and everyone sees the same world. `/mapworldrestore` undoes the
+nearest one everywhere. On resource stop the client re-shows all hidden props (re-applied on
+next sync), so a restart never leaves vanilla geometry permanently gone.
 
 ## Architecture
 - `bridge/cl_game.lua` — all GTA natives (spawn/transform, camera raycast, surface
