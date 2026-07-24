@@ -36,7 +36,9 @@ end)
 RegisterNetEvent('palm6_mapeditor:load', function(fileName)
     local src = source
     if not isAllowed(src) then deny(src) return end
-    local safe = (tostring(fileName or '')):gsub('[^%w_%-%.]', '')
+    -- Strip separators are impossible ([^%w_%-%.] removes / and \), but also
+    -- collapse any '..' so no traversal token can ever form (defence in depth).
+    local safe = (tostring(fileName or '')):gsub('[^%w_%-%.]', ''):gsub('%.%.+', '.')
     if safe == '' then return end
     if not safe:find('%.json$') then safe = safe .. '.json' end
     local body = LoadResourceFile(GetCurrentResourceName(), 'data/exports/' .. safe)

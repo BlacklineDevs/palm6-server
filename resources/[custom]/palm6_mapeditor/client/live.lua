@@ -24,6 +24,9 @@
 
 local liveObjs = {}    -- [id] = { obj, model, x, y, z, rx, ry, rz }
 local liveHides = {}   -- [id] = { x, y, z, radius, model }  (world-prop erases)
+local spawning = {}    -- [id] = true while a spawn for this id is mid-model-load
+local syncGen = 0      -- bumped on every full re-sync; in-flight spawns of an
+                       -- older gen abort so two full syncs can't fight (leak)
 
 local function despawn(id)
     local r = liveObjs[id]
@@ -37,13 +40,22 @@ local function despawnAll()
     liveObjs = {}
 end
 
--- Spawn (or respawn) one live prop from a server record. Idempotent on id: a
--- re-sync or a duplicate add replaces the existing handle rather than leaking it.
-local function spawn(rec)
+local function finite(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+
+-- Spawn one live prop from a server record. Idempotent AND yield-safe: the model
+-- load inside Game.SpawnObject yields, so we (a) skip if the id is already live
+-- or already being spawned (kills the double-sync duplicate/leak), and (b) after
+-- the load, drop the object if a newer full re-sync has superseded us (gen). A
+-- record with non-numeric coords is skipped, not allowed to throw the batch.
+local function spawn(rec, gen)
     if type(rec) ~= 'table' or not rec.id or type(rec.model) ~= 'string' then return end
-    if liveObjs[rec.id] then despawn(rec.id) end
-    local obj = Game.SpawnObject(rec.model, rec.x, rec.y, rec.z)
+    if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
+    if liveObjs[rec.id] or spawning[rec.id] then return end
+    spawning[rec.id] = true
+    local obj = Game.SpawnObject(rec.model, rec.x, rec.y, rec.z)   -- yields on model load
+    spawning[rec.id] = nil
     if not obj then return end            -- bad/removed model — skip, don't crash the batch
+    if (gen and gen ~= syncGen) or liveObjs[rec.id] then Game.DeleteObject(obj); return end
     Game.SetObjectTransform(obj, rec.x, rec.y, rec.z, rec.rx or 0.0, rec.ry or 0.0, rec.rz or 0.0)
     liveObjs[rec.id] = { obj = obj, model = rec.model, x = rec.x, y = rec.y, z = rec.z, rx = rec.rx, ry = rec.ry, rz = rec.rz }
 end
@@ -57,10 +69,19 @@ RegisterNetEvent('palm6_mapeditor:live:add', function(rec) spawn(rec) end)
 -- models never freezes the client for a frame.
 RegisterNetEvent('palm6_mapeditor:live:addBatch', function(list, full)
     if type(list) ~= 'table' then return end
+    local myGen
+    if full then
+        -- Reset atomically BEFORE any yield: bump the generation and clear the
+        -- world in this tick. Any older full batch still spawning will see the
+        -- new gen and abort, so two syncs can't interleave into duplicates.
+        syncGen = syncGen + 1
+        myGen = syncGen
+        despawnAll()
+    end
     CreateThread(function()
-        if full then despawnAll() end
         for i = 1, #list do
-            spawn(list[i])
+            if full and myGen ~= syncGen then return end   -- superseded by a newer full sync
+            spawn(list[i], full and myGen or nil)
             if i % 15 == 0 then Wait(0) end
         end
     end)
@@ -75,7 +96,8 @@ end)
 
 -- ---- world-erase streaming -------------------------------------------------
 local function applyHide(rec)
-    if type(rec) ~= 'table' or not rec.id or not rec.model then return end
+    if type(rec) ~= 'table' or not rec.id or type(rec.model) ~= 'number' then return end
+    if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
     if liveHides[rec.id] then return end   -- already applied (idempotent re-sync)
     Game.HideModelAt(rec.x, rec.y, rec.z, rec.radius or 1.0, rec.model)
     liveHides[rec.id] = { x = rec.x, y = rec.y, z = rec.z, radius = rec.radius or 1.0, model = rec.model }

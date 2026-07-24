@@ -17,8 +17,15 @@ var THUMB_BASE = 'https://cdn.rage.mp/public/odb/imgs-small/';
 var SEARCH_CAP = 400;   // most props any single search renders at once
 
 var groups = [];        // [{category, models:[...]}]
-var allModels = [];     // flat list for search
-var activeCat = -1;
+var allModels = [];     // flat list of raw model names
+var searchIndex = [];   // [[normalizedName, rawName], ...] — normalized = lowercase, alnum-only
+var activeCat = -1;     // >=0 while browsing a category, -1 while searching
+var lastCat = -1;       // last browsed category, restored when the search clears
+
+// Normalize a name/query for matching: lowercase, strip every non-alphanumeric.
+// This makes "traffic light", "traffic_light" and "trafficlight" all match
+// prop_traffic_light_01, and makes matching case-insensitive.
+function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
 // GTA one-at-a-time (Jenkins) hash of the lowercased name = the model hash the
 // odb filenames use. Verified against known props (prop_roadcone02a=3258159972).
@@ -35,7 +42,9 @@ function joaat(key) {
     h = (h + (h << 15)) >>> 0;
     return h >>> 0;
 }
-function thumbUrl(model) { return THUMB_BASE + model + '-' + joaat(model) + '.jpg'; }
+// odb filenames are lowercase; joaat already lowercases, so lowercase the name
+// too or a mixed-case archetype would request a wrong-case file and 404.
+function thumbUrl(model) { return THUMB_BASE + String(model).toLowerCase() + '-' + joaat(model) + '.jpg'; }
 
 var el = {
     app: document.getElementById('app'),
@@ -82,7 +91,11 @@ function makeCard(model) {
     return card;
 }
 
-function renderGrid(models, ctxLabel) {
+// capped=true only for search (bounds huge result sets). Category browsing
+// passes capped=false and renders the whole category — loading="lazy" means
+// off-screen thumbnails aren't fetched, so even a 600-prop category stays cheap
+// and every prop is reachable by scrolling (not hidden behind "refine search").
+function renderGrid(models, ctxLabel, capped) {
     el.grid.scrollTop = 0;
     el.grid.textContent = '';
     if (!models || models.length === 0) {
@@ -94,10 +107,10 @@ function renderGrid(models, ctxLabel) {
         return;
     }
     var frag = document.createDocumentFragment();
-    var n = Math.min(models.length, SEARCH_CAP);
+    var n = capped ? Math.min(models.length, SEARCH_CAP) : models.length;
     for (var i = 0; i < n; i++) frag.appendChild(makeCard(models[i]));
     el.grid.appendChild(frag);
-    if (models.length > n) {
+    if (capped && models.length > n) {
         var more = document.createElement('div');
         more.className = 'empty';
         more.textContent = '+ ' + (models.length - n) + ' more — refine your search';
@@ -109,42 +122,57 @@ function renderGrid(models, ctxLabel) {
 function renderCats() {
     el.cats.textContent = '';
     groups.forEach(function (g, i) {
+        if (!g) return;
         var row = document.createElement('div');
         row.className = 'cat' + (i === activeCat ? ' active' : '');
         var label = document.createElement('span');
-        label.textContent = g.category;
+        label.textContent = g.category || '(unnamed)';
         var n = document.createElement('span');
         n.className = 'n';
         n.textContent = (g.models || []).length;
         row.appendChild(label);
         row.appendChild(n);
-        row.addEventListener('click', function () { selectCat(i); });
+        // Clicking a category is an explicit action: clear any search text first.
+        row.addEventListener('click', function () {
+            el.search.value = ''; el.clear.style.display = 'none'; selectCat(i);
+        });
         el.cats.appendChild(row);
     });
 }
 
+// Pure state + render; does NOT touch the search input (so the search-cleared
+// restore path can reuse it without wiping what the user is typing).
 function selectCat(i) {
-    activeCat = i;
-    el.search.value = '';
-    el.clear.style.display = 'none';
+    activeCat = i; lastCat = i;
     renderCats();
     var g = groups[i];
-    renderGrid(g ? g.models : [], (g ? g.category : ''));
+    renderGrid(g ? g.models : [], (g ? g.category : ''), false);
 }
 
-function runSearch(q) {
-    q = String(q || '').toLowerCase().replace(/\s+/g, '');
-    el.clear.style.display = q ? 'block' : 'none';
-    if (q.length < 2) { if (activeCat >= 0) selectCat(activeCat); return; }
+function runSearch(rawInput) {
+    var raw = String(rawInput || '');
+    el.clear.style.display = raw ? 'block' : 'none';
+    var q = norm(raw);
+    if (q.length < 2) {
+        // Not a search (empty/cleared/too short): restore the last browsed
+        // category. Never leaves stale search results on screen, and never
+        // touches the input, so a single typed char isn't wiped mid-type.
+        var ci = lastCat >= 0 ? lastCat : (groups.length ? 0 : -1);
+        activeCat = ci;
+        renderCats();
+        var gc = groups[ci];
+        renderGrid(gc ? gc.models : [], gc ? gc.category : '', false);
+        return;
+    }
     activeCat = -1;
     renderCats();
     var hits = [];
-    for (var i = 0; i < allModels.length; i++) {
-        var idx = allModels[i].indexOf(q);
-        if (idx !== -1) hits.push([idx, allModels[i]]);
+    for (var i = 0; i < searchIndex.length; i++) {
+        var idx = searchIndex[i][0].indexOf(q);
+        if (idx !== -1) hits.push([idx, searchIndex[i][1]]);
     }
     hits.sort(function (a, b) { return a[0] - b[0] || (a[1] < b[1] ? -1 : 1); });
-    renderGrid(hits.map(function (h) { return h[1]; }), 'search: "' + q + '" — ' + hits.length + ' match(es)');
+    renderGrid(hits.map(function (h) { return h[1]; }), 'search: "' + q + '" — ' + hits.length + ' match(es)', true);
 }
 
 function spawn(model) {
@@ -155,15 +183,23 @@ function spawn(model) {
 
 function show(g) {
     groups = Array.isArray(g) ? g : [];
-    allModels = [];
-    groups.forEach(function (grp) { (grp.models || []).forEach(function (m) { allModels.push(m); }); });
+    allModels = []; searchIndex = [];
+    groups.forEach(function (grp) {
+        if (!grp || !Array.isArray(grp.models)) return;
+        grp.models.forEach(function (m) {
+            if (typeof m !== 'string') return;
+            allModels.push(m);
+            searchIndex.push([norm(m), m]);
+        });
+    });
     el.count.textContent = allModels.length.toLocaleString();
     activeCat = groups.length ? 0 : -1;
+    lastCat = activeCat;
     el.search.value = '';
     el.clear.style.display = 'none';
     renderCats();
-    if (activeCat >= 0) { var gg = groups[0]; renderGrid(gg.models, gg.category); }
-    else renderGrid([], '');
+    var gg = groups[activeCat];
+    renderGrid(gg ? gg.models : [], gg ? gg.category : '', false);
     el.app.classList.remove('hidden');
     setTimeout(function () { el.search.focus(); }, 30);
 }

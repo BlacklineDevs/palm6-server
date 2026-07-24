@@ -58,12 +58,22 @@ RegisterNUICallback('close', function(_, cb)
     cb('ok')
 end)
 
--- Never leave the player trapped with a cursor: if the editor is toggled off or
--- the resource stops while the browser is up, release focus.
+-- Never leave the player trapped with a cursor. The NUI page posts 'close' on
+-- Esc, but if the page fails to load or its JS throws, that path is gone — so
+-- this is a guaranteed Lua-side backstop: IsRawKeyPressed reads the physical Esc
+-- key even while a NUI holds keyboard focus. Also closes if the editor is somehow
+-- toggled off underneath the browser.
 CreateThread(function()
     while true do
-        if open and MapEd and MapEd.isEditing and not MapEd.isEditing() then closeBrowser() end
-        Wait(500)
+        if open then
+            if IsRawKeyPressed(0x1B)                                   -- VK_ESCAPE, hardware-level
+                or (MapEd and MapEd.isEditing and not MapEd.isEditing()) then
+                closeBrowser()
+            end
+            Wait(0)
+        else
+            Wait(300)
+        end
     end
 end)
 

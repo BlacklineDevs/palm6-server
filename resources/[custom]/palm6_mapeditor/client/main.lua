@@ -35,7 +35,7 @@ CreateThread(function() Wait(1500); TriggerServerEvent('palm6_mapeditor:checkPer
 for name in pairs(Config.QuickProps) do catNames[#catNames + 1] = name end
 table.sort(catNames)
 
-local function curCat() return catNames[((catIdx - 1) % #catNames) + 1] end
+local function curCat() return #catNames > 0 and catNames[((catIdx - 1) % #catNames) + 1] or nil end
 local function selRec() return sel and placed[sel] or nil end
 
 local function selectLast() sel = #placed > 0 and #placed or nil end
@@ -282,17 +282,19 @@ end)
 RegisterCommand('prop', function(_, args) if editing and args[1] then spawnAtAim(args[1]) end end, false)
 RegisterCommand('matnext', function()
     if not editing then return end
-    local list = Config.QuickProps[curCat()]
+    local c = curCat(); local list = c and Config.QuickProps[c]
+    if not list or #list == 0 then Game.Notify('quick-prop catalog is empty', 'error') return end
     propIdx = propIdx % #list + 1
     spawnAtAim(list[propIdx])
 end, false)
 RegisterCommand('matprev', function()
     if not editing then return end
-    local list = Config.QuickProps[curCat()]
+    local c = curCat(); local list = c and Config.QuickProps[c]
+    if not list or #list == 0 then Game.Notify('quick-prop catalog is empty', 'error') return end
     propIdx = (propIdx - 2) % #list + 1
     spawnAtAim(list[propIdx])
 end, false)
-RegisterCommand('matcat', function() catIdx = catIdx % #catNames + 1; propIdx = 0; Game.Notify('category: ' .. curCat()) end, false)
+RegisterCommand('matcat', function() if #catNames == 0 then return end catIdx = catIdx % #catNames + 1; propIdx = 0; Game.Notify('category: ' .. tostring(curCat())) end, false)
 RegisterCommand('matdel', function() if editing then deleteSelected() end end, false)
 RegisterCommand('matdup', function() if editing then duplicateSelected() end end, false)
 RegisterCommand('matundo', function() if editing then undo() end end, false)

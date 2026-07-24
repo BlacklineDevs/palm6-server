@@ -109,16 +109,40 @@ local function wireHide(h)
     return { id = h.id, x = h.x, y = h.y, z = h.z, radius = h.radius, model = h.model }
 end
 
--- A model HASH (uint32) as sent from the client's GetEntityModel — kept numeric,
--- never a name here (world props are identified by hash). Rejects garbage.
+-- A model HASH (uint32) as sent from the client's GetEntityModel. FiveM Lua
+-- returns model hashes as a SIGNED int32, so any hash with the high bit set
+-- arrives negative — fold it back into the uint32 range before storing, or
+-- /mapworlderase silently rejects ~half of all vanilla props.
 local function cleanHash(m)
     m = math.floor(tonumber(m) or 0)
-    if m <= 0 or m > 0xFFFFFFFF then return nil end
+    m = m % 0x100000000          -- signed int32 -> uint32 (Lua % is always >= 0 here)
+    if m == 0 then return nil end
     return m
 end
 
 local function fullHideBatch()
     local out = {}; for _, h in pairs(hides) do out[#out + 1] = wireHide(h) end; return out
+end
+
+-- Every DB-mutating handler yields at MySQL.*.await, so on the single main
+-- thread two of them CAN interleave (a /mapwipe deleting rows a concurrent
+-- /mapcommit is inserting, or two commits both reading a stale per-map count and
+-- blowing past the cap). This lock serialises the write sections so each one
+-- sees a settled `live`/`hides` and the DB and the in-memory mirror can never
+-- diverge. Reads (requestSync/list) don't take it — a slightly stale read is
+-- harmless. fn runs under pcall; the lock is always released.
+local writeBusy = false
+local function withWriteLock(fn)
+    local waited = 0
+    while writeBusy do
+        Wait(5); waited = waited + 1
+        if waited > 600 then return false end   -- ~3s ceiling: never deadlock a handler
+    end
+    writeBusy = true
+    local ok, err = pcall(fn)
+    writeBusy = false
+    if not ok then print('[palm6_mapeditor] write-lock body error: ' .. tostring(err)) end
+    return ok
 end
 
 -- ---------------------------------------------------------------------------
@@ -213,32 +237,37 @@ RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements)
     if type(placements) ~= 'table' then notify(src, 'nothing to commit', 'error'); return end
 
     map = cleanMap(map)
-    local room = Config.LiveMaxProps - mapCount(map)
-    if room <= 0 then notify(src, ('map "%s" is full (%d cap)'):format(map, Config.LiveMaxProps), 'error'); return end
-
     local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
-    local added, rejected = {}, 0
-    for i = 1, #placements do
-        if #added >= Config.LiveMaxCommit or #added >= room then break end
-        local p = cleanPlacement(placements[i])
-        if not p then
-            rejected = rejected + 1
-        else
-            local id
-            local wrote = pcall(function()
-                id = MySQL.insert.await(
-                    'INSERT INTO palm6_mapeditor_props (map, model, x, y, z, rx, ry, rz, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    { map, p.model, p.x, p.y, p.z, p.rx, p.ry, p.rz, who })
-            end)
-            if wrote and id then
-                p.id, p.map = id, map
-                live[id] = p
-                added[#added + 1] = wire(p)
-            else
+    local added, rejected, full = {}, 0, false
+    -- Locked: read the per-map count, insert, and mirror into `live` as one
+    -- atomic section, so the cap holds and no concurrent wipe/commit interleaves.
+    local acquired = withWriteLock(function()
+        local room = Config.LiveMaxProps - mapCount(map)
+        if room <= 0 then full = true; return end
+        for i = 1, #placements do
+            if #added >= Config.LiveMaxCommit or #added >= room then break end
+            local p = cleanPlacement(placements[i])
+            if not p then
                 rejected = rejected + 1
+            else
+                local id
+                local wrote = pcall(function()
+                    id = MySQL.insert.await(
+                        'INSERT INTO palm6_mapeditor_props (map, model, x, y, z, rx, ry, rz, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        { map, p.model, p.x, p.y, p.z, p.rx, p.ry, p.rz, who })
+                end)
+                if wrote and id then
+                    p.id, p.map = id, map
+                    live[id] = p
+                    added[#added + 1] = wire(p)
+                else
+                    rejected = rejected + 1
+                end
             end
         end
-    end
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if full then notify(src, ('map "%s" is full (%d cap)'):format(map, Config.LiveMaxProps), 'error'); return end
 
     if #added > 0 then
         TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, added, false)   -- incremental
@@ -262,9 +291,16 @@ RegisterNetEvent('palm6_mapeditor:live:removeOne', function(id)
     if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
     id = tonumber(id)
     if not id or not live[id] then notify(src, 'no live prop with that id', 'error'); return end
-    local ok = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE id = ?', { id }) end)
-    if not ok then notify(src, 'DB delete failed', 'error'); return end
-    live[id] = nil
+    local dberr = false
+    local acquired = withWriteLock(function()
+        if not live[id] then return end   -- vanished while we waited for the lock
+        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE id = ?', { id }) end) then
+            dberr = true; return
+        end
+        live[id] = nil
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if dberr then notify(src, 'DB delete failed', 'error'); return end
     TriggerClientEvent('palm6_mapeditor:live:remove', -1, id)
     notify(src, 'removed live prop', 'success')
 end)
@@ -276,12 +312,20 @@ RegisterNetEvent('palm6_mapeditor:live:wipeMap', function(map)
     local src = source
     if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
     map = cleanMap(map)
-    local ids = {}
-    for id, r in pairs(live) do if r.map == map then ids[#ids + 1] = id end end
+    local ids, dberr = {}, false
+    -- Locked: DELETE then re-scan `live` for this map, so any row a concurrent
+    -- commit inserted mid-delete is removed from memory too (no orphan). The
+    -- lock actually prevents that interleave, but scanning post-delete is the
+    -- belt-and-braces that keeps memory == DB regardless.
+    local acquired = withWriteLock(function()
+        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end) then
+            dberr = true; return
+        end
+        for id, r in pairs(live) do if r.map == map then ids[#ids + 1] = id; live[id] = nil end end
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if dberr then notify(src, 'DB delete failed', 'error'); return end
     if #ids == 0 then notify(src, ('map "%s" is already empty'):format(map), 'inform'); return end
-    local ok = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end)
-    if not ok then notify(src, 'DB delete failed', 'error'); return end
-    for _, id in ipairs(ids) do live[id] = nil end
     TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, ids)
     notify(src, ('wiped map "%s" (%d prop(s))'):format(map, #ids), 'success')
     print(('[palm6_mapeditor] %s wiped live map "%s" (%d prop(s))'):format(GetPlayerName(src) or src, map, #ids))
@@ -324,15 +368,21 @@ RegisterNetEvent('palm6_mapeditor:live:eraseWorld', function(x, y, z, radius, mo
         radius = num(radius, 0.1, 50.0, 1.0), model = hash,
     }
     local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
-    local id
-    local wrote = pcall(function()
-        id = MySQL.insert.await(
-            'INSERT INTO palm6_mapeditor_hides (x, y, z, radius, model, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-            { h.x, h.y, h.z, h.radius, h.model, who })
+    local capped = false
+    local acquired = withWriteLock(function()
+        local hc = 0; for _ in pairs(hides) do hc = hc + 1 end
+        if hc >= Config.LiveMaxHides then capped = true; return end
+        local id
+        if not pcall(function()
+            id = MySQL.insert.await(
+                'INSERT INTO palm6_mapeditor_hides (x, y, z, radius, model, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+                { h.x, h.y, h.z, h.radius, h.model, who })
+        end) then return end
+        if id then h.id = id; hides[id] = h end
     end)
-    if not (wrote and id) then notify(src, 'DB write failed', 'error'); return end
-    h.id = id
-    hides[id] = h
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if capped then notify(src, ('world-erase cap reached (%d)'):format(Config.LiveMaxHides), 'error'); return end
+    if not h.id then notify(src, 'DB write failed', 'error'); return end
     TriggerClientEvent('palm6_mapeditor:live:hide', -1, wireHide(h))
     notify(src, 'world prop erased for everyone (/mapworldrestore to undo)', 'success')
 end)
@@ -343,9 +393,16 @@ RegisterNetEvent('palm6_mapeditor:live:restoreWorld', function(id)
     if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
     id = tonumber(id)
     if not id or not hides[id] then notify(src, 'no world-erase with that id', 'error'); return end
-    local ok = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_hides WHERE id = ?', { id }) end)
-    if not ok then notify(src, 'DB delete failed', 'error'); return end
-    hides[id] = nil
+    local dberr = false
+    local acquired = withWriteLock(function()
+        if not hides[id] then return end   -- vanished while we waited for the lock
+        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_hides WHERE id = ?', { id }) end) then
+            dberr = true; return
+        end
+        hides[id] = nil
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if dberr then notify(src, 'DB delete failed', 'error'); return end
     TriggerClientEvent('palm6_mapeditor:live:unhide', -1, id)
     notify(src, 'world prop restored for everyone', 'success')
 end)
