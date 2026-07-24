@@ -18,12 +18,16 @@ client_scripts {
     'client/browser.lua',   -- prop catalog + fuzzy search
     'client/tools.lua',     -- world eraser / mass spawn / per-prop toggles
     'client/lights.lua',    -- light editor (point/spot, per-frame draw)
+    'client/live.lua',      -- live map streaming (persisted props, all players)
 }
 
 server_scripts {
+    '@oxmysql/lib/MySQL.lua',   -- must load before server/live.lua
     'server/main.lua',      -- export file writer (ACE-gated)
+    'server/live.lua',      -- MySQL persistence + authoritative live sync
 }
 
 dependencies {
     'ox_lib',
+    'oxmysql',
 }

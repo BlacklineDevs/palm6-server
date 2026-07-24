@@ -1,0 +1,268 @@
+-- ============================================================================
+-- palm6_mapeditor/server/live.lua
+--
+-- Persistence + live networked sync. This is what turns the editor from a
+-- personal, client-local session tool into a real server tool: committed props
+-- live in MySQL, stream to EVERY connected player, and survive a restart.
+-- server/main.lua still owns file export (Lua/JSON/ymap); this file owns the DB
+-- and the authoritative live prop set. Self-creates its ONE table at boot
+-- (CREATE TABLE IF NOT EXISTS — CI never touches the DB, the palm6_heat/ems
+-- pattern), so a fault here can never reach any other resource's data.
+--
+-- MODEL
+--   A "map" is a named set of rows in palm6_mapeditor_props. Every row in the
+--   table is LIVE — if it's in the DB, all players see it. There is no draft
+--   state: /mapcommit INSERTS rows (append, so a map grows over sessions),
+--   /maplivedel deletes one, /mapwipe deletes a whole map. This deliberately
+--   avoids a fragile "check-out then edit" round-trip that could lose data.
+--
+-- AUTHORITY
+--   The server is the source of truth. It holds live[id] = {map,model,...} in
+--   memory (a mirror of the DB) and is the only writer. Clients never send a
+--   prop id they invented; they send placements (model + coords), the server
+--   assigns ids. Model names and coords are re-validated server-side before any
+--   insert — the client is never trusted, exactly like every other write path.
+--
+-- NET (server -> client)
+--   live:add       {id,model,x,y,z,rx,ry,rz}    spawn one
+--   live:addBatch  ({list}, full)               initial sync (full) / commit
+--   live:remove    id                           despawn one
+--   live:removeBatch {ids}                       despawn many (map wipe)
+-- NET (client -> server)
+--   live:requestSync ()                          any player -> full addBatch
+--   live:commit      (map, {placements})         ACE
+--   live:removeOne   (id)                         ACE
+--   live:wipeMap     (map)                        ACE
+--   live:list        ()                           ACE -> summary notify
+-- ============================================================================
+
+local READY = false       -- flips true once the table is confirmed present
+local live = {}           -- [id] = { id, map, model, x, y, z, rx, ry, rz }
+
+-- Writes are admin-only (same ACE the /mapedit command is gated on); reads
+-- (requestSync) are open so every player sees the built map. src 0 = console.
+local function isAllowed(src)
+    return src == 0 or IsPlayerAceAllowed(src, Config.Ace)
+end
+
+local function notify(src, msg, kind)
+    if src == 0 then print('[palm6_mapeditor] ' .. msg); return end
+    TriggerClientEvent('ox_lib:notify', src, { title = 'Map Editor', description = msg, type = kind or 'inform' })
+end
+
+-- ---------------------------------------------------------------------------
+-- Sanitisers — the client is untrusted. A model name must match the SAME
+-- strict [A-Za-z0-9_] rule the client spawner enforces (so nothing that lands
+-- in the DB could ever break a generated Lua/ymap export or be dofile-injected).
+-- ---------------------------------------------------------------------------
+local function cleanModel(m)
+    if type(m) ~= 'string' then return nil end
+    if #m == 0 or #m > 64 then return nil end
+    if not m:match('^[%w_]+$') then return nil end
+    return m
+end
+
+local function cleanMap(m)
+    m = (tostring(m or '')):gsub('[^%w_%-]', '')
+    if m == '' then m = Config.LiveDefaultMap end
+    return m:sub(1, 64)
+end
+
+-- Finite number clamped to [lo,hi], else default (rejects NaN/inf/garbage).
+local function num(v, lo, hi, d)
+    v = tonumber(v)
+    if not v or v ~= v or v == math.huge or v == -math.huge then return d end
+    if v < lo then return lo elseif v > hi then return hi end
+    return v
+end
+
+-- A client placement -> a validated row (no id yet), or nil if the model is bad.
+-- Coords are clamped to a generous world envelope; rotation to +/-360.
+local function cleanPlacement(p)
+    if type(p) ~= 'table' then return nil end
+    local model = cleanModel(p.model)
+    if not model then return nil end
+    return {
+        model = model,
+        x = num(p.x, -20000.0, 20000.0, 0.0),
+        y = num(p.y, -20000.0, 20000.0, 0.0),
+        z = num(p.z, -2000.0, 5000.0, 0.0),
+        rx = num(p.rx, -360.0, 360.0, 0.0),
+        ry = num(p.ry, -360.0, 360.0, 0.0),
+        rz = num(p.rz, -360.0, 360.0, 0.0),
+    }
+end
+
+local function mapCount(map)
+    local n = 0
+    for _, r in pairs(live) do if r.map == map then n = n + 1 end end
+    return n
+end
+
+-- Strip the row down to exactly the fields the client spawner needs.
+local function wire(r)
+    return { id = r.id, model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+end
+
+-- ---------------------------------------------------------------------------
+-- Boot: self-create the table, then hydrate `live` from it. Guarded and
+-- idempotent; the surface stays inert (READY=false) until the table is
+-- confirmed, so a commit racing a slow DB can never hit a missing table.
+-- ---------------------------------------------------------------------------
+CreateThread(function()
+    local ok, err = pcall(function()
+        MySQL.query.await([[
+            CREATE TABLE IF NOT EXISTS `palm6_mapeditor_props` (
+                `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `map`        VARCHAR(64)  NOT NULL DEFAULT 'default',
+                `model`      VARCHAR(64)  NOT NULL,
+                `x`          DOUBLE       NOT NULL,
+                `y`          DOUBLE       NOT NULL,
+                `z`          DOUBLE       NOT NULL,
+                `rx`         DOUBLE       NOT NULL DEFAULT 0,
+                `ry`         DOUBLE       NOT NULL DEFAULT 0,
+                `rz`         DOUBLE       NOT NULL DEFAULT 0,
+                `created_by` VARCHAR(96)  DEFAULT NULL,
+                `created_at` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_map` (`map`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]])
+        local rows = MySQL.query.await('SELECT id, map, model, x, y, z, rx, ry, rz FROM palm6_mapeditor_props') or {}
+        for _, row in ipairs(rows) do
+            live[row.id] = {
+                id = row.id, map = row.map, model = row.model,
+                x = row.x + 0.0, y = row.y + 0.0, z = row.z + 0.0,
+                rx = row.rx + 0.0, ry = row.ry + 0.0, rz = row.rz + 0.0,
+            }
+        end
+        local n = 0; for _ in pairs(live) do n = n + 1 end
+        print(('[palm6_mapeditor] live map ready — %d persisted prop(s) loaded'):format(n))
+    end)
+    if ok then
+        READY = true
+        -- Any client that started before the DB was ready and already asked for
+        -- a sync got an empty set; push the real set now they exist.
+        TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, (function()
+            local out = {}; for _, r in pairs(live) do out[#out + 1] = wire(r) end; return out
+        end)(), true)
+    else
+        print(('[palm6_mapeditor] FATAL: could not create palm6_mapeditor_props (%s). Live map is inert until the DB is reachable.'):format(tostring(err)))
+    end
+end)
+
+-- ---------------------------------------------------------------------------
+-- Sync: any player asking for the current live map gets the full set. Open to
+-- everyone (not ACE) — this is how normal players see what admins have built.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:requestSync', function()
+    local src = source
+    local out = {}
+    for _, r in pairs(live) do out[#out + 1] = wire(r) end
+    TriggerClientEvent('palm6_mapeditor:live:addBatch', src, out, true)   -- full=true
+end)
+
+-- ---------------------------------------------------------------------------
+-- Commit: publish a personal session to a live map. Inserts each valid
+-- placement, assigns real ids, mirrors into `live`, and broadcasts the new
+-- props to EVERY client. Append semantics — commit the same map again to grow
+-- it. Bounded by Config.LiveMaxCommit (per call) and Config.LiveMaxProps (total
+-- per map) so a runaway client can't flood the DB or every player's object pool.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    if type(placements) ~= 'table' then notify(src, 'nothing to commit', 'error'); return end
+
+    map = cleanMap(map)
+    local room = Config.LiveMaxProps - mapCount(map)
+    if room <= 0 then notify(src, ('map "%s" is full (%d cap)'):format(map, Config.LiveMaxProps), 'error'); return end
+
+    local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
+    local added, rejected = {}, 0
+    for i = 1, #placements do
+        if #added >= Config.LiveMaxCommit or #added >= room then break end
+        local p = cleanPlacement(placements[i])
+        if not p then
+            rejected = rejected + 1
+        else
+            local id
+            local wrote = pcall(function()
+                id = MySQL.insert.await(
+                    'INSERT INTO palm6_mapeditor_props (map, model, x, y, z, rx, ry, rz, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    { map, p.model, p.x, p.y, p.z, p.rx, p.ry, p.rz, who })
+            end)
+            if wrote and id then
+                p.id, p.map = id, map
+                live[id] = p
+                added[#added + 1] = wire(p)
+            else
+                rejected = rejected + 1
+            end
+        end
+    end
+
+    if #added > 0 then
+        TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, added, false)   -- incremental
+        -- Ack the committer so it clears its session ONLY now that rows are
+        -- actually persisted (a rejected/failed commit sends no ack, so the
+        -- admin never loses an unsaved session to a transient DB hiccup).
+        TriggerClientEvent('palm6_mapeditor:live:committed', src)
+    end
+    local msg = ('committed %d prop(s) to "%s"'):format(#added, map)
+    if rejected > 0 then msg = msg .. (' (%d rejected)'):format(rejected) end
+    if #placements > Config.LiveMaxCommit then msg = msg .. (' — capped at %d/commit'):format(Config.LiveMaxCommit) end
+    notify(src, msg, #added > 0 and 'success' or 'error')
+    print(('[palm6_mapeditor] %s committed %d prop(s) to map "%s"'):format(who, #added, map))
+end)
+
+-- ---------------------------------------------------------------------------
+-- Remove one live prop (the client raycast a live object and sent its id).
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:removeOne', function(id)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    id = tonumber(id)
+    if not id or not live[id] then notify(src, 'no live prop with that id', 'error'); return end
+    local ok = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE id = ?', { id }) end)
+    if not ok then notify(src, 'DB delete failed', 'error'); return end
+    live[id] = nil
+    TriggerClientEvent('palm6_mapeditor:live:remove', -1, id)
+    notify(src, 'removed live prop', 'success')
+end)
+
+-- ---------------------------------------------------------------------------
+-- Wipe a whole map (delete every row for that map, despawn everywhere).
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:wipeMap', function(map)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    map = cleanMap(map)
+    local ids = {}
+    for id, r in pairs(live) do if r.map == map then ids[#ids + 1] = id end end
+    if #ids == 0 then notify(src, ('map "%s" is already empty'):format(map), 'inform'); return end
+    local ok = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end)
+    if not ok then notify(src, 'DB delete failed', 'error'); return end
+    for _, id in ipairs(ids) do live[id] = nil end
+    TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, ids)
+    notify(src, ('wiped map "%s" (%d prop(s))'):format(map, #ids), 'success')
+    print(('[palm6_mapeditor] %s wiped live map "%s" (%d prop(s))'):format(GetPlayerName(src) or src, map, #ids))
+end)
+
+-- ---------------------------------------------------------------------------
+-- List: per-map counts, back to the requester as a single notify.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:list', function()
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    local counts = {}
+    for _, r in pairs(live) do counts[r.map] = (counts[r.map] or 0) + 1 end
+    local names = {}
+    for m in pairs(counts) do names[#names + 1] = m end
+    table.sort(names)
+    if #names == 0 then notify(src, 'no live maps yet — build a session and /mapcommit', 'inform'); return end
+    local lines = {}
+    for _, m in ipairs(names) do lines[#lines + 1] = ('%s — %d'):format(m, counts[m]) end
+    notify(src, 'live maps:\n' .. table.concat(lines, '\n'), 'inform')
+end)

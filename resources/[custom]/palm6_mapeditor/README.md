@@ -36,9 +36,25 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/mapload <file>` | reload a saved export back into the editor (sessions) |
 | `/matlight [point\|spot]` + `/matlightcolor/range/int` | light editor |
 | `/matareadel <radius>` | delete placed props within radius of aim |
+| `/mapcommit [map]` | **publish your session to a live map** (persisted, all players see it) |
+| `/maplist` | list live maps and their prop counts |
+| `/maplivedel` | remove the LIVE prop you aim at (everywhere, from the DB) |
+| `/mapwipe <map>` | delete an entire live map (everywhere, from the DB) |
 
 Live keys (something selected): **LMB** carry · **Arrows** move · **Shift+Up/Dn**
 height · **Q/E** rotate · **Space** snap · **Esc** exit.
+
+## Live maps (persistence + networked sync)
+`/mapexport` writes files for CodeWalker; **`/mapcommit` makes a placement real on the
+live server**. A committed map is stored in MySQL (`palm6_mapeditor_props`, self-created
+at boot) and streamed to **every** connected player, surviving restarts. Model names and
+coords are re-validated server-side before any insert — the server is the sole authority.
+
+Workflow: build a session in the editor → `/mapcommit downtown` publishes it and clears
+your session (the props come back as live objects everyone sees). Commit **appends**, so
+`/mapcommit downtown` again grows the map. `/maplivedel` removes one prop, `/mapwipe
+downtown` clears the map. Bounds: `Config.LiveMaxCommit` per commit, `Config.LiveMaxProps`
+per map. Lights and world-erase hides remain client-local (session/export only) for now.
 
 ## Architecture
 - `bridge/cl_game.lua` — all GTA natives (spawn/transform, camera raycast, surface
@@ -46,7 +62,9 @@ height · **Q/E** rotate · **Space** snap · **Esc** exit.
 - `client/main.lua` — editor core (spawn/select/undo/HUD/export).
 - `client/browser.lua` — prop catalog + fuzzy search (`data/prop_groups.lua`).
 - `client/tools.lua` — world eraser, mass grid, per-prop toggles, gizmo command.
+- `client/live.lua` — live-map streaming (spawns/syncs the persisted props on each client).
 - `server/main.lua` — writes export files (ACE-gated).
+- `server/live.lua` — MySQL persistence + authoritative live sync (owns `palm6_mapeditor_props`).
 - `object_gizmo` (separate vendored resource) — the visual DrawGizmo handles.
 
 ## Export formats
@@ -59,6 +77,5 @@ height · **Q/E** rotate · **Space** snap · **Esc** exit.
 
 ## Roadmap (not yet built)
 - React NUI prop browser with thumbnail grid (ox_lib browser works today).
-- Light editor (per-frame DrawSpotLight/WithRange over synced defs).
-- MySQL persistence + client-replicated live sync (world-erase hides are currently
-  client-local); named map library; area-delete; ped/vehicle placement.
+- Networked light sync + world-erase sync (currently session/export-local).
+- Per-prop live editing after commit (adopt/check-out round-trip); ped/vehicle placement.

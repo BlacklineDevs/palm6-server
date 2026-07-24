@@ -144,6 +144,19 @@ local function clearAll()
     placed = {}; sel = nil; undoStack = {}
 end
 
+-- Live-map bridge (client/live.lua). snapshot() = a plain copy of the session's
+-- placements to publish to the DB; clearSession() drops the local objects after
+-- a commit so the returning LIVE copies don't render on top of them. Declared
+-- here, below clearAll, so clearSession captures the real upvalue.
+function MapEd.snapshot()
+    local out = {}
+    for _, r in ipairs(placed) do
+        out[#out + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+    end
+    return out
+end
+function MapEd.clearSession() clearAll() end
+
 -- ---- export ---------------------------------------------------------------
 local function lightList() return (MapEd.getLights and MapEd.getLights()) or {} end
 

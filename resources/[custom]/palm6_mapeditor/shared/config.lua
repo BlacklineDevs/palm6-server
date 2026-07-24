@@ -11,6 +11,13 @@ Config = {}
 Config.Command = 'mapedit'          -- /mapedit toggles the editor
 Config.Ace = 'command.mapedit'      -- ACE the command is gated on (server checks)
 
+-- Live map (MySQL persistence + networked sync). A committed map streams to
+-- every player and survives a restart. Limits bound how much one /mapcommit
+-- (and one map) can push into the DB and every client's object pool.
+Config.LiveDefaultMap = 'default'   -- map name used when /mapcommit gets no arg
+Config.LiveMaxCommit  = 1000        -- max props published in a single /mapcommit
+Config.LiveMaxProps   = 6000        -- max total props a single live map may hold
+
 -- Nudge steps (fine value used while Shift is held).
 Config.Step = {
     move = 0.05, moveFine = 0.01,
