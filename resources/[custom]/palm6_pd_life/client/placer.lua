@@ -19,10 +19,10 @@
 --   /pedsave [room] [post] export the config line (clipboard + chat), keep placing
 --   /pednext | /pedprev    cycle the scenario (preview the pose live)
 --   /pedcancel             remove the preview
--- WHILE A PREVIEW IS UP (hold, live):
---   Arrow keys  move on the ground     Shift+Up/Down  raise / lower
---   Q / E       rotate                 Enter          quick-save to clipboard
---   Shift       fine step              Esc/Backspace  cancel
+-- WHILE A PREVIEW IS UP (you are planted so only the ped moves):
+--   Arrow keys     move on the ground   Shift+Up/Down  raise / lower height
+--   Q / E          rotate               Enter          quick-save to clipboard
+--   /pednext/prev  cycle scenario       Esc/Backspace  cancel
 -- ============================================================================
 
 local preview = nil          -- { ped, x, y, z, h, scen, seated }
@@ -81,7 +81,7 @@ RegisterCommand('placeped', function(_, args)
     if preview.seated then preview.z = preview.z + 0.45 end
     for i, s in ipairs(SCENARIOS) do if s == scen then scenIdx = i break end end
     render()
-    Game.Chat('[placeped]', 'preview up — arrows move, Q/E rotate, Shift+Up/Down height, PgUp/Dn scenario, Enter save, Backspace cancel')
+    Game.Chat('[placeped]', 'preview up (you are planted) — Arrows move, Shift+Up/Down = height, Q/E rotate, Enter save, Esc cancel, /pednext scenario')
 end, false)
 
 RegisterCommand('pedscen', function(_, args)
@@ -140,24 +140,32 @@ CreateThread(function()
     while true do
         if preview then
             drawHud()
-            local step = IsControlPressed(0, 21) and 0.01 or 0.03   -- Shift = fine
-            local shift = IsControlPressed(0, 21)
+            -- Plant the player so ONLY the preview moves (and Shift never sprints
+            -- you away — that was the "it stops moving / I lose it" bug).
+            DisableControlAction(0, 21, true)   -- sprint (frees Shift as a modifier)
+            DisableControlAction(0, 22, true)   -- jump
+            DisableControlAction(0, 30, true); DisableControlAction(0, 31, true)  -- move analog
+            DisableControlAction(0, 32, true); DisableControlAction(0, 33, true)  -- move up/down
+            DisableControlAction(0, 34, true); DisableControlAction(0, 35, true)  -- move left/right
+
+            local step = 0.03
+            local up = IsControlPressed(0, 21)   -- Shift held = height mode
             local moved = false
             -- forward vector from current heading (GTA: heading 0 = +Y, CCW)
             local rad = math.rad(preview.h)
             local fx, fy = -math.sin(rad), math.cos(rad)
-            if IsControlPressed(0, 172) then           -- Up arrow
-                if shift then preview.z = preview.z + step
+            if IsControlPressed(0, 172) then           -- Up arrow: raise (Shift) or forward
+                if up then preview.z = preview.z + step
                 else preview.x = preview.x + fx * step; preview.y = preview.y + fy * step end
                 moved = true
             end
-            if IsControlPressed(0, 173) then           -- Down arrow
-                if shift then preview.z = preview.z - step
+            if IsControlPressed(0, 173) then           -- Down arrow: lower (Shift) or back
+                if up then preview.z = preview.z - step
                 else preview.x = preview.x - fx * step; preview.y = preview.y - fy * step end
                 moved = true
             end
-            if IsControlPressed(0, 174) then preview.x = preview.x - fy * step; preview.y = preview.y + fx * step; moved = true end -- Left (strafe)
-            if IsControlPressed(0, 175) then preview.x = preview.x + fy * step; preview.y = preview.y - fx * step; moved = true end -- Right (strafe)
+            if IsControlPressed(0, 174) then preview.x = preview.x - fy * step; preview.y = preview.y + fx * step; moved = true end -- Left strafe
+            if IsControlPressed(0, 175) then preview.x = preview.x + fy * step; preview.y = preview.y - fx * step; moved = true end -- Right strafe
             if IsControlPressed(0, 44) then preview.h = (preview.h - 1.5) % 360.0; moved = true end  -- Q rotate
             if IsControlPressed(0, 38) then preview.h = (preview.h + 1.5) % 360.0; moved = true end  -- E rotate
             if moved then reposition() end
