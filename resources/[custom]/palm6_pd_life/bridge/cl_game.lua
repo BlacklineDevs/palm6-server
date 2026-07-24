@@ -29,7 +29,7 @@ end
 -- animation to SETTLE the pelvis onto the chair. FreezeEntityPosition BEFORE that
 -- settles pins the ped mid-stand (the "standing not sitting" + twitch/CPU glitch),
 -- so seated peds are frozen only AFTER a short delay, once the sit has played.
-function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, seated)
+function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, seated, noFreeze)
     local hash = loadModel(model)
     if not hash then return nil end
     -- Spawn at the exact given Z (per-zone flat-floor value). No ground-snap:
@@ -63,17 +63,22 @@ function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, seated)
             TaskStartScenarioInPlace(ped, scenario, 0, true)
         end
     end
-    if seated then
-        -- warp settles within a frame or two; pin shortly after so it can't drift.
-        CreateThread(function()
-            Wait(400)
-            if DoesEntityExist(ped) then
-                SetEntityHeading(ped, heading + 0.0)
-                FreezeEntityPosition(ped, true)
-            end
-        end)
-    else
-        FreezeEntityPosition(ped, true)
+    -- The placement PREVIEW manages its own position (MovePed/RepositionPed), so
+    -- it must NOT be frozen — the delayed seated-freeze below was re-locking the
+    -- preview mid-edit (the "seat prop freezes" bug). Production peds still pin.
+    if not noFreeze then
+        if seated then
+            -- warp settles within a frame or two; pin shortly after so it can't drift.
+            CreateThread(function()
+                Wait(400)
+                if DoesEntityExist(ped) then
+                    SetEntityHeading(ped, heading + 0.0)
+                    FreezeEntityPosition(ped, true)
+                end
+            end)
+        else
+            FreezeEntityPosition(ped, true)
+        end
     end
     return ped
 end

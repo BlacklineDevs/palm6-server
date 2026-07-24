@@ -54,7 +54,7 @@ local function spawnPreview()
     if preview.ped then Game.DeletePed(preview.ped) end
     preview.seated = isSeated(preview.scen)
     preview.ped = Game.SpawnScenarioPed(curModel(), preview.x, preview.y, preview.z,
-        preview.h, preview.scen, preview.seated)
+        preview.h, preview.scen, preview.seated, true)   -- noFreeze: editor moves it
     if preview.ped then Game.SetPreviewAlpha(preview.ped, 190) end
 end
 
@@ -82,7 +82,8 @@ end
 local function commit()
     if not preview or not preview.ped then return end
     local line = configLine()
-    SetEntityAlpha(preview.ped, 255, false)                 -- solidify
+    ResetEntityAlpha(preview.ped)                           -- solidify
+    FreezeEntityPosition(preview.ped, true)                 -- pin the committed ped
     placed[#placed + 1] = { ped = preview.ped, line = line }
     Game.Chat('[placeped]', ('placed #%d — %s'):format(#placed, line:gsub('^%s+', '')))
     -- next preview at the same spot so you can place a neighbour fast
