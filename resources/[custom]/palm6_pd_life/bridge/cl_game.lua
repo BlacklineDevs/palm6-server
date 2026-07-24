@@ -118,6 +118,32 @@ function Game.SetPreviewAlpha(ped, a)
     if ped and DoesEntityExist(ped) then SetEntityAlpha(ped, a or 200, false) end
 end
 
+-- Where the gameplay camera is looking, hit-tested against world+objects.
+-- Returns x,y,z of the first surface the crosshair ray hits, or nil. Powers
+-- "aim to place" — point at a chair/desk and the preview jumps there.
+function Game.CameraAimPoint(maxDist)
+    local cam = GetGameplayCamCoord()
+    local rot = GetGameplayCamRot(2)
+    local rz, rx = math.rad(rot.z), math.rad(rot.x)
+    local cosx = math.abs(math.cos(rx))
+    local dx, dy, dz = -math.sin(rz) * cosx, math.cos(rz) * cosx, math.sin(rx)
+    local d = maxDist or 25.0
+    local ex, ey, ez = cam.x + dx * d, cam.y + dy * d, cam.z + dz * d
+    local ray = StartExpensiveSynchronousShapeTestLosProbe(cam.x, cam.y, cam.z, ex, ey, ez, 1 + 16, PlayerPedId(), 0)
+    local _, hit, coords = GetShapeTestResult(ray)
+    if hit == 1 then return coords.x, coords.y, coords.z end
+    return nil
+end
+
+-- Z of the first solid surface directly below a point (floor OR a chair/desk
+-- top) — the snap-to-surface key so a ped lands ON the seat, not floating.
+function Game.SurfaceZBelow(x, y, z)
+    local ray = StartExpensiveSynchronousShapeTestLosProbe(x, y, z + 1.0, x, y, z - 4.0, 1 + 16, PlayerPedId(), 0)
+    local _, hit, coords = GetShapeTestResult(ray)
+    if hit == 1 then return coords.z end
+    return nil
+end
+
 -- Cheap live move: just slide/rotate the entity (keeps its current pose). Used
 -- every frame while nudging so the scenario anim doesn't restart (no jitter).
 function Game.MovePed(ped, x, y, z, heading)
