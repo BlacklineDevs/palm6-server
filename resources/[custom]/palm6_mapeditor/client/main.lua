@@ -36,7 +36,7 @@ local function selRec() return sel and placed[sel] or nil end
 local function selectLast() sel = #placed > 0 and #placed or nil end
 
 local function highlight()
-    for i, r in ipairs(placed) do Game.SetObjectAlpha(r.obj, i == sel and 200 or nil) end
+    for i, r in ipairs(placed) do Game.SetOutline(r.obj, i == sel) end
 end
 
 local function spawnProp(model, x, y, z, rx, ry, rz)
@@ -55,6 +55,12 @@ local function spawnAtAim(model)
     if not x then x, y, z = Game.PlayerPos() end
     spawnProp(model, x, y, z)
 end
+
+-- Minimal API for client/tools.lua (world eraser / mass spawn / per-prop).
+MapEd = {}
+function MapEd.isEditing() return editing end
+function MapEd.spawnAt(model, x, y, z, rx, ry, rz) spawnProp(model, x, y, z, rx, ry, rz) end
+function MapEd.selected() return selRec() end
 
 local function applyTransform(r)
     Game.SetObjectTransform(r.obj, r.x, r.y, r.z, r.rx, r.ry, r.rz)

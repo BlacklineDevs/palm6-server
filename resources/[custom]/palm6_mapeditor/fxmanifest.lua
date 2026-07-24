@@ -16,6 +16,7 @@ client_scripts {
     'bridge/cl_game.lua',   -- all GTA natives isolated here
     'client/main.lua',      -- editor core
     'client/browser.lua',   -- prop catalog + fuzzy search
+    'client/tools.lua',     -- world eraser / mass spawn / per-prop toggles
 }
 
 server_scripts {

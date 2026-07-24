@@ -86,6 +86,41 @@ function Game.GetObjectQuat(obj)
     return GetEntityQuaternion(obj)
 end
 
+-- What world entity the crosshair is pointing at (for select / world-erase).
+-- Returns entity, model, hitX, hitY, hitZ  (entity 0 if none).
+function Game.RaycastEntity(maxDist)
+    local cam = GetGameplayCamCoord()
+    local rot = GetGameplayCamRot(2)
+    local rz, rx = math.rad(rot.z), math.rad(rot.x)
+    local cosx = math.abs(math.cos(rx))
+    local dx, dy, dz = -math.sin(rz) * cosx, math.cos(rz) * cosx, math.sin(rx)
+    local d = maxDist or 30.0
+    local ray = StartExpensiveSynchronousShapeTestLosProbe(cam.x, cam.y, cam.z,
+        cam.x + dx * d, cam.y + dy * d, cam.z + dz * d, 1 + 16, PlayerPedId(), 0)
+    local _, hit, coords, _, ent = GetShapeTestResult(ray)
+    if hit == 1 then return ent or 0, ent and ent ~= 0 and GetEntityModel(ent) or 0, coords.x, coords.y, coords.z end
+    return 0, 0, 0.0, 0.0, 0.0
+end
+
+-- World eraser: hide all instances of a model in a tight sphere (vanilla map
+-- prop suppression). Excludes our own script objects; survives map reload.
+function Game.HideModelAt(x, y, z, radius, modelHash)
+    CreateModelHideExcludingScriptObjects(x + 0.0, y + 0.0, z + 0.0, radius + 0.0, modelHash, true)
+end
+function Game.RestoreModelAt(x, y, z, radius, modelHash)
+    RemoveModelHide(x + 0.0, y + 0.0, z + 0.0, radius + 0.0, modelHash, false)
+end
+
+function Game.SetOutline(obj, on)
+    if obj and DoesEntityExist(obj) then
+        SetEntityDrawOutline(obj, on and true or false)
+        if on then SetEntityDrawOutlineColor(30, 180, 255, 255) end
+    end
+end
+function Game.SetCollision(obj, on) if obj and DoesEntityExist(obj) then SetEntityCollision(obj, on and true or false, on and true or false) end end
+function Game.SetFreeze(obj, on) if obj and DoesEntityExist(obj) then FreezeEntityPosition(obj, on and true or false) end end
+function Game.ModelName(hash) return hash end   -- placeholder; NUI resolves names
+
 function Game.SetClipboard(text)
     if lib and lib.setClipboard then lib.setClipboard(text) end
 end
