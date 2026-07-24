@@ -35,7 +35,12 @@ function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, seated)
     -- Spawn at the exact given Z (per-zone flat-floor value). No ground-snap:
     -- GetGroundZFor_3dCoord mis-fired on the multi-floor interior (dropped
     -- mezzanine peds to the lobby). Config Z values are the real floor per zone.
-    local ped = CreatePed(4, hash, x + 0.0, y + 0.0, z + 0.0, heading + 0.0, false, false)
+    -- Seated peds spawn at the SEAT surface, not the chair base: the furniture
+    -- origin sits on the floor, but a seated pose anchors the ped's root, so
+    -- spawning at floor Z drops the butt to the ground (the hunched/perched look).
+    local zz = z + 0.0
+    if seated then zz = zz + (Config.SeatHeight or 0.45) end
+    local ped = CreatePed(4, hash, x + 0.0, y + 0.0, zz, heading + 0.0, false, false)
     SetModelAsNoLongerNeeded(hash)
     if not DoesEntityExist(ped) then return nil end
     SetEntityAsMissionEntity(ped, true, true)
