@@ -15,6 +15,7 @@ client_scripts {
     'bridge/cl_game.lua',   -- game natives isolated here (bridge pattern)
     'client/main.lua',
     'client/duty.lua',      -- interactive posts / sit / duty (Phase B)
+    'client/placer.lua',    -- /placeped in-game NPC placement tool
 }
 
 server_scripts {

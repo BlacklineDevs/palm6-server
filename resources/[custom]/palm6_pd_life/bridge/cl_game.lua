@@ -35,11 +35,10 @@ function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, seated)
     -- Spawn at the exact given Z (per-zone flat-floor value). No ground-snap:
     -- GetGroundZFor_3dCoord mis-fired on the multi-floor interior (dropped
     -- mezzanine peds to the lobby). Config Z values are the real floor per zone.
-    -- Seated peds spawn at the SEAT surface, not the chair base: the furniture
-    -- origin sits on the floor, but a seated pose anchors the ped's root, so
-    -- spawning at floor Z drops the butt to the ground (the hunched/perched look).
+    -- Coords are exact (captured in-game by the /placeped tool for seated posts,
+    -- or the extracted point for standing). No hidden offset — WYSIWYG with the
+    -- placer preview, which spawns through this same path.
     local zz = z + 0.0
-    if seated then zz = zz + (Config.SeatHeight or 0.45) end
     local ped = CreatePed(4, hash, x + 0.0, y + 0.0, zz, heading + 0.0, false, false)
     SetModelAsNoLongerNeeded(hash)
     if not DoesEntityExist(ped) then return nil end
@@ -53,15 +52,21 @@ function Game.SpawnScenarioPed(model, x, y, z, heading, scenario, seated)
     SetPedConfigFlag(ped, 32, false)   -- CPED_CONFIG_FLAG_CanBeDraggedOut off
     SetPedConfigFlag(ped, 208, true)   -- disable writhe
     if scenario and scenario ~= '' then
-        -- In-place always: the ped plays the scenario where it stands, never
-        -- pathing off to hunt for a scenario prop (that hunt = the crowd churn).
-        TaskStartScenarioInPlace(ped, scenario, 0, true)
+        if seated then
+            -- The pro seated recipe (researched): TaskStartScenarioAtPosition with
+            -- warp=true SNAPS the anim root exactly onto (x,y,zz) so the ped lands
+            -- on the seat, timeToLeave=-1 sits forever, playIntro=false skips the
+            -- walk-in. Heading is the placer/captured facing (no chair-axis guess).
+            TaskStartScenarioAtPosition(ped, scenario, x + 0.0, y + 0.0, zz, heading + 0.0, -1, false, true)
+        else
+            -- Standing: in place, never pathing off to hunt a scenario prop.
+            TaskStartScenarioInPlace(ped, scenario, 0, true)
+        end
     end
     if seated then
-        -- Let the sit settle, then pin so it can't drift, re-heading in case the
-        -- sit rotated it.
+        -- warp settles within a frame or two; pin shortly after so it can't drift.
         CreateThread(function()
-            Wait(1600)
+            Wait(400)
             if DoesEntityExist(ped) then
                 SetEntityHeading(ped, heading + 0.0)
                 FreezeEntityPosition(ped, true)
@@ -92,6 +97,41 @@ end
 function Game.DistToStation(cx, cy, cz)
     local p = GetEntityCoords(PlayerPedId())
     return #(vector3(p.x, p.y, p.z) - vector3(cx + 0.0, cy + 0.0, cz + 0.0))
+end
+
+-- Copy text to the player's clipboard (ox_lib). Used by the placement tool to
+-- hand back a ready-to-paste config line.
+function Game.SetClipboard(text)
+    if lib and lib.setClipboard then lib.setClipboard(text) end
+end
+
+-- The local player's exact pose (placement tool captures this — "you are the
+-- gizmo": stand where the ped goes, face where it should look).
+function Game.PlayerPoseVec()
+    local ped = PlayerPedId()
+    local c = GetEntityCoords(ped)
+    return c.x, c.y, c.z, GetEntityHeading(ped)
+end
+
+-- Make a spawned ped semi-transparent (placement preview).
+function Game.SetPreviewAlpha(ped, a)
+    if ped and DoesEntityExist(ped) then SetEntityAlpha(ped, a or 200, false) end
+end
+
+-- Reposition an already-spawned ped (live nudge in the placement editor). Works
+-- on frozen entities; re-warps a seated scenario so the sit re-settles on the spot.
+function Game.RepositionPed(ped, x, y, z, heading, scenario, seated)
+    if not (ped and DoesEntityExist(ped)) then return end
+    FreezeEntityPosition(ped, false)
+    SetEntityCoordsNoOffset(ped, x + 0.0, y + 0.0, z + 0.0, false, false, false)
+    SetEntityHeading(ped, heading + 0.0)
+    if scenario and scenario ~= '' then
+        if seated then
+            TaskStartScenarioAtPosition(ped, scenario, x + 0.0, y + 0.0, z + 0.0, heading + 0.0, -1, false, true)
+        else
+            TaskStartScenarioInPlace(ped, scenario, 0, true)
+        end
+    end
 end
 
 function Game.Notify(msg)
