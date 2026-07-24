@@ -72,6 +72,35 @@ RegisterCommand('matgizmo', function()
     Game.Notify('gizmo applied')
 end, false)
 
+-- --- random scatter --------------------------------------------------------
+-- /matscatter <count> <radius> — scatter N copies of the selected model in a
+-- radius around it with random yaw. One undo group.
+RegisterCommand('matscatter', function(_, args)
+    local r = MapEd.selected()
+    if not r then Game.Notify('select a prop first (/matpick)', 'error') return end
+    local count = math.max(1, math.min(200, math.floor(tonumber(args[1]) or 10)))
+    local rad = math.max(0.5, tonumber(args[2]) or 8.0)
+    MapEd.batch(function()
+        for _ = 1, count do
+            local a, d = math.random() * math.pi * 2, math.sqrt(math.random()) * rad
+            MapEd.spawnAt(r.model, r.x + math.cos(a) * d, r.y + math.sin(a) * d, r.z,
+                r.rx, r.ry, math.random() * 360.0, true)
+        end
+    end)
+    Game.Notify(('scattered %d in %.1fm — one /matundo'):format(count, rad), 'success')
+end, false)
+
+-- --- per-prop utilities -----------------------------------------------------
+RegisterCommand('matcopy', function()
+    local r = MapEd.selected(); if not r then return end
+    Game.SetClipboard(('vector4(%.3f, %.3f, %.3f, %.1f)'):format(r.x, r.y, r.z, r.rz))
+    Game.Notify('coords copied to clipboard', 'success')
+end, false)
+RegisterCommand('mattp', function()
+    local r = MapEd.selected(); if not r then return end
+    Game.TeleportPlayer(r.x, r.y, r.z)
+end, false)
+
 -- --- area delete -----------------------------------------------------------
 -- /matareadel <radius> — delete every placed prop within <radius> of where you
 -- aim. Targets our own placements (not vanilla world props — use /materase for

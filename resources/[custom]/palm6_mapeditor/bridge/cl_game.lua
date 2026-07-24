@@ -96,6 +96,10 @@ function Game.PlayerPos()
     return c.x, c.y, c.z
 end
 
+function Game.TeleportPlayer(x, y, z)
+    SetEntityCoords(PlayerPedId(), x + 0.0, y + 0.0, z + 1.0, false, false, false, false)
+end
+
 -- The object's exact world quaternion (x,y,z,w) — used for the ymap CEntityDef
 -- rotation (stored inverted). Reading the game's own quaternion avoids any
 -- euler->quat convention mismatch.
