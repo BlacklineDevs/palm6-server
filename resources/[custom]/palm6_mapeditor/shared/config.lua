@@ -18,6 +18,8 @@ Config.LiveDefaultMap = 'default'   -- map name used when /mapcommit gets no arg
 Config.LiveMaxCommit  = 1000        -- max props published in a single /mapcommit
 Config.LiveMaxProps   = 6000        -- max total props a single live map may hold
 Config.LiveMaxHides   = 2000        -- max total persisted world-erases (all maps)
+Config.LiveMaxLights  = 256         -- max total persisted live lights (all maps)
+Config.LiveLightDist  = 120.0       -- only draw a live light within this many m of you
 
 -- Nudge steps (fine value used while Shift is held).
 Config.Step = {

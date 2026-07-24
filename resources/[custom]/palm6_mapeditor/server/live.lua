@@ -39,6 +39,7 @@
 local READY = false       -- flips true once the tables are confirmed present
 local live = {}           -- [id] = { id, map, model, x, y, z, rx, ry, rz }
 local hides = {}          -- [id] = { id, x, y, z, radius, model }  (world-prop erases)
+local lights = {}         -- [id] = { id, map, x, y, z, r, g, b, range, intensity, kind }
 
 -- Writes are admin-only (same ACE the /mapedit command is gated on); reads
 -- (requestSync) are open so every player sees the built map. src 0 = console.
@@ -124,6 +125,26 @@ local function fullHideBatch()
     local out = {}; for _, h in pairs(hides) do out[#out + 1] = wireHide(h) end; return out
 end
 
+local function wireLight(l)
+    return { id = l.id, x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind }
+end
+local function fullLightBatch()
+    local out = {}; for _, l in pairs(lights) do out[#out + 1] = wireLight(l) end; return out
+end
+
+-- Validate a client light def -> a clean row (no id), or nil. Colour bytes are
+-- clamped ints; range/intensity/coords clamped; kind restricted to point|spot.
+local function cleanLight(l)
+    if type(l) ~= 'table' then return nil end
+    local kind = (l.kind == 'spot') and 'spot' or 'point'
+    return {
+        x = num(l.x, -20000.0, 20000.0, 0.0), y = num(l.y, -20000.0, 20000.0, 0.0), z = num(l.z, -2000.0, 5000.0, 0.0),
+        r = math.floor(num(l.r, 0, 255, 255)), g = math.floor(num(l.g, 0, 255, 200)), b = math.floor(num(l.b, 0, 255, 140)),
+        range = num(l.range, 0.5, 100.0, 8.0), intensity = num(l.intensity, 0.1, 50.0, 5.0), kind = kind,
+    }
+end
+local function lightCount() local n = 0; for _ in pairs(lights) do n = n + 1 end; return n end
+
 -- Every DB-mutating handler yields at MySQL.*.await, so on the single main
 -- thread two of them CAN interleave (a /mapwipe deleting rows a concurrent
 -- /mapcommit is inserting, or two commits both reading a stale per-map count and
@@ -190,13 +211,39 @@ CreateThread(function()
                 rx = row.rx + 0.0, ry = row.ry + 0.0, rz = row.rz + 0.0,
             }
         end
+        MySQL.query.await([[
+            CREATE TABLE IF NOT EXISTS `palm6_mapeditor_lights` (
+                `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `map`        VARCHAR(64)  NOT NULL DEFAULT 'default',
+                `x`          DOUBLE       NOT NULL,
+                `y`          DOUBLE       NOT NULL,
+                `z`          DOUBLE       NOT NULL,
+                `r`          SMALLINT     NOT NULL DEFAULT 255,
+                `g`          SMALLINT     NOT NULL DEFAULT 200,
+                `b`          SMALLINT     NOT NULL DEFAULT 140,
+                `range`      DOUBLE       NOT NULL DEFAULT 8,
+                `intensity`  DOUBLE       NOT NULL DEFAULT 5,
+                `kind`       VARCHAR(8)   NOT NULL DEFAULT 'point',
+                `created_by` VARCHAR(96)  DEFAULT NULL,
+                `created_at` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_map` (`map`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]])
         local hrows = MySQL.query.await('SELECT id, x, y, z, radius, model FROM palm6_mapeditor_hides') or {}
         for _, row in ipairs(hrows) do
             hides[row.id] = { id = row.id, x = row.x + 0.0, y = row.y + 0.0, z = row.z + 0.0, radius = row.radius + 0.0, model = math.floor(row.model) }
         end
+        local lrows = MySQL.query.await('SELECT id, map, x, y, z, r, g, b, `range`, intensity, kind FROM palm6_mapeditor_lights') or {}
+        for _, row in ipairs(lrows) do
+            lights[row.id] = { id = row.id, map = row.map, x = row.x + 0.0, y = row.y + 0.0, z = row.z + 0.0,
+                r = math.floor(row.r), g = math.floor(row.g), b = math.floor(row.b),
+                range = row.range + 0.0, intensity = row.intensity + 0.0, kind = row.kind or 'point' }
+        end
         local n = 0; for _ in pairs(live) do n = n + 1 end
         local hn = 0; for _ in pairs(hides) do hn = hn + 1 end
-        print(('[palm6_mapeditor] live map ready — %d persisted prop(s), %d world-erase(s) loaded'):format(n, hn))
+        local ln = lightCount()
+        print(('[palm6_mapeditor] live map ready — %d prop(s), %d world-erase(s), %d light(s) loaded'):format(n, hn, ln))
     end)
     if ok then
         READY = true
@@ -206,6 +253,7 @@ CreateThread(function()
             local out = {}; for _, r in pairs(live) do out[#out + 1] = wire(r) end; return out
         end)(), true)
         TriggerClientEvent('palm6_mapeditor:live:hideBatch', -1, fullHideBatch(), true)
+        TriggerClientEvent('palm6_mapeditor:live:lightBatch', -1, fullLightBatch(), true)
     else
         print(('[palm6_mapeditor] FATAL: could not create palm6_mapeditor_props (%s). Live map is inert until the DB is reachable.'):format(tostring(err)))
     end
@@ -221,6 +269,7 @@ RegisterNetEvent('palm6_mapeditor:live:requestSync', function()
     for _, r in pairs(live) do out[#out + 1] = wire(r) end
     TriggerClientEvent('palm6_mapeditor:live:addBatch', src, out, true)      -- full=true
     TriggerClientEvent('palm6_mapeditor:live:hideBatch', src, fullHideBatch(), true)
+    TriggerClientEvent('palm6_mapeditor:live:lightBatch', src, fullLightBatch(), true)
 end)
 
 -- ---------------------------------------------------------------------------
@@ -230,20 +279,23 @@ end)
 -- it. Bounded by Config.LiveMaxCommit (per call) and Config.LiveMaxProps (total
 -- per map) so a runaway client can't flood the DB or every player's object pool.
 -- ---------------------------------------------------------------------------
-RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements)
+RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements, lightDefs)
     local src = source
     if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
     if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
-    if type(placements) ~= 'table' then notify(src, 'nothing to commit', 'error'); return end
+    if type(placements) ~= 'table' then placements = {} end
+    if type(lightDefs) ~= 'table' then lightDefs = {} end
+    if #placements == 0 and #lightDefs == 0 then notify(src, 'nothing to commit', 'error'); return end
 
     map = cleanMap(map)
     local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
-    local added, rejected, full = {}, 0, false
-    -- Locked: read the per-map count, insert, and mirror into `live` as one
-    -- atomic section, so the cap holds and no concurrent wipe/commit interleaves.
+    local added, addedLights, rejected, full = {}, {}, 0, false
+    -- Locked: read the per-map count, insert props + lights, and mirror into the
+    -- in-memory sets as one atomic section, so caps hold and no concurrent
+    -- wipe/commit interleaves.
     local acquired = withWriteLock(function()
         local room = Config.LiveMaxProps - mapCount(map)
-        if room <= 0 then full = true; return end
+        if room <= 0 and #placements > 0 then full = true; return end
         for i = 1, #placements do
             if #added >= Config.LiveMaxCommit or #added >= room then break end
             local p = cleanPlacement(placements[i])
@@ -265,22 +317,41 @@ RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements)
                 end
             end
         end
+        -- Lights, bounded by the global light cap.
+        local lroom = Config.LiveMaxLights - lightCount()
+        for i = 1, #lightDefs do
+            if #addedLights >= lroom then break end
+            local l = cleanLight(lightDefs[i])
+            if l then
+                local id
+                local wrote = pcall(function()
+                    id = MySQL.insert.await(
+                        'INSERT INTO palm6_mapeditor_lights (map, x, y, z, r, g, b, `range`, intensity, kind, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        { map, l.x, l.y, l.z, l.r, l.g, l.b, l.range, l.intensity, l.kind, who })
+                end)
+                if wrote and id then
+                    l.id, l.map = id, map
+                    lights[id] = l
+                    addedLights[#addedLights + 1] = wireLight(l)
+                end
+            end
+        end
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
     if full then notify(src, ('map "%s" is full (%d cap)'):format(map, Config.LiveMaxProps), 'error'); return end
 
-    if #added > 0 then
-        TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, added, false)   -- incremental
+    if #added > 0 then TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, added, false) end
+    if #addedLights > 0 then TriggerClientEvent('palm6_mapeditor:live:lightBatch', -1, addedLights, false) end
+    if #added > 0 or #addedLights > 0 then
         -- Ack the committer so it clears its session ONLY now that rows are
         -- actually persisted (a rejected/failed commit sends no ack, so the
         -- admin never loses an unsaved session to a transient DB hiccup).
         TriggerClientEvent('palm6_mapeditor:live:committed', src)
     end
-    local msg = ('committed %d prop(s) to "%s"'):format(#added, map)
+    local msg = ('committed %d prop(s) + %d light(s) to "%s"'):format(#added, #addedLights, map)
     if rejected > 0 then msg = msg .. (' (%d rejected)'):format(rejected) end
-    if #placements > Config.LiveMaxCommit then msg = msg .. (' — capped at %d/commit'):format(Config.LiveMaxCommit) end
-    notify(src, msg, #added > 0 and 'success' or 'error')
-    print(('[palm6_mapeditor] %s committed %d prop(s) to map "%s"'):format(who, #added, map))
+    notify(src, msg, (#added > 0 or #addedLights > 0) and 'success' or 'error')
+    print(('[palm6_mapeditor] %s committed %d prop(s), %d light(s) to map "%s"'):format(who, #added, #addedLights, map))
 end)
 
 -- ---------------------------------------------------------------------------
@@ -305,6 +376,26 @@ RegisterNetEvent('palm6_mapeditor:live:removeOne', function(id)
     notify(src, 'removed live prop', 'success')
 end)
 
+-- Remove one live light (the client picked it by aim and sent its id).
+RegisterNetEvent('palm6_mapeditor:live:removeLightOne', function(id)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    id = tonumber(id)
+    if not id or not lights[id] then notify(src, 'no live light with that id', 'error'); return end
+    local dberr = false
+    local acquired = withWriteLock(function()
+        if not lights[id] then return end
+        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_lights WHERE id = ?', { id }) end) then
+            dberr = true; return
+        end
+        lights[id] = nil
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if dberr then notify(src, 'DB delete failed', 'error'); return end
+    TriggerClientEvent('palm6_mapeditor:live:lightRemove', -1, id)
+    notify(src, 'removed live light', 'success')
+end)
+
 -- ---------------------------------------------------------------------------
 -- Wipe a whole map (delete every row for that map, despawn everywhere).
 -- ---------------------------------------------------------------------------
@@ -312,23 +403,25 @@ RegisterNetEvent('palm6_mapeditor:live:wipeMap', function(map)
     local src = source
     if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
     map = cleanMap(map)
-    local ids, dberr = {}, false
-    -- Locked: DELETE then re-scan `live` for this map, so any row a concurrent
-    -- commit inserted mid-delete is removed from memory too (no orphan). The
-    -- lock actually prevents that interleave, but scanning post-delete is the
-    -- belt-and-braces that keeps memory == DB regardless.
+    local ids, lids, dberr = {}, {}, false
+    -- Locked: DELETE props + lights for this map, then re-scan the in-memory sets
+    -- so any row a concurrent commit inserted mid-delete is removed from memory
+    -- too (no orphan). The lock prevents that interleave; the post-delete rescan
+    -- is the belt-and-braces that keeps memory == DB regardless.
     local acquired = withWriteLock(function()
-        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end) then
-            dberr = true; return
-        end
+        local ok1 = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end)
+        local ok2 = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_lights WHERE map = ?', { map }) end)
+        if not (ok1 and ok2) then dberr = true; return end
         for id, r in pairs(live) do if r.map == map then ids[#ids + 1] = id; live[id] = nil end end
+        for id, l in pairs(lights) do if l.map == map then lids[#lids + 1] = id; lights[id] = nil end end
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
     if dberr then notify(src, 'DB delete failed', 'error'); return end
-    if #ids == 0 then notify(src, ('map "%s" is already empty'):format(map), 'inform'); return end
-    TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, ids)
-    notify(src, ('wiped map "%s" (%d prop(s))'):format(map, #ids), 'success')
-    print(('[palm6_mapeditor] %s wiped live map "%s" (%d prop(s))'):format(GetPlayerName(src) or src, map, #ids))
+    if #ids == 0 and #lids == 0 then notify(src, ('map "%s" is already empty'):format(map), 'inform'); return end
+    if #ids > 0 then TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, ids) end
+    if #lids > 0 then TriggerClientEvent('palm6_mapeditor:live:lightRemoveBatch', -1, lids) end
+    notify(src, ('wiped map "%s" (%d prop(s), %d light(s))'):format(map, #ids, #lids), 'success')
+    print(('[palm6_mapeditor] %s wiped live map "%s" (%d prop(s), %d light(s))'):format(GetPlayerName(src) or src, map, #ids, #lids))
 end)
 
 -- ---------------------------------------------------------------------------
@@ -346,7 +439,7 @@ RegisterNetEvent('palm6_mapeditor:live:list', function()
     local lines = {}
     for _, m in ipairs(names) do lines[#lines + 1] = ('%s — %d'):format(m, counts[m]) end
     local hn = 0; for _ in pairs(hides) do hn = hn + 1 end
-    notify(src, ('live maps:\n%s\n(world-erases: %d)'):format(table.concat(lines, '\n'), hn), 'inform')
+    notify(src, ('live maps:\n%s\n(world-erases: %d · lights: %d)'):format(table.concat(lines, '\n'), hn, lightCount()), 'inform')
 end)
 
 -- ---------------------------------------------------------------------------

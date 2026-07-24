@@ -14,10 +14,11 @@
 --   clears a whole map. Commit APPENDS, so /mapcommit <sameMap> grows a map.
 --
 -- COMMANDS
---   /mapcommit [map]   publish your current session to a live map (default: default)
---   /maplist           list live maps and their prop counts
+--   /mapcommit [map]   publish your session — props AND lights — to a live map
+--   /maplist           list live maps and their prop/erase/light counts
 --   /maplivedel        remove the LIVE prop you're aiming at (everywhere)
---   /mapwipe <map>     delete an entire live map (everywhere)
+--   /maplightdel       remove the LIVE light nearest your aim (everywhere)
+--   /mapwipe <map>     delete an entire live map — props + lights (everywhere)
 --   /mapworlderase     erase the vanilla world prop you aim at, for everyone (persisted)
 --   /mapworldrestore   restore the nearest persisted world-erase (everywhere)
 -- ============================================================================
@@ -118,6 +119,55 @@ RegisterNetEvent('palm6_mapeditor:live:hideBatch', function(list, full)
 end)
 RegisterNetEvent('palm6_mapeditor:live:unhide', function(id) unHide(tonumber(id)) end)
 
+-- ---- live lights -----------------------------------------------------------
+-- Lights aren't entities; they're redrawn every frame. Unlike lights.lua (the
+-- admin's session lights, drawn only while editing), these are streamed and
+-- drawn for EVERY player, always. A single always-on loop draws them all,
+-- distance-culled so far-away lights cost nothing.
+local liveLights = {}   -- [id] = { x,y,z, r,g,b, range, intensity, kind }
+
+local function applyLight(rec)
+    if type(rec) ~= 'table' or not rec.id then return end
+    if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
+    liveLights[rec.id] = {
+        x = rec.x, y = rec.y, z = rec.z,
+        r = rec.r or 255, g = rec.g or 200, b = rec.b or 140,
+        range = rec.range or 8.0, intensity = rec.intensity or 5.0, kind = rec.kind or 'point',
+    }
+end
+
+RegisterNetEvent('palm6_mapeditor:live:light', function(rec) applyLight(rec) end)
+RegisterNetEvent('palm6_mapeditor:live:lightBatch', function(list, full)
+    if type(list) ~= 'table' then return end
+    if full then liveLights = {} end
+    for i = 1, #list do applyLight(list[i]) end
+end)
+RegisterNetEvent('palm6_mapeditor:live:lightRemove', function(id) if id then liveLights[tonumber(id)] = nil end end)
+RegisterNetEvent('palm6_mapeditor:live:lightRemoveBatch', function(ids)
+    if type(ids) ~= 'table' then return end
+    for _, id in ipairs(ids) do liveLights[tonumber(id)] = nil end
+end)
+
+CreateThread(function()
+    local D2 = Config.LiveLightDist * Config.LiveLightDist
+    while true do
+        local any = next(liveLights) ~= nil
+        if any then
+            local px, py, pz = Game.PlayerPos()   -- once per frame, not per light
+            for _, l in pairs(liveLights) do
+                if (l.x - px) ^ 2 + (l.y - py) ^ 2 + (l.z - pz) ^ 2 <= D2 then
+                    if l.kind == 'spot' then
+                        Game.DrawSpot(l.x, l.y, l.z, 0.0, 0.0, -1.0, l.r, l.g, l.b, l.range, l.intensity, 8.0, 1.0)
+                    else
+                        Game.DrawPointLight(l.x, l.y, l.z, l.r, l.g, l.b, l.range, l.intensity)
+                    end
+                end
+            end
+        end
+        Wait(any and 0 or 500)   -- only run every frame when there ARE live lights
+    end
+end)
+
 -- ---- initial sync ----------------------------------------------------------
 -- Ask for the live map on start (covers a fresh join AND a resource restart on
 -- either side). The server also pushes to everyone the moment its DB finishes
@@ -130,18 +180,34 @@ end)
 -- ---- commands (writes are ACE-checked server-side) -------------------------
 RegisterCommand('mapcommit', function(_, args)
     local snap = MapEd.snapshot and MapEd.snapshot() or {}
-    if #snap == 0 then Game.Notify('nothing in your session to commit', 'error'); return end
-    TriggerServerEvent('palm6_mapeditor:live:commit', args[1], snap)
-    Game.Notify(('publishing %d prop(s) to "%s"...'):format(#snap, args[1] or Config.LiveDefaultMap), 'inform')
+    local lsnap = (MapEd.getLights and MapEd.getLights()) or {}
+    if #snap == 0 and #lsnap == 0 then Game.Notify('nothing in your session to commit', 'error'); return end
+    TriggerServerEvent('palm6_mapeditor:live:commit', args[1], snap, lsnap)
+    Game.Notify(('publishing %d prop(s) + %d light(s) to "%s"...'):format(#snap, #lsnap, args[1] or Config.LiveDefaultMap), 'inform')
 end, false)
 
--- Server confirms the rows are persisted -> drop the personal session copies so
--- the returning LIVE props don't render on top of them. We wait for this ack
--- (rather than clearing optimistically) so a rejected commit never loses a
--- session. The broadcast that spawns the live copies is fired just before this.
+-- Server confirms the rows are persisted -> drop the personal session copies
+-- (props AND lights) so the returning LIVE copies don't render on top of them.
+-- We wait for this ack (rather than clearing optimistically) so a rejected
+-- commit never loses a session. The broadcast that respawns them fires first.
 RegisterNetEvent('palm6_mapeditor:live:committed', function()
     if MapEd.clearSession then MapEd.clearSession() end
+    if MapEd.clearLights then MapEd.clearLights() end
 end)
+
+-- Aim at a live light and remove it everywhere. Matches the nearest live light
+-- to the aim point (lights aren't entities, so there's nothing to raycast).
+RegisterCommand('maplightdel', function()
+    local x, y, z = Game.CameraAimPoint(40.0)
+    if not x then x, y, z = Game.PlayerPos() end
+    local best, bestD
+    for id, l in pairs(liveLights) do
+        local d = (l.x - x) ^ 2 + (l.y - y) ^ 2 + (l.z - z) ^ 2
+        if not bestD or d < bestD then bestD, best = d, id end
+    end
+    if not best then Game.Notify('no live lights nearby', 'inform'); return end
+    TriggerServerEvent('palm6_mapeditor:live:removeLightOne', best)
+end, false)
 
 RegisterCommand('maplist', function() TriggerServerEvent('palm6_mapeditor:live:list') end, false)
 

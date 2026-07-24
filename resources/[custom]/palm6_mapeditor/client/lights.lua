@@ -66,6 +66,9 @@ end, false)
 -- --- hooks (main.lua's export folds these in; load re-adds them) -----------
 if MapEd then
     function MapEd.getLights() return lights end
+    -- Drop the session lights (called after /mapcommit publishes them, so the
+    -- returning LIVE lights aren't drawn on top of the session copies).
+    function MapEd.clearLights() lights = {}; lsel = nil end
     -- l is the raw JSON form { x,y,z, r,g,b, range, intensity, kind }.
     function MapEd.addLight(l)
         if type(l) ~= 'table' or not l.x then return end
