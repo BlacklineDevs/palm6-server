@@ -19,7 +19,8 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | Command | Does |
 |---|---|
 | `/mapedit` | toggle editor |
-| `/props` / `/propsearch <q>` | catalog browse / fuzzy search (5,295 props) |
+| `/propui` | **visual thumbnail browser** — grid of all 5,295 props with images, category rail, search |
+| `/props` / `/propsearch <q>` | ox_lib catalog browse / fuzzy search (5,295 props) |
 | `/prop <model>` | spawn a specific model at aim |
 | `/matnext` `/matprev` `/matcat` | cycle the quick-prop catalog |
 | `/matpick` | select the object nearest your aim |
@@ -71,6 +72,9 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
 - `client/main.lua` — editor core (spawn/select/undo/HUD/export).
 - `client/browser.lua` — prop catalog + fuzzy search (`data/prop_groups.lua`).
 - `client/tools.lua` — world eraser, mass grid, per-prop toggles, gizmo command.
+- `client/nui.lua` + `html/` — the visual thumbnail prop browser (`/propui`). Self-contained
+  NUI (no build step); thumbnails load from the RAGE odb CDN, addressed by `joaat(name)`
+  computed in-page, so nothing is bundled (~93%+ coverage, clean fallback tile otherwise).
 - `client/live.lua` — live-map streaming (spawns/syncs the persisted props on each client).
 - `server/main.lua` — writes export files (ACE-gated).
 - `server/live.lua` — MySQL persistence + authoritative live sync (owns `palm6_mapeditor_props`).
@@ -85,6 +89,5 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
   Sollumz (Blender) directly.
 
 ## Roadmap (not yet built)
-- React NUI prop browser with thumbnail grid (ox_lib browser works today).
-- Networked light sync + world-erase sync (currently session/export-local).
+- Networked light sync (props + world-erases already sync; lights stay session-local).
 - Per-prop live editing after commit (adopt/check-out round-trip); ped/vehicle placement.

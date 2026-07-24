@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>palm6_mapeditor — prop catalog</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <!-- Hidden until the client sends {action:'open'}. NUI pages are always
+         "loaded"; visibility is driven entirely by SendNUIMessage. -->
+    <div id="app" class="hidden">
+        <div class="panel">
+            <header class="bar">
+                <div class="brand">
+                    <span class="dot"></span>
+                    <span class="title">PROP CATALOG</span>
+                    <span id="count" class="count">0</span>
+                </div>
+                <div class="search-wrap">
+                    <input id="search" type="text" placeholder="Search 5,295 props…  (name, e.g. barrel, chair, cone)" autocomplete="off" spellcheck="false" />
+                    <button id="clear" class="clear" title="Clear">×</button>
+                </div>
+                <button id="close" class="close" title="Close (Esc)">ESC ×</button>
+            </header>
+            <div class="body">
+                <nav id="cats" class="cats"></nav>
+                <main id="grid" class="grid"></main>
+            </div>
+            <footer class="foot">
+                <span id="ctx" class="ctx">select a category</span>
+                <span class="hint">click a prop to spawn it at your aim · thumbnails: RAGE odb</span>
+            </footer>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
