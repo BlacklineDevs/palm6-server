@@ -40,6 +40,9 @@ local READY = false       -- flips true once the tables are confirmed present
 local live = {}           -- [id] = { id, map, model, x, y, z, rx, ry, rz }
 local hides = {}          -- [id] = { id, x, y, z, radius, model }  (world-prop erases)
 local lights = {}         -- [id] = { id, map, x, y, z, r, g, b, range, intensity, kind }
+local grabbedPending = {} -- [src] = { {map,model,x,y,z,rx,ry,rz}, ... } checked-out props
+                          -- awaiting re-commit; restored to the live map if the
+                          -- grabber disconnects first (so a grab can't lose a prop)
 
 -- Writes are admin-only (same ACE the /mapedit command is gated on); reads
 -- (requestSync) are open so every player sees the built map. src 0 = console.
@@ -295,8 +298,10 @@ RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements, lightD
     -- wipe/commit interleaves.
     local acquired = withWriteLock(function()
         local room = Config.LiveMaxProps - mapCount(map)
-        if room <= 0 and #placements > 0 then full = true; return end
-        for i = 1, #placements do
+        -- props are full: skip the props loop but STILL process lights (separate
+        -- table, separate cap — a prop-full map must not block adding lighting).
+        if room <= 0 and #placements > 0 then full = true end
+        for i = 1, (room > 0 and #placements or 0) do
             if #added >= Config.LiveMaxCommit or #added >= room then break end
             local p = cleanPlacement(placements[i])
             if not p then
@@ -338,18 +343,23 @@ RegisterNetEvent('palm6_mapeditor:live:commit', function(map, placements, lightD
         end
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
-    if full then notify(src, ('map "%s" is full (%d cap)'):format(map, Config.LiveMaxProps), 'error'); return end
 
     if #added > 0 then TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, added, false) end
     if #addedLights > 0 then TriggerClientEvent('palm6_mapeditor:live:lightBatch', -1, addedLights, false) end
-    if #added > 0 or #addedLights > 0 then
-        -- Ack the committer so it clears its session ONLY now that rows are
-        -- actually persisted (a rejected/failed commit sends no ack, so the
-        -- admin never loses an unsaved session to a transient DB hiccup).
+    -- Clear the committer's session ONLY when the whole session persisted. If the
+    -- map was prop-full, the valid props couldn't be inserted, so we withhold the
+    -- ack and retain the session — the admin never loses valid work to a full map
+    -- (they wipe or pick another map). A rejected/failed commit likewise sends no
+    -- ack, so a transient DB hiccup can't lose an unsaved session either.
+    if not full and (#added > 0 or #addedLights > 0) then
         TriggerClientEvent('palm6_mapeditor:live:committed', src)
+        -- Session persisted -> the grabbed props are now committed rows; drop the
+        -- disconnect-restore backup so it can't re-insert stale duplicates.
+        grabbedPending[src] = nil
     end
     local msg = ('committed %d prop(s) + %d light(s) to "%s"'):format(#added, #addedLights, map)
-    if rejected > 0 then msg = msg .. (' (%d rejected)'):format(rejected) end
+    if full then msg = msg .. (' — props full (%d cap), session kept'):format(Config.LiveMaxProps) end
+    if rejected > 0 then msg = msg .. (' (%d invalid)'):format(rejected) end
     notify(src, msg, (#added > 0 or #addedLights > 0) and 'success' or 'error')
     print(('[palm6_mapeditor] %s committed %d prop(s), %d light(s) to map "%s"'):format(who, #added, #addedLights, map))
 end)
@@ -394,15 +404,46 @@ RegisterNetEvent('palm6_mapeditor:live:grabProp', function(id)
         if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE id = ?', { id }) end) then
             dberr = true; return
         end
-        grabbed = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+        grabbed = { map = r.map, model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
         live[id] = nil
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
     if dberr then notify(src, 'DB error', 'error'); return end
     if not grabbed then notify(src, 'prop no longer live', 'error'); return end
+    -- Remember the pre-edit prop so a disconnect before /mapcommit restores it
+    -- rather than silently losing it (grab is presented as a non-destructive edit).
+    grabbedPending[src] = grabbedPending[src] or {}
+    grabbedPending[src][#grabbedPending[src] + 1] = grabbed
     TriggerClientEvent('palm6_mapeditor:live:remove', -1, id)           -- despawn for everyone
     TriggerClientEvent('palm6_mapeditor:live:grabbed', src, grabbed)    -- into the grabber's session
     notify(src, 'grabbed prop into your session — edit it, then /mapcommit to republish', 'success')
+end)
+
+-- If a grabber disconnects before re-committing, restore their checked-out props
+-- to the live map (pre-edit state) so a grab never loses a prop. Cleared on a
+-- successful commit (see the commit ack), so this only fires for abandoned grabs.
+AddEventHandler('playerDropped', function()
+    local src = source
+    local pend = grabbedPending[src]
+    grabbedPending[src] = nil
+    if not pend or #pend == 0 then return end
+    withWriteLock(function()
+        local restored = 0
+        for _, p in ipairs(pend) do
+            local id
+            local ok = pcall(function()
+                id = MySQL.insert.await(
+                    'INSERT INTO palm6_mapeditor_props (map, model, x, y, z, rx, ry, rz, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    { p.map, p.model, p.x, p.y, p.z, p.rx, p.ry, p.rz, 'grab-restore' })
+            end)
+            if ok and id then
+                live[id] = { id = id, map = p.map, model = p.model, x = p.x, y = p.y, z = p.z, rx = p.rx, ry = p.ry, rz = p.rz }
+                TriggerClientEvent('palm6_mapeditor:live:add', -1, wire(live[id]))
+                restored = restored + 1
+            end
+        end
+        if restored > 0 then print(('[palm6_mapeditor] restored %d abandoned grabbed prop(s) after a disconnect'):format(restored)) end
+    end)
 end)
 
 -- Remove one live light (the client picked it by aim and sent its id).
@@ -438,17 +479,24 @@ RegisterNetEvent('palm6_mapeditor:live:wipeMap', function(map)
     -- too (no orphan). The lock prevents that interleave; the post-delete rescan
     -- is the belt-and-braces that keeps memory == DB regardless.
     local acquired = withWriteLock(function()
+        -- Reconcile memory PER successful DELETE, not all-or-nothing: if one
+        -- table's delete throws, the other still succeeded and its rows must be
+        -- cleared from memory too, or memory diverges from the DB.
         local ok1 = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end)
+        if ok1 then for id, r in pairs(live) do if r.map == map then ids[#ids + 1] = id; live[id] = nil end end end
         local ok2 = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_lights WHERE map = ?', { map }) end)
-        if not (ok1 and ok2) then dberr = true; return end
-        for id, r in pairs(live) do if r.map == map then ids[#ids + 1] = id; live[id] = nil end end
-        for id, l in pairs(lights) do if l.map == map then lids[#lids + 1] = id; lights[id] = nil end end
+        if ok2 then for id, l in pairs(lights) do if l.map == map then lids[#lids + 1] = id; lights[id] = nil end end end
+        dberr = not (ok1 and ok2)
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
-    if dberr then notify(src, 'DB delete failed', 'error'); return end
-    if #ids == 0 and #lids == 0 then notify(src, ('map "%s" is already empty'):format(map), 'inform'); return end
+    -- Broadcast whatever was actually removed (each side is consistent with the DB).
     if #ids > 0 then TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, ids) end
     if #lids > 0 then TriggerClientEvent('palm6_mapeditor:live:lightRemoveBatch', -1, lids) end
+    if dberr then
+        notify(src, ('partial wipe of "%s" — a DB delete failed (%d prop(s), %d light(s) cleared)'):format(map, #ids, #lids), 'error')
+        return
+    end
+    if #ids == 0 and #lids == 0 then notify(src, ('map "%s" is already empty'):format(map), 'inform'); return end
     notify(src, ('wiped map "%s" (%d prop(s), %d light(s))'):format(map, #ids, #lids), 'success')
     print(('[palm6_mapeditor] %s wiped live map "%s" (%d prop(s), %d light(s))'):format(GetPlayerName(src) or src, map, #ids, #lids))
 end)
