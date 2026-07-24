@@ -25,21 +25,25 @@ from collections import defaultdict
 #   post:     if set, this is a takeable duty post (interactive phase)
 SELECT = [
     # ---- seated detectives / officers at their desks (exact office-chair coords)
-    ("prop_off_chair_05", "officeright",   "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 4, None),
-    ("prop_off_chair_05", "officeleft",    "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 4, None),
-    ("prop_off_chair_05", "captain",       "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 2, "captain_desk"),
-    ("prop_off_chair_05", "2ndunitoffice", "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 3, None),
-    # ---- cops taking a breather / gearing up on armory benches (exact bench coords)
-    ("nteam_mrpd_bench",  "armory",        "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 3, None),
-    # ---- main lobby seating = the public waiting to be helped (civ)
-    ("nteammrpdlobbyseat","mainhall",      "civ", "PROP_HUMAN_SEAT_CHAIR", "seat", 4, None),
-    # ---- interior hall seating = officers on break / between calls (cop)
-    ("nteammrpdlobbyseat","floor",         "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 3, None),
-    ("nteammrpdlobbyseat","2ndunithall",   "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 3, None),
-    ("nteammrpdlobbyseat","lefthall",      "cop", "PROP_HUMAN_SEAT_CHAIR", "seat", 2, None),
-    # ---- front-desk clerk: one cop at the reception desk. Its stand spot is the
-    #      desk origin; gets /coords-nudged when it becomes the takeable front post.
-    ("nteammainhalldesk", "mainhall",      "cop", "WORLD_HUMAN_CLIPBOARD",    "desk", 1, "front_desk"),
+    # NOTE: GTA anchors a seated animation to a world POINT, not the chair — any
+    # offset from the exact seat surface floats/perches the ped, and every model's
+    # origin height differs, so no single offset seats them all. We therefore STAND
+    # cops at their desks (working poses) — always aligned, reads as a busy precinct.
+    # Anchored to the real furniture coords (chairs/benches), heading = furniture facing.
+    ("prop_off_chair_05", "officeright",   "cop", "WORLD_HUMAN_CLIPBOARD",   "desk", 4, None),
+    ("prop_off_chair_05", "officeleft",    "cop", "WORLD_HUMAN_CLIPBOARD",   "desk", 4, None),
+    ("prop_off_chair_05", "captain",       "cop", "WORLD_HUMAN_STAND_MOBILE","desk", 2, "captain_desk"),
+    ("prop_off_chair_05", "2ndunitoffice", "cop", "WORLD_HUMAN_CLIPBOARD",   "desk", 3, None),
+    # ---- cops gearing up in the armory (exact bench coords, standing)
+    ("nteam_mrpd_bench",  "armory",        "cop", "WORLD_HUMAN_STAND_MOBILE","desk", 3, None),
+    # ---- main lobby = the public waiting to be helped (standing)
+    ("nteammrpdlobbyseat","mainhall",      "civ", "WORLD_HUMAN_STAND_MOBILE","desk", 4, None),
+    # ---- interior halls = officers between calls (standing)
+    ("nteammrpdlobbyseat","floor",         "cop", "WORLD_HUMAN_COP_IDLES",   "desk", 3, None),
+    ("nteammrpdlobbyseat","2ndunithall",   "cop", "WORLD_HUMAN_COP_IDLES",   "desk", 3, None),
+    ("nteammrpdlobbyseat","lefthall",      "cop", "WORLD_HUMAN_CLIPBOARD",   "desk", 2, None),
+    # ---- front-desk clerk: one cop at the reception desk.
+    ("nteammainhalldesk", "mainhall",      "cop", "WORLD_HUMAN_CLIPBOARD",   "desk", 1, "front_desk"),
 ]
 
 
