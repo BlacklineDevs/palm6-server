@@ -9,11 +9,13 @@ description 'palm6_mapeditor — in-game map/prop editor: spawn, gizmo move/rota
 shared_scripts {
     '@ox_lib/init.lua',
     'shared/config.lua',
+    'data/prop_groups.lua', -- 5,295-prop catalog (Config.PropGroups)
 }
 
 client_scripts {
     'bridge/cl_game.lua',   -- all GTA natives isolated here
     'client/main.lua',      -- editor core
+    'client/browser.lua',   -- prop catalog + fuzzy search
 }
 
 server_scripts {

@@ -177,6 +177,12 @@ RegisterCommand(Config.Command, function()
     Game.Notify(editing and 'editor ON — /prop <model> or /matnext to spawn' or 'editor OFF', 'inform')
 end, false)
 
+-- Prop browser (client/browser.lua) picks a model -> spawn it into the editor.
+AddEventHandler('palm6_mapeditor:spawn', function(model)
+    if not editing then Game.Notify('open the editor first (/mapedit)') return end
+    spawnAtAim(model)
+end)
+
 RegisterCommand('prop', function(_, args) if editing and args[1] then spawnAtAim(args[1]) end end, false)
 RegisterCommand('matnext', function()
     if not editing then return end
