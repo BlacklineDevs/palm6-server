@@ -376,6 +376,35 @@ RegisterNetEvent('palm6_mapeditor:live:removeOne', function(id)
     notify(src, 'removed live prop', 'success')
 end)
 
+-- Grab one live prop back into the caller's editing session so a committed prop
+-- can be repositioned/adjusted (the only way to EDIT a live prop). Under the
+-- lock: delete the row, drop it from `live`, despawn it for everyone, then hand
+-- the prop's data to the grabber to spawn as a normal editable session prop. Only
+-- one prop leaves the live set per grab, so the window where it's "checked out"
+-- is tiny and per-prop — never the fragile whole-map checkout.
+RegisterNetEvent('palm6_mapeditor:live:grabProp', function(id)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    id = tonumber(id)
+    if not id or not live[id] then notify(src, 'no live prop with that id', 'error'); return end
+    local grabbed, dberr = nil, false
+    local acquired = withWriteLock(function()
+        local r = live[id]
+        if not r then return end   -- taken by someone else while we waited
+        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE id = ?', { id }) end) then
+            dberr = true; return
+        end
+        grabbed = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+        live[id] = nil
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if dberr then notify(src, 'DB error', 'error'); return end
+    if not grabbed then notify(src, 'prop no longer live', 'error'); return end
+    TriggerClientEvent('palm6_mapeditor:live:remove', -1, id)           -- despawn for everyone
+    TriggerClientEvent('palm6_mapeditor:live:grabbed', src, grabbed)    -- into the grabber's session
+    notify(src, 'grabbed prop into your session — edit it, then /mapcommit to republish', 'success')
+end)
+
 -- Remove one live light (the client picked it by aim and sent its id).
 RegisterNetEvent('palm6_mapeditor:live:removeLightOne', function(id)
     local src = source

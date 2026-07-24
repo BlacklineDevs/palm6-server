@@ -40,6 +40,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/mapcommit [map]` | **publish your session (props + lights) to a live map** (persisted, all players see it) |
 | `/maplist` | list live maps and their prop/erase/light counts |
 | `/maplivedel` | remove the LIVE prop you aim at (everywhere, from the DB) |
+| `/maplivegrab` | grab the LIVE prop you aim at back into your session to reposition/edit it |
 | `/maplightdel` | remove the LIVE light nearest your aim (everywhere, from the DB) |
 | `/mapwipe <map>` | delete an entire live map — props + lights (everywhere, from the DB) |
 | `/mapworlderase` | erase the vanilla world prop you aim at **for everyone** (persisted) |
@@ -92,6 +93,9 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
   CodeWalker RPF Explorer → Import XML → binary ymap FiveM streams. Also imports into
   Sollumz (Blender) directly.
 
+**Editing a committed prop:** `/maplivegrab` (aim at it) checks that one prop out of the live
+map — it's removed for everyone and dropped back into your session as a normal editable prop;
+reposition it and `/mapcommit` republishes. Only one prop is ever checked out at a time.
+
 ## Roadmap (not yet built)
-- Per-prop live editing after commit (adopt/check-out round-trip).
 - Ped/vehicle placement; prefabs.

@@ -17,6 +17,7 @@
 --   /mapcommit [map]   publish your session — props AND lights — to a live map
 --   /maplist           list live maps and their prop/erase/light counts
 --   /maplivedel        remove the LIVE prop you're aiming at (everywhere)
+--   /maplivegrab       grab the LIVE prop you aim at back into your session to edit it
 --   /maplightdel       remove the LIVE light nearest your aim (everywhere)
 --   /mapwipe <map>     delete an entire live map — props + lights (everywhere)
 --   /mapworlderase     erase the vanilla world prop you aim at, for everyone (persisted)
@@ -226,6 +227,29 @@ RegisterCommand('maplivedel', function()
     end
     Game.Notify('that is not a live prop (use /materase for world props)', 'error')
 end, false)
+
+-- Aim at a LIVE prop and GRAB it into your session to reposition/adjust it (the
+-- only way to edit a committed prop). The server removes it from the live map for
+-- everyone and hands it back as a normal editable prop; /mapcommit republishes.
+RegisterCommand('maplivegrab', function()
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return end
+    local ent = Game.RaycastEntity(30.0)
+    if ent == 0 then Game.Notify('aim at a live prop to grab', 'error'); return end
+    for id, r in pairs(liveObjs) do
+        if r.obj == ent then TriggerServerEvent('palm6_mapeditor:live:grabProp', id); return end
+    end
+    Game.Notify('that is not a live prop', 'error')
+end, false)
+
+-- The server confirmed the grab (already despawned the live copy for everyone via
+-- live:remove); spawn it into the personal session, selected, ready to edit.
+RegisterNetEvent('palm6_mapeditor:live:grabbed', function(rec)
+    if type(rec) ~= 'table' or type(rec.model) ~= 'string' then return end
+    if MapEd and MapEd.spawnAt then
+        MapEd.spawnAt(rec.model, rec.x, rec.y, rec.z, rec.rx or 0.0, rec.ry or 0.0, rec.rz or 0.0)
+        Game.Notify('grabbed — reposition it, then /mapcommit', 'inform')
+    end
+end)
 
 -- Erase the vanilla world prop you aim at, FOR EVERYONE (persisted). Unlike
 -- /materase (personal, session-local), this streams to all players and future
