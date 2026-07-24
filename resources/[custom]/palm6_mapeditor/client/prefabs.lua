@@ -1,0 +1,81 @@
+-- ============================================================================
+-- palm6_mapeditor/client/prefabs.lua  —  prefab save / stamp (client half)
+--
+-- Caches the prefab defs the server owns and stamps them into the editor
+-- session. A stamp spawns the prefab's props (stored relative to their centre)
+-- at the player's aim point, rotated by an optional yaw — so you can drop a
+-- whole furnished room or checkpoint in one command, then /mapcommit it live.
+--
+-- COMMANDS
+--   /mapprefabsave <name>        save your current session props as a prefab
+--   /mapprefabstamp <name> [yaw] stamp a prefab at your aim (yaw in degrees)
+--   /mapprefablist               list saved prefabs + prop counts
+--   /mapprefabdel <name>         delete a prefab
+-- ============================================================================
+
+local prefabDefs = {}   -- [name] = { props = { {model,dx,dy,dz,rx,ry,rz}, ... } }
+
+RegisterNetEvent('palm6_mapeditor:prefab:syncAll', function(all)
+    prefabDefs = (type(all) == 'table') and all or {}
+end)
+RegisterNetEvent('palm6_mapeditor:prefab:def', function(name, def)
+    if type(name) == 'string' and type(def) == 'table' then prefabDefs[name] = def end
+end)
+RegisterNetEvent('palm6_mapeditor:prefab:removed', function(name)
+    if type(name) == 'string' then prefabDefs[name] = nil end
+end)
+
+CreateThread(function()
+    Wait(2500)
+    TriggerServerEvent('palm6_mapeditor:prefab:requestSync')
+end)
+
+-- --- save ------------------------------------------------------------------
+RegisterCommand('mapprefabsave', function(_, args)
+    if not args[1] then Game.Notify('usage: /mapprefabsave <name>', 'error'); return end
+    local snap = (MapEd and MapEd.snapshot) and MapEd.snapshot() or {}
+    if #snap == 0 then Game.Notify('nothing in your session to save', 'error'); return end
+    TriggerServerEvent('palm6_mapeditor:prefab:save', args[1], snap)
+end, false)
+
+-- --- stamp -----------------------------------------------------------------
+-- Spawn the prefab's props at the aim point. Each prop's centre-relative offset
+-- (dx,dy) is rotated by the stamp yaw, and yaw is added to its own rotation, so
+-- the whole group rotates as one. Spawns as ONE undo group.
+RegisterCommand('mapprefabstamp', function(_, args)
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return end
+    local name = args[1]
+    local def = name and prefabDefs[name]
+    if not def or type(def.props) ~= 'table' then Game.Notify('no prefab "' .. tostring(name) .. '" (/mapprefablist)', 'error'); return end
+    local ax, ay, az = Game.CameraAimPoint(60.0)
+    if not ax then ax, ay, az = Game.PlayerPos() end
+    local yaw = tonumber(args[2]) or 0.0
+    local rad = math.rad(yaw)
+    local cos, sin = math.cos(rad), math.sin(rad)
+    local n = 0
+    MapEd.batch(function()
+        for _, p in ipairs(def.props) do
+            local dx, dy = p.dx or 0.0, p.dy or 0.0
+            local wx = ax + (dx * cos - dy * sin)
+            local wy = ay + (dx * sin + dy * cos)
+            local wz = az + (p.dz or 0.0)
+            local rz = ((p.rz or 0.0) + yaw) % 360.0
+            if MapEd.spawnAt(p.model, wx, wy, wz, p.rx or 0.0, p.ry or 0.0, rz, true) then n = n + 1 end
+        end
+    end)
+    Game.Notify(('stamped "%s" — %d props (one /matundo). /mapcommit to publish'):format(name, n), 'success')
+end, false)
+
+-- --- list / delete ---------------------------------------------------------
+RegisterCommand('mapprefablist', function()
+    local names = {}
+    for nm, def in pairs(prefabDefs) do names[#names + 1] = ('%s (%d)'):format(nm, #(def.props or {})) end
+    table.sort(names)
+    if #names == 0 then Game.Notify('no prefabs yet — build props and /mapprefabsave <name>', 'inform'); return end
+    Game.Notify('prefabs:\n' .. table.concat(names, '\n'), 'inform')
+end, false)
+
+RegisterCommand('mapprefabdel', function(_, args)
+    if not args[1] then Game.Notify('usage: /mapprefabdel <name>', 'error'); return end
+    TriggerServerEvent('palm6_mapeditor:prefab:delete', args[1])
+end, false)

@@ -45,6 +45,9 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/mapwipe <map>` | delete an entire live map — props + lights (everywhere, from the DB) |
 | `/mapworlderase` | erase the vanilla world prop you aim at **for everyone** (persisted) |
 | `/mapworldrestore` | restore the nearest persisted world-erase (everywhere) |
+| `/mapprefabsave <name>` | save your session props as a reusable **prefab** |
+| `/mapprefabstamp <name> [yaw]` | stamp a prefab at your aim, rotated by yaw° (one undo group) |
+| `/mapprefablist` / `/mapprefabdel <name>` | list / delete prefabs |
 
 Live keys (something selected): **LMB** carry · **Arrows** move · **Shift+Up/Dn**
 height · **Q/E** rotate · **Space** snap · **Esc** exit.
@@ -97,5 +100,10 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
 map — it's removed for everyone and dropped back into your session as a normal editable prop;
 reposition it and `/mapcommit` republishes. Only one prop is ever checked out at a time.
 
+**Prefabs:** `/mapprefabsave <name>` stores your current session props as a reusable group,
+centred on their centroid (in `palm6_mapeditor_prefabs`). `/mapprefabstamp <name> [yaw]` drops
+the whole group at your crosshair, rotated by `yaw` degrees, as one undo group — then reposition
+and `/mapcommit`. Great for repeating a furnished room, checkpoint, or barrier layout.
+
 ## Roadmap (not yet built)
-- Ped/vehicle placement; prefabs.
+- Ped/vehicle placement.

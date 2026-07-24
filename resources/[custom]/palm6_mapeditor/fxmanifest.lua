@@ -20,12 +20,14 @@ client_scripts {
     'client/lights.lua',    -- light editor (point/spot, per-frame draw)
     'client/live.lua',      -- live map streaming (persisted props, all players)
     'client/nui.lua',       -- thumbnail prop-browser NUI controller (/propui)
+    'client/prefabs.lua',   -- prefab save/stamp (reusable prop groups)
 }
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',   -- must load before server/live.lua
     'server/main.lua',      -- export file writer (ACE-gated)
     'server/live.lua',      -- MySQL persistence + authoritative live sync
+    'server/prefabs.lua',   -- prefab storage (own table, ACE-gated)
 }
 
 ui_page 'html/index.html'

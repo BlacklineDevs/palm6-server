@@ -21,6 +21,11 @@ Config.LiveMaxHides   = 2000        -- max total persisted world-erases (all map
 Config.LiveMaxLights  = 256         -- max total persisted live lights (all maps)
 Config.LiveLightDist  = 120.0       -- only draw a live light within this many m of you
 
+-- Prefabs: named, reusable groups of props (a furnished room, a checkpoint…)
+-- saved relative to their centre so they can be stamped anywhere at any angle.
+Config.PrefabMaxProps = 500         -- max props in a single prefab
+Config.PrefabMaxCount = 200         -- max saved prefabs
+
 -- Nudge steps (fine value used while Shift is held).
 Config.Step = {
     move = 0.05, moveFine = 0.01,
