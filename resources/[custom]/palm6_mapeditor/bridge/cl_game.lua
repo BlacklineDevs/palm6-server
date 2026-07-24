@@ -30,6 +30,28 @@ function Game.SpawnObject(model, x, y, z)
     return obj
 end
 
+-- Request a set of models and wait (bounded) until they're all resident. A batch
+-- spawn that runs immediately after then finds every model already loaded, so
+-- Game.SpawnObject never yields mid-loop — which keeps a prefab stamp a single
+-- atomic undo group (no interleaved command can slip into the batch range).
+function Game.PreloadModels(models)
+    local want = {}
+    for _, m in ipairs(models or {}) do
+        local hash = type(m) == 'number' and m or joaat(m)
+        if IsModelValid(hash) then want[hash] = true end
+    end
+    for hash in pairs(want) do RequestModel(hash) end
+    local tries = 0
+    while tries < 500 do
+        local pending = false
+        for hash in pairs(want) do
+            if not HasModelLoaded(hash) then pending = true; RequestModel(hash) end
+        end
+        if not pending then break end
+        Wait(10); tries = tries + 1
+    end
+end
+
 function Game.DeleteObject(obj)
     if obj and DoesEntityExist(obj) then
         SetEntityAsMissionEntity(obj, true, true)

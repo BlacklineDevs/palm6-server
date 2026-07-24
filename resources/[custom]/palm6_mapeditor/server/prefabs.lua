@@ -61,7 +61,11 @@ local function prefabCount() local n = 0; for _ in pairs(prefabs) do n = n + 1 e
 -- the centroid so a stamp can drop it anywhere. Returns nil if nothing valid.
 local function buildDef(props)
     local clean = {}
-    for i = 1, #props do
+    -- Bound the loop by the input length capped at PrefabMaxProps, NOT by valid
+    -- props accumulating — otherwise an ACE client could send millions of invalid
+    -- entries (#clean never grows, break never fires) and stall the server tick.
+    local limit = math.min(#props, Config.PrefabMaxProps)
+    for i = 1, limit do
         local p = props[i]
         local model = type(p) == 'table' and cleanModel(p.model) or nil
         if model then
@@ -71,7 +75,6 @@ local function buildDef(props)
                 rx = num(p.rx, -360.0, 360.0, 0.0), ry = num(p.ry, -360.0, 360.0, 0.0), rz = num(p.rz, -360.0, 360.0, 0.0),
             }
         end
-        if #clean >= Config.PrefabMaxProps then break end
     end
     if #clean == 0 then return nil end
     local cx, cy, cz = 0.0, 0.0, 0.0
@@ -106,13 +109,23 @@ CreateThread(function()
     end)
     if ok then
         PREADY = true
-        TriggerClientEvent('palm6_mapeditor:prefab:syncAll', -1, prefabs)
+        -- Push to connected ADMINS only (prefabs are an admin building tool, not
+        -- world content players need). Covers admins who asked before the DB was
+        -- ready; on-demand/late-join admins pull via prefab:requestSync.
+        for _, pid in ipairs(GetPlayers()) do
+            local s = tonumber(pid)
+            if s and isAllowed(s) then TriggerClientEvent('palm6_mapeditor:prefab:syncAll', s, prefabs) end
+        end
     else
         print(('[palm6_mapeditor] FATAL: could not create palm6_mapeditor_prefabs (%s).'):format(tostring(err)))
     end
 end)
 
 RegisterNetEvent('palm6_mapeditor:prefab:requestSync', function()
+    -- Admin-only: prefabs are a building tool, so there's no reason to serialise
+    -- the whole cache to a non-admin (also closes a cheap-request/big-response
+    -- amplification vector).
+    if not isAllowed(source) then return end
     TriggerClientEvent('palm6_mapeditor:prefab:syncAll', source, prefabs)
 end)
 

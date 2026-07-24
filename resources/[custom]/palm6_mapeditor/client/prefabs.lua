@@ -53,6 +53,12 @@ RegisterCommand('mapprefabstamp', function(_, args)
     local rad = math.rad(yaw)
     local cos, sin = math.cos(rad), math.sin(rad)
     local n = 0
+    -- Load every model up front so the spawn loop below never yields — that keeps
+    -- MapEd.batch's index range clean (one atomic /matundo) even for a big/fresh
+    -- prefab, and the whole group appears at once rather than trickling in.
+    local models = {}
+    for _, p in ipairs(def.props) do models[#models + 1] = p.model end
+    Game.PreloadModels(models)
     MapEd.batch(function()
         for _, p in ipairs(def.props) do
             local dx, dy = p.dx or 0.0, p.dy or 0.0
