@@ -78,6 +78,14 @@ function Game.PlayerPos()
     return c.x, c.y, c.z
 end
 
+-- The object's exact world quaternion (x,y,z,w) — used for the ymap CEntityDef
+-- rotation (stored inverted). Reading the game's own quaternion avoids any
+-- euler->quat convention mismatch.
+function Game.GetObjectQuat(obj)
+    if not (obj and DoesEntityExist(obj)) then return 0.0, 0.0, 0.0, 1.0 end
+    return GetEntityQuaternion(obj)
+end
+
 function Game.SetClipboard(text)
     if lib and lib.setClipboard then lib.setClipboard(text) end
 end

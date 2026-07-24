@@ -112,13 +112,63 @@ local function buildJson()
     return json.encode(items)
 end
 
-RegisterCommand('mapexport', function()
+-- CodeWalker .ymap.xml — the streamable format (import in CodeWalker RPF Explorer
+-- -> right-click -> Import XML). This is the differentiator most editors can't do.
+local function buildYmap(name)
+    local ex = { minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9 }
+    local ents = {}
+    for _, r in ipairs(placed) do
+        local qx, qy, qz, qw = Game.GetObjectQuat(r.obj)
+        -- CEntityDef stores the INVERSE (conjugate) of the world quaternion.
+        ents[#ents + 1] = table.concat({
+            '  <Item type="CEntityDef">',
+            ('   <archetypeName>%s</archetypeName>'):format(r.model),
+            '   <flags value="1572864" />',
+            '   <guid value="0" />',
+            ('   <position x="%.4f" y="%.4f" z="%.4f" />'):format(r.x, r.y, r.z),
+            ('   <rotation x="%.6f" y="%.6f" z="%.6f" w="%.6f" />'):format(-qx, -qy, -qz, qw),
+            '   <scaleXY value="1" />', '   <scaleZ value="1" />',
+            '   <parentIndex value="-1" />', '   <lodDist value="500" />',
+            '   <childLodDist value="0" />', '   <lodLevel>LODTYPES_DEPTH_ORPHANHD</lodLevel>',
+            '   <numChildren value="0" />', '   <priorityLevel>PRI_REQUIRED</priorityLevel>',
+            '   <extensions />', '   <ambientOcclusionMultiplier value="255" />',
+            '   <artificialAmbientOcclusion value="255" />', '   <tintValue value="0" />',
+            '  </Item>',
+        }, '\n')
+        ex.minx = math.min(ex.minx, r.x); ex.maxx = math.max(ex.maxx, r.x)
+        ex.miny = math.min(ex.miny, r.y); ex.maxy = math.max(ex.maxy, r.y)
+        ex.minz = math.min(ex.minz, r.z); ex.maxz = math.max(ex.maxz, r.z)
+    end
+    local P = 500.0   -- streaming pad (>= lodDist) so the map streams in
+    return table.concat({
+        '<?xml version="1.0" encoding="UTF-8"?>', '<CMapData>',
+        ('  <name>%s</name>'):format(name), '  <parent />',
+        '  <flags value="0" />', '  <contentFlags value="1" />',
+        ('  <streamingExtentsMin x="%.2f" y="%.2f" z="%.2f" />'):format(ex.minx - P, ex.miny - P, ex.minz - P),
+        ('  <streamingExtentsMax x="%.2f" y="%.2f" z="%.2f" />'):format(ex.maxx + P, ex.maxy + P, ex.maxz + P),
+        ('  <entitiesExtentsMin x="%.2f" y="%.2f" z="%.2f" />'):format(ex.minx - 5, ex.miny - 5, ex.minz - 5),
+        ('  <entitiesExtentsMax x="%.2f" y="%.2f" z="%.2f" />'):format(ex.maxx + 5, ex.maxy + 5, ex.maxz + 5),
+        '  <entities>', table.concat(ents, '\n'), '  </entities>',
+        '  <containerLods itemType="rage__fwContainerLodDef" />',
+        '  <boxOccluders itemType="BoxOccluder" />',
+        '  <occludeModels itemType="OccludeModel" />',
+        '  <physicsDictionaries />',
+        '  <instancedData><ImapLink /><PropInstanceList itemType="rage__fwPropInstanceListDef" /><GrassInstanceList itemType="rage__fwGrassInstanceListDef" /></instancedData>',
+        '  <timeCycleModifiers itemType="CTimeCycleModifier" />',
+        '  <carGenerators itemType="CCarGen" />',
+        '  <block><version value="0" /><flags value="0" /><name>palm6_mapeditor</name><exportedBy>palm6</exportedBy><owner></owner><time></time></block>',
+        '</CMapData>',
+    }, '\n')
+end
+
+RegisterCommand('mapexport', function(_, args)
     if #placed == 0 then Game.Notify('nothing placed', 'error') return end
-    local lua, js = buildLua(), buildJson()
+    local name = args[1] or 'palm6_map'
+    local lua, js, ymap = buildLua(), buildJson(), buildYmap(name)
     Game.SetClipboard(lua)
-    TriggerServerEvent('palm6_mapeditor:save', lua, js)
-    Game.Notify(('exported %d objects (Lua on clipboard, saved to file)'):format(#placed), 'success')
-    Game.Chat('[mapeditor]', ('exported %d objects'):format(#placed))
+    TriggerServerEvent('palm6_mapeditor:save', name, lua, js, ymap)
+    Game.Notify(('exported %d objects (Lua+JSON+ymap saved; Lua on clipboard)'):format(#placed), 'success')
+    Game.Chat('[mapeditor]', ('exported %d objects as %s'):format(#placed, name))
 end, false)
 
 -- ---- commands -------------------------------------------------------------
