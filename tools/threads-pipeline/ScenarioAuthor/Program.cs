@@ -47,26 +47,32 @@ class Program
             var container = GetProp(region, "Points");
             var lookups = GetProp(region, "LookUps");
 
-            // Map the loaded TypeId -> type hash (needed to rebuild Type refs).
+            // Read ALL four lookup tables (index -> hash). Save() rebuilds EVERY one
+            // of these from the points' refs, so a headless resave that leaves refs
+            // null WIPES model-sets/interiors/groups (the lobby regression). We must
+            // repopulate every ref from its loaded index on every existing point.
             var typeNamesArr = (Array)GetProp(lookups, "TypeNames");
             var mhType = typeNamesArr.GetValue(0).GetType();
-            uint[] typeIdToHash = new uint[typeNamesArr.Length];
-            for (int i = 0; i < typeNamesArr.Length; i++) typeIdToHash[i] = HashVal(typeNamesArr.GetValue(i));
+            uint[] typeNames = ReadHashes(typeNamesArr);
+            uint[] modelNames = ReadHashes(GetProp(lookups, "PedModelSetNames") as Array);
+            uint[] interiorNames = ReadHashes(GetProp(lookups, "InteriorNames") as Array);
+            uint[] groupNames = ReadHashes(GetProp(lookups, "GroupNames") as Array);
             uint seatHash = JenkHash.GenHash(scenName.ToLowerInvariant());
-            Console.Error.WriteLine($"orig TypeNames: {typeNamesArr.Length}; seat hash {seatHash}");
+            Console.Error.WriteLine($"orig tables: {typeNames.Length} types, {modelNames.Length} modelsets, {interiorNames.Length} interiors, {groupNames.Length} groups; seat {seatHash}");
 
-            // CRITICAL: Save() rebuilds the lookup tables from each point's resolved
-            // Type ref (a headless load only sets the numeric TypeId), so a plain
-            // resave LOSES TypeNames. Give every existing point a fabricated Type ref
-            // matching its hash so Save rebuilds the table intact.
             var myPoints = (Array)GetProp(container, "MyPoints");
             foreach (var mpEx in myPoints)
             {
-                int tid = Convert.ToInt32(GetProp(mpEx, "Type") == null ? GetProp(mpEx, "TypeId") : GetProp(mpEx, "TypeId"));
-                if (tid >= 0 && tid < typeIdToHash.Length)
-                    SetProp(mpEx, "Type", MakeTypeRef(asm, mhType, typeIdToHash[tid], null));
+                int tid = Convert.ToInt32(GetProp(mpEx, "TypeId"));
+                if (tid >= 0 && tid < typeNames.Length) SetProp(mpEx, "Type", MakeTypeRef(asm, mhType, typeNames[tid], null));
+                int msid = Convert.ToInt32(GetProp(mpEx, "ModelSetId"));
+                if (msid > 0 && msid < modelNames.Length) SetProp(mpEx, "ModelSet", MakeModelSetRef(asm, mhType, modelNames[msid]));
+                int iid = Convert.ToInt32(GetProp(mpEx, "InteriorId"));
+                if (iid > 0 && iid < interiorNames.Length) SetProp(mpEx, "InteriorName", MakeMetaHash(mhType, interiorNames[iid]));
+                int gid = Convert.ToInt32(GetProp(mpEx, "GroupId"));
+                if (gid > 0 && gid < groupNames.Length) SetProp(mpEx, "GroupName", MakeMetaHash(mhType, groupNames[gid]));
             }
-            Console.Error.WriteLine($"rebuilt Type refs on {myPoints.Length} existing points");
+            Console.Error.WriteLine($"rebuilt Type/ModelSet/Interior/Group refs on {myPoints.Length} existing points");
 
             // Clone source + add the seated points with a real seated Type ref.
             var src = GetProp(node0, "MyPoint");
@@ -114,21 +120,31 @@ class Program
             var region2 = ymt2.CScenarioPointRegion;
             var lk2 = GetProp(region2, "LookUps");
             var tn2 = GetProp(lk2, "TypeNames") as Array;
+            var ms2 = GetProp(lk2, "PedModelSetNames") as Array;
+            var in2 = GetProp(lk2, "InteriorNames") as Array;
             int seatTid2 = -1;
             if (tn2 != null) for (int i = 0; i < tn2.Length; i++) if (HashVal(tn2.GetValue(i)) == seatHash) seatTid2 = i;
             var nodes2 = GetProp(ymt2.ScenarioRegion, "Nodes") as IList;
-            int withPoint2 = 0, withSeat = 0;
+            int withPoint2 = 0, withSeat = 0, withInterior2 = 0, withModel2 = 0;
             foreach (var n in nodes2)
             {
                 var m = GetProp(n, "MyPoint");
                 if (m == null) continue;
                 withPoint2++;
                 if (seatTid2 >= 0 && Convert.ToInt32(GetProp(m, "TypeId")) == seatTid2) withSeat++;
+                if (Convert.ToInt32(GetProp(m, "InteriorId")) != 0) withInterior2++;
+                if (Convert.ToInt32(GetProp(m, "ModelSetId")) != 0) withModel2++;
             }
             int expect = origWithPoint + added;
-            bool ok = tn2 != null && seatTid2 >= 0 && withPoint2 == expect && withSeat == added;
-            Console.Error.WriteLine($"reload: TypeNames={(tn2 == null ? "NULL" : tn2.Length.ToString())}, seatTypeId={seatTid2}, {withPoint2} points (expect {expect}), {withSeat} seated (expect {added})");
-            if (!ok) { Console.Error.WriteLine("VALIDATION FAILED — not writing"); return 3; }
+            // Count what the ORIGINAL had, so we assert nothing regressed.
+            int origInterior = 0, origModel = 0;
+            foreach (var n in nodes) { var m = GetProp(n, "MyPoint"); if (m == null) continue; if (Convert.ToInt32(GetProp(m, "InteriorId")) != 0) origInterior++; if (Convert.ToInt32(GetProp(m, "ModelSetId")) != 0) origModel++; }
+            bool ok = tn2 != null && seatTid2 >= 0 && withPoint2 == expect && withSeat == added
+                      && withInterior2 >= origInterior && withModel2 >= origModel
+                      && (ms2 != null && ms2.Length >= 20) && (in2 != null && in2.Length >= 3);
+            Console.Error.WriteLine($"reload: TypeNames={(tn2 == null ? "NULL" : tn2.Length.ToString())}(seat@{seatTid2}), ModelSets={(ms2 == null ? "NULL" : ms2.Length.ToString())}, Interiors={(in2 == null ? "NULL" : in2.Length.ToString())}");
+            Console.Error.WriteLine($"        points={withPoint2}/{expect}, seated={withSeat}/{added}, interior-pts={withInterior2}/{origInterior}, modelset-pts={withModel2}/{origModel}");
+            if (!ok) { Console.Error.WriteLine("VALIDATION FAILED (regression or missing) — not writing"); return 3; }
             File.WriteAllBytes(outYmt, outBytes);
             Console.Error.WriteLine($"VALIDATION PASS — wrote {outYmt} ({outBytes.Length} bytes)");
             return 0;
@@ -155,6 +171,67 @@ class Program
                 c++;
             }
             Console.Error.WriteLine($"{c} points of that type");
+            return 0;
+        }
+
+        // audit <ymt> — InteriorName / ModelSet / TimeRange distribution + how many
+        // points fall inside the station footprint (do interior points set interior?)
+        if (mode == "audit")
+        {
+            var region = ymt.CScenarioPointRegion;
+            var lk = GetProp(region, "LookUps");
+            var interiorNames = GetProp(lk, "InteriorNames") as Array;
+            Console.Error.WriteLine($"InteriorNames table: {(interiorNames == null ? "NULL" : interiorNames.Length + " entries")}");
+            if (interiorNames != null) for (int i = 0; i < interiorNames.Length; i++) Console.Error.WriteLine($"  interior[{i}] = {HashVal(interiorNames.GetValue(i))}");
+            var mdlNames = GetProp(lk, "PedModelSetNames") as Array;
+            Console.Error.WriteLine($"PedModelSetNames: {(mdlNames == null ? "NULL" : mdlNames.Length + " entries")}");
+
+            int withInterior = 0, insideBox = 0, insideWithInterior = 0;
+            foreach (var n in nodes)
+            {
+                var m = GetProp(n, "MyPoint");
+                if (m == null) continue;
+                int iid = Convert.ToInt32(GetProp(m, "InteriorId"));
+                var p = ToVec(GetProp(m, "Position"));
+                bool inside = p.X > 440 && p.X < 485 && p.Y > -985 && p.Y < -925 && p.Z > 28;
+                if (iid != 0) withInterior++;
+                if (inside) { insideBox++; if (iid != 0) insideWithInterior++; }
+            }
+            Console.Error.WriteLine($"points: {withInterior} have InteriorId!=0; {insideBox} inside station box, of which {insideWithInterior} set an interior");
+            // Which interior do points NEAR the press room (x>470,y>-945) use?
+            var seen = new System.Collections.Generic.Dictionary<uint, int>();
+            foreach (var n in nodes)
+            {
+                var m = GetProp(n, "MyPoint");
+                if (m == null) continue;
+                var p = ToVec(GetProp(m, "Position"));
+                if (!(p.X > 468 && p.Y > -950 && p.Y < -925 && p.Z > 28)) continue;
+                uint inm = HashVal(GetProp(m, "InteriorName"));
+                seen[inm] = seen.TryGetValue(inm, out var c) ? c + 1 : 1;
+            }
+            Console.Error.WriteLine("InteriorName used by points near the press room:");
+            foreach (var kv in seen) Console.Error.WriteLine($"  {kv.Key} -> {kv.Value} points");
+            return 0;
+        }
+
+        if (mode == "probe6")
+        {
+            var asm = typeof(YmtFile).Assembly;
+            var mp = GetProp(node0, "MyPoint");
+            // find a point that USES a model set + interior + group
+            foreach (var n in nodes)
+            {
+                var m = GetProp(n, "MyPoint");
+                if (m == null) continue;
+                if (Convert.ToInt32(GetProp(m, "ModelSetId")) != 0 || Convert.ToInt32(GetProp(m, "InteriorId")) != 0) { mp = m; break; }
+            }
+            Console.Error.WriteLine("sample point: ModelSetId=" + GetProp(mp, "ModelSetId") + " ModelSet=" + GetProp(mp, "ModelSet") + " InteriorId=" + GetProp(mp, "InteriorId") + " InteriorName=" + GetProp(mp, "InteriorName") + " GroupId=" + GetProp(mp, "GroupId") + " GroupName=" + GetProp(mp, "GroupName"));
+            var ms = GetProp(mp, "ModelSet");
+            Console.Error.WriteLine("ModelSet ref type = " + (ms?.GetType().FullName ?? "null"));
+            var amsType = asm.GetType("CodeWalker.World.AmbientModelSet") ?? mp.GetType().GetProperty("ModelSet").PropertyType;
+            Console.Error.WriteLine("AmbientModelSet = " + amsType.FullName);
+            foreach (var c in amsType.GetConstructors()) Console.Error.WriteLine("  ctor(" + string.Join(",", Array.ConvertAll(c.GetParameters(), pp => pp.ParameterType.Name)) + ")");
+            foreach (var p in amsType.GetProperties(BindingFlags.Public | BindingFlags.Instance)) Console.Error.WriteLine($"  prop {p.PropertyType.Name} {p.Name} (set={p.CanWrite})");
             return 0;
         }
 
@@ -340,6 +417,24 @@ class Program
         if (h != null) return Convert.ToUInt32(h);
         try { return Convert.ToUInt32(mh); } catch { return 0; }
     }
+    static uint[] ReadHashes(Array arr)
+    {
+        if (arr == null) return new uint[0];
+        var o = new uint[arr.Length];
+        for (int i = 0; i < arr.Length; i++) o[i] = HashVal(arr.GetValue(i));
+        return o;
+    }
+
+    // Fabricate an AmbientModelSet ref (same pattern as ScenarioType) so Save
+    // rebuilds the PedModelSetNames table from it.
+    static object MakeModelSetRef(Assembly asm, Type mhType, uint hash)
+    {
+        var t = asm.GetType("CodeWalker.World.AmbientModelSet");
+        var o = Activator.CreateInstance(t);
+        t.GetProperty("NameHash").SetValue(o, MakeMetaHash(mhType, hash));
+        return o;
+    }
+
     // Fabricate a ScenarioTypeRef backed by a minimal ScenarioType with the given
     // hash, so YmtFile.Save() rebuilds the TypeNames lookup table from it.
     static object MakeTypeRef(Assembly asm, Type mhType, uint hash, string name)
