@@ -75,9 +75,11 @@ function makeCard(model) {
     var thumb = document.createElement('div');
     thumb.className = 'thumb';
     var img = document.createElement('img');
-    img.loading = 'lazy';
     img.alt = '';
-    img.src = thumbUrl(model);
+    // Defer the real URL — loadVisible() assigns src when the card nears the
+    // viewport. Native loading="lazy" is unreliable in FiveM's CEF, so we do it
+    // ourselves with getBoundingClientRect (works on every CEF build).
+    img.setAttribute('data-src', thumbUrl(model));
     img.onerror = function () { thumb.classList.add('fallback'); img.remove(); };
     thumb.appendChild(img);
 
@@ -89,6 +91,29 @@ function makeCard(model) {
     card.appendChild(name);
     card.addEventListener('click', function () { spawn(model); });
     return card;
+}
+
+// CEF-safe lazy image loading. Assigns each img.src only when its card is within
+// (or near) the grid viewport, measured on scroll — no native loading="lazy" and
+// no IntersectionObserver, both of which misbehave in FiveM's CEF. Keeps a big
+// category from firing hundreds of requests at once while guaranteeing the
+// visible thumbnails actually load.
+var lazyTimer = null;
+function loadVisible() {
+    var gr = el.grid.getBoundingClientRect();
+    var top = gr.top - 350, bottom = gr.bottom + 350;   // prefetch buffer
+    var imgs = el.grid.querySelectorAll('img[data-src]');
+    for (var i = 0; i < imgs.length; i++) {
+        var r = imgs[i].getBoundingClientRect();
+        if (r.bottom >= top && r.top <= bottom) {
+            imgs[i].src = imgs[i].getAttribute('data-src');
+            imgs[i].removeAttribute('data-src');
+        }
+    }
+}
+function scheduleLoad() {
+    if (lazyTimer) return;
+    lazyTimer = setTimeout(function () { lazyTimer = null; loadVisible(); }, 80);
 }
 
 // capped=true only for search (bounds huge result sets). Category browsing
@@ -110,6 +135,8 @@ function renderGrid(models, ctxLabel, capped) {
     var n = capped ? Math.min(models.length, SEARCH_CAP) : models.length;
     for (var i = 0; i < n; i++) frag.appendChild(makeCard(models[i]));
     el.grid.appendChild(frag);
+    loadVisible();                        // load the first screenful now
+    setTimeout(loadVisible, 60);          // and again once layout has settled
     if (capped && models.length > n) {
         var more = document.createElement('div');
         more.className = 'empty';
@@ -214,6 +241,7 @@ el.search.addEventListener('input', function (e) {
 });
 el.clear.addEventListener('click', function () { el.search.value = ''; runSearch(''); el.search.focus(); });
 el.close.addEventListener('click', function () { hide(); post('close'); });
+el.grid.addEventListener('scroll', scheduleLoad);   // load thumbnails as you scroll
 
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') { hide(); post('close'); }

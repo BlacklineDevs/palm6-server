@@ -115,14 +115,17 @@ html, body {
     transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
 .card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 10px 22px rgba(0,0,0,0.4); }
+/* padding-bottom square instead of aspect-ratio — works on every CEF build, so
+   the thumb can never collapse to 0 height and hide a loaded image. */
 .thumb {
-    position: relative; width: 100%; aspect-ratio: 1 / 1;
-    background: #0a0e14 center/cover no-repeat;
-    display: flex; align-items: center; justify-content: center;
+    position: relative; width: 100%; height: 0; padding-bottom: 100%;
+    background: #0a0e14;
 }
-.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 .thumb.fallback::after {
-    content: "◫"; font-size: 2.2rem; color: var(--line-2);
+    content: "◫"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2.2rem; color: var(--line-2);
 }
 .name {
     padding: 0.45rem 0.55rem; font-size: 0.7rem; color: var(--text);
