@@ -24,6 +24,8 @@ local editing = false
 local placed = {}            -- { { obj, model, x, y, z, rx, ry, rz }, ... }
 local sel = nil              -- index into placed of the selected object
 local catNames, catIdx, propIdx = {}, 1, 0
+local undoStack = {}         -- { {type='spawn'|'delete', rec, index}, ... }
+local axis = 'z'             -- which rotation axis Q/E turns (z=yaw, x=pitch, y=roll)
 
 for name in pairs(Config.QuickProps) do catNames[#catNames + 1] = name end
 table.sort(catNames)
@@ -33,15 +35,19 @@ local function selRec() return sel and placed[sel] or nil end
 
 local function selectLast() sel = #placed > 0 and #placed or nil end
 
-local function spawnProp(model, x, y, z)
+local function highlight()
+    for i, r in ipairs(placed) do Game.SetObjectAlpha(r.obj, i == sel and 200 or nil) end
+end
+
+local function spawnProp(model, x, y, z, rx, ry, rz)
     local obj = Game.SpawnObject(model, x, y, z)
     if not obj then Game.Notify('bad model: ' .. tostring(model), 'error') return end
-    placed[#placed + 1] = { obj = obj, model = model, x = x, y = y, z = z, rx = 0.0, ry = 0.0, rz = 0.0 }
+    local rec = { obj = obj, model = model, x = x, y = y, z = z, rx = rx or 0.0, ry = ry or 0.0, rz = rz or 0.0 }
+    placed[#placed + 1] = rec
+    Game.SetObjectTransform(obj, rec.x, rec.y, rec.z, rec.rx, rec.ry, rec.rz)
     selectLast()
-    if sel then
-        -- deselect visual on others, highlight the new one
-        for i, r in ipairs(placed) do Game.SetObjectAlpha(r.obj, i == sel and 200 or nil) end
-    end
+    highlight()
+    undoStack[#undoStack + 1] = { type = 'spawn', rec = rec }
 end
 
 local function spawnAtAim(model)
@@ -54,18 +60,37 @@ local function applyTransform(r)
     Game.SetObjectTransform(r.obj, r.x, r.y, r.z, r.rx, r.ry, r.rz)
 end
 
-local function deleteSelected()
+local function deleteSelected(noUndo)
     local r = selRec()
     if not r then return end
+    if not noUndo then undoStack[#undoStack + 1] = { type = 'delete', rec = r } end
     Game.DeleteObject(r.obj)
     table.remove(placed, sel)
     selectLast()
-    if sel then Game.SetObjectAlpha(placed[sel].obj, 200) end
+    highlight()
+end
+
+local function duplicateSelected()
+    local r = selRec()
+    if not r then return end
+    spawnProp(r.model, r.x + 0.5, r.y + 0.5, r.z, r.rx, r.ry, r.rz)
+end
+
+local function undo()
+    local op = table.remove(undoStack)
+    if not op then Game.Notify('nothing to undo') return end
+    if op.type == 'spawn' then
+        for i, rr in ipairs(placed) do if rr == op.rec then sel = i; deleteSelected(true); break end end
+    elseif op.type == 'delete' then
+        local o = op.rec
+        spawnProp(o.model, o.x, o.y, o.z, o.rx, o.ry, o.rz)
+        table.remove(undoStack)   -- drop the spawn this just pushed
+    end
 end
 
 local function clearAll()
     for _, r in ipairs(placed) do Game.DeleteObject(r.obj) end
-    placed = {}; sel = nil
+    placed = {}; sel = nil; undoStack = {}
 end
 
 -- ---- export ---------------------------------------------------------------
@@ -117,6 +142,9 @@ RegisterCommand('matprev', function()
 end, false)
 RegisterCommand('matcat', function() catIdx = catIdx % #catNames + 1; propIdx = 0; Game.Notify('category: ' .. curCat()) end, false)
 RegisterCommand('matdel', function() if editing then deleteSelected() end end, false)
+RegisterCommand('matdup', function() if editing then duplicateSelected() end end, false)
+RegisterCommand('matundo', function() if editing then undo() end end, false)
+RegisterCommand('mataxis', function() axis = (axis == 'z' and 'x') or (axis == 'x' and 'y') or 'z'; Game.Notify('rotate axis: ' .. (axis == 'z' and 'yaw' or axis == 'x' and 'pitch' or 'roll')) end, false)
 RegisterCommand('mapclear', function() if editing then clearAll() Game.Notify('cleared') end end, false)
 RegisterCommand('matrot', function(_, args)
     local r = selRec()
@@ -152,9 +180,9 @@ local function drawHud()
     local r = selRec()
     txt(r and ('sel: ' .. r.model) or 'sel: (none)', 0.02, 0.20, 0.34)
     if r then txt(('pos %.2f %.2f %.2f  yaw %.0f'):format(r.x, r.y, r.z, r.rz), 0.02, 0.225, 0.32, 180, 220, 255) end
-    txt(('cat: %s   placed: %d'):format(curCat(), #placed), 0.02, 0.25, 0.32)
+    txt(('cat: %s   placed: %d   rot-axis: %s'):format(curCat(), #placed, axis == 'z' and 'yaw' or axis == 'x' and 'pitch' or 'roll'), 0.02, 0.25, 0.32)
     txt('~s~LMB carry  Arrows move  Shift+Up/Dn Z  Q/E rot  Space snap', 0.02, 0.285, 0.30, 180, 220, 255)
-    txt('~s~/prop <m>  /matnext  /matcat  /matpick  /matdel  /mapexport', 0.02, 0.31, 0.30, 180, 220, 255)
+    txt('~s~/prop /matnext /mataxis /matdup /matundo /matdel /mapexport', 0.02, 0.31, 0.30, 180, 220, 255)
 end
 
 -- ---- live edit loop -------------------------------------------------------
@@ -183,8 +211,10 @@ CreateThread(function()
                 if IsControlPressed(0, 173) then if shift then r.z = r.z - step else r.x = r.x - fx * step; r.y = r.y - fy * step end moved = true end
                 if IsControlPressed(0, 174) then r.x = r.x - fy * step; r.y = r.y + fx * step; moved = true end
                 if IsControlPressed(0, 175) then r.x = r.x + fy * step; r.y = r.y - fx * step; moved = true end
-                if IsDisabledControlPressed(0, 44) then r.rz = (r.rz - (shift and Config.Step.rotFine or Config.Step.rot)) % 360.0; moved = true end
-                if IsDisabledControlPressed(0, 38) then r.rz = (r.rz + (shift and Config.Step.rotFine or Config.Step.rot)) % 360.0; moved = true end
+                local rstep = shift and Config.Step.rotFine or Config.Step.rot
+                local ak = 'r' .. axis
+                if IsDisabledControlPressed(0, 44) then r[ak] = (r[ak] - rstep) % 360.0; moved = true end   -- Q
+                if IsDisabledControlPressed(0, 38) then r[ak] = (r[ak] + rstep) % 360.0; moved = true end   -- E
                 if IsDisabledControlJustPressed(0, 22) then
                     local sz = Game.SurfaceZBelow(r.x, r.y, r.z)
                     if sz then r.z = sz; moved = true end
