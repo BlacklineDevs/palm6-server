@@ -63,6 +63,20 @@ function MapEd.isEditing() return editing end
 function MapEd.spawnAt(model, x, y, z, rx, ry, rz) spawnProp(model, x, y, z, rx, ry, rz) end
 function MapEd.selected() return selRec() end
 function MapEd.setGizmo(b) gizmoActive = b and true or false end
+function MapEd.deleteInRadius(x, y, z, rad)
+    local rr, n = rad * rad, 0
+    for i = #placed, 1, -1 do
+        local r = placed[i]
+        if (r.x - x) ^ 2 + (r.y - y) ^ 2 + (r.z - z) ^ 2 <= rr then
+            undoStack[#undoStack + 1] = { type = 'delete', rec = r }
+            Game.DeleteObject(r.obj)
+            table.remove(placed, i)
+            n = n + 1
+        end
+    end
+    selectLast(); highlight()
+    return n
+end
 
 local function applyTransform(r)
     Game.SetObjectTransform(r.obj, r.x, r.y, r.z, r.rx, r.ry, r.rz)

@@ -62,6 +62,19 @@ RegisterCommand('matgizmo', function()
     Game.Notify('gizmo applied')
 end, false)
 
+-- --- area delete -----------------------------------------------------------
+-- /matareadel <radius> — delete every placed prop within <radius> of where you
+-- aim. Targets our own placements (not vanilla world props — use /materase for
+-- those). One notify with the count.
+RegisterCommand('matareadel', function(_, args)
+    if not MapEd.isEditing() then return end
+    local rad = math.max(0.5, tonumber(args[1]) or 5.0)
+    local x, y, z = Game.CameraAimPoint(40.0)
+    if not x then Game.Notify('aim somewhere', 'error') return end
+    local n = MapEd.deleteInRadius(x, y, z, rad)
+    Game.Notify(('deleted %d props within %.1fm'):format(n, rad), n > 0 and 'success' or 'inform')
+end, false)
+
 -- --- per-prop toggles ------------------------------------------------------
 RegisterCommand('matfreeze', function()
     local r = MapEd.selected(); if not r then return end
