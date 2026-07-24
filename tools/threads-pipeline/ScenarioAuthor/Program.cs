@@ -41,6 +41,9 @@ class Program
             string coordsFile = args[2];
             string scenName = args[3];
             string outYmt = args[4];
+            // optional: interior hash the new points belong to (so the game spawns
+            // them when that MLO interior is loaded — else deep-interior points cull).
+            uint interiorHash = args.Length > 5 ? uint.Parse(args[5]) : 0;
 
             var asm = typeof(YmtFile).Assembly;
             var region = ymt.CScenarioPointRegion;
@@ -98,6 +101,7 @@ class Program
                 SetProp(np, "TimeStart", (byte)0);
                 SetProp(np, "TimeEnd", (byte)24);
                 SetProp(np, "Radius", (byte)2);
+                if (interiorHash != 0) SetProp(np, "InteriorName", MakeMetaHash(mhType, interiorHash));
                 addMy.Invoke(container, new[] { np });
                 added++;
             }
@@ -211,6 +215,27 @@ class Program
             }
             Console.Error.WriteLine("InteriorName used by points near the press room:");
             foreach (var kv in seen) Console.Error.WriteLine($"  {kv.Key} -> {kv.Value} points");
+            // Every interior point: group by InteriorName, show a sample position so we
+            // can see which interior hash the MRPD-building points use.
+            var inArr = GetProp(lk, "InteriorNames") as Array;
+            var byInt = new System.Collections.Generic.Dictionary<int, (int n, Vector3 lo, Vector3 hi)>();
+            foreach (var n in nodes)
+            {
+                var m = GetProp(n, "MyPoint");
+                if (m == null) continue;
+                int iid = Convert.ToInt32(GetProp(m, "InteriorId"));
+                if (iid == 0) continue;
+                var p = ToVec(GetProp(m, "Position"));
+                if (byInt.TryGetValue(iid, out var e))
+                    byInt[iid] = (e.n + 1, new Vector3(Math.Min(e.lo.X, p.X), Math.Min(e.lo.Y, p.Y), Math.Min(e.lo.Z, p.Z)), new Vector3(Math.Max(e.hi.X, p.X), Math.Max(e.hi.Y, p.Y), Math.Max(e.hi.Z, p.Z)));
+                else byInt[iid] = (1, p, p);
+            }
+            Console.Error.WriteLine("Interior points grouped by InteriorId (id -> hash, count, bbox):");
+            foreach (var kv in byInt)
+            {
+                uint h = kv.Key < inArr.Length ? HashVal(inArr.GetValue(kv.Key)) : 0;
+                Console.Error.WriteLine($"  id{kv.Key} (hash {h}) -> {kv.Value.n} pts, x[{kv.Value.lo.X:F0}..{kv.Value.hi.X:F0}] y[{kv.Value.lo.Y:F0}..{kv.Value.hi.Y:F0}] z[{kv.Value.lo.Z:F0}..{kv.Value.hi.Z:F0}]");
+            }
             return 0;
         }
 
