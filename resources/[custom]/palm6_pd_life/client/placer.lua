@@ -28,6 +28,7 @@
 local preview = nil          -- { ped, x, y, z, h, scen, seated }
 local role = 'cop'
 local scenIdx = 1
+local wasMoving = false      -- for live-move vs settle-on-release
 
 -- Curated scenarios you actually want in a station, cyclable with PageUp/Down.
 local SCENARIOS = {
@@ -149,7 +150,10 @@ CreateThread(function()
             DisableControlAction(0, 34, true); DisableControlAction(0, 35, true)  -- move left/right
 
             local step = 0.03
-            local up = IsControlPressed(0, 21)   -- Shift held = height mode
+            -- Shift's sprint action is disabled above, so read the KEY via the
+            -- disabled-control API (IsControlPressed returns false for a disabled
+            -- control — that's why Shift+Down fell through to "move backward").
+            local up = IsDisabledControlPressed(0, 21)   -- Shift held = height mode
             local moved = false
             -- forward vector from current heading (GTA: heading 0 = +Y, CCW)
             local rad = math.rad(preview.h)
@@ -168,7 +172,15 @@ CreateThread(function()
             if IsControlPressed(0, 175) then preview.x = preview.x + fy * step; preview.y = preview.y - fx * step; moved = true end -- Right strafe
             if IsControlPressed(0, 44) then preview.h = (preview.h - 1.5) % 360.0; moved = true end  -- Q rotate
             if IsControlPressed(0, 38) then preview.h = (preview.h + 1.5) % 360.0; moved = true end  -- E rotate
-            if moved then reposition() end
+            -- Live-move while a key is held (cheap, no anim restart); re-settle the
+            -- scenario pose once, on release.
+            if moved then
+                Game.MovePed(preview.ped, preview.x, preview.y, preview.z, preview.h)
+                wasMoving = true
+            elseif wasMoving then
+                reposition()
+                wasMoving = false
+            end
             if IsControlJustPressed(0, 201) then                    -- Enter = quick save
                 local line = configLine()
                 Game.SetClipboard(line)

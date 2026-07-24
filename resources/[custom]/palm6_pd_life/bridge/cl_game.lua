@@ -118,6 +118,15 @@ function Game.SetPreviewAlpha(ped, a)
     if ped and DoesEntityExist(ped) then SetEntityAlpha(ped, a or 200, false) end
 end
 
+-- Cheap live move: just slide/rotate the entity (keeps its current pose). Used
+-- every frame while nudging so the scenario anim doesn't restart (no jitter).
+function Game.MovePed(ped, x, y, z, heading)
+    if not (ped and DoesEntityExist(ped)) then return end
+    FreezeEntityPosition(ped, false)
+    SetEntityCoordsNoOffset(ped, x + 0.0, y + 0.0, z + 0.0, false, false, false)
+    SetEntityHeading(ped, heading + 0.0)
+end
+
 -- Reposition an already-spawned ped (live nudge in the placement editor). Works
 -- on frozen entities; re-warps a seated scenario so the sit re-settles on the spot.
 function Game.RepositionPed(ped, x, y, z, heading, scenario, seated)
