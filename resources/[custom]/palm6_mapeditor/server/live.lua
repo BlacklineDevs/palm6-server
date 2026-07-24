@@ -502,6 +502,21 @@ RegisterNetEvent('palm6_mapeditor:live:wipeMap', function(map)
 end)
 
 -- ---------------------------------------------------------------------------
+-- Export a live map: hand the requesting admin the prop ids for that map. The
+-- client filters its own liveObjs (which hold the real spawned entities, so the
+-- ymap quaternion export is accurate) and writes the files. This is what lets a
+-- map built across many sessions be exported to CodeWalker ymap / Lua / JSON.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:exportRequest', function(mapName)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    mapName = cleanMap(mapName)
+    local ids = {}
+    for id, r in pairs(live) do if r.map == mapName then ids[#ids + 1] = id end end
+    TriggerClientEvent('palm6_mapeditor:live:exportIds', src, mapName, ids)
+end)
+
+-- ---------------------------------------------------------------------------
 -- List: per-map counts, back to the requester as a single notify.
 -- ---------------------------------------------------------------------------
 RegisterNetEvent('palm6_mapeditor:live:list', function()

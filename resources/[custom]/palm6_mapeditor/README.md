@@ -33,7 +33,8 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/matfreeze` `/matcollision` | toggle freeze / collision on selected |
 | `/matgrid <rows> <cols> <spacing>` | mass grid-spawn the selected model |
 | `/materase` / `/materaseundo` | hide the vanilla world prop you look at / restore |
-| `/mapexport [name]` | export Lua + JSON + CodeWalker ymap.xml |
+| `/mapexport [name]` | export your **session** to Lua + JSON + CodeWalker ymap.xml |
+| `/mapexportlive <mapname>` | export the accumulated **live map** (built across sessions) to Lua/JSON/ymap.xml |
 | `/mapload <file>` | reload a saved export back into the editor (sessions) |
 | `/matlight [point\|spot]` + `/matlightcolor/range/int` | light editor |
 | `/matareadel <radius>` | delete placed props within radius of aim |

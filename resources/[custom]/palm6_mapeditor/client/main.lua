@@ -160,14 +160,19 @@ function MapEd.clearSession() clearAll() end
 -- ---- export ---------------------------------------------------------------
 local function lightList() return (MapEd.getLights and MapEd.getLights()) or {} end
 
-local function buildLua()
+-- The builders take an optional record list (each { obj, model, x,y,z, rx,ry,rz })
+-- and light list; they default to the current session so /mapexport is unchanged,
+-- but /mapexportlive can pass the live map's objects instead. Records carry a live
+-- entity handle in .obj, so the ymap quaternion read works for either source.
+local function buildLua(recs, lg)
+    recs = recs or placed
+    lg = lg or lightList()
     local out = { 'local objects = {' }
-    for _, r in ipairs(placed) do
+    for _, r in ipairs(recs) do
         out[#out + 1] = ("    { model = `%s`, coords = vector3(%.3f, %.3f, %.3f), rot = vector3(%.2f, %.2f, %.2f) },")
             :format(r.model, r.x, r.y, r.z, r.rx, r.ry, r.rz)
     end
     out[#out + 1] = '}'
-    local lg = lightList()
     if #lg > 0 then
         out[#out + 1] = '\nlocal lights = {'
         for _, l in ipairs(lg) do
@@ -179,20 +184,23 @@ local function buildLua()
     return table.concat(out, '\n')
 end
 
-local function buildJson()
+local function buildJson(recs, lg)
+    recs = recs or placed
+    lg = lg or lightList()
     local objs = {}
-    for _, r in ipairs(placed) do
+    for _, r in ipairs(recs) do
         objs[#objs + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
     end
-    return json.encode({ objects = objs, lights = lightList() })
+    return json.encode({ objects = objs, lights = lg })
 end
 
 -- CodeWalker .ymap.xml — the streamable format (import in CodeWalker RPF Explorer
 -- -> right-click -> Import XML). This is the differentiator most editors can't do.
-local function buildYmap(name)
+local function buildYmap(name, recs)
+    recs = recs or placed
     local ex = { minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9 }
     local ents = {}
-    for _, r in ipairs(placed) do
+    for _, r in ipairs(recs) do
         local qx, qy, qz, qw = Game.GetObjectQuat(r.obj)
         -- CEntityDef stores the INVERSE (conjugate) of the world quaternion.
         ents[#ents + 1] = table.concat({
@@ -234,6 +242,13 @@ local function buildYmap(name)
         '  <block><version value="0" /><flags value="0" /><name>palm6_mapeditor</name><exportedBy>palm6</exportedBy><owner></owner><time></time></block>',
         '</CMapData>',
     }, '\n')
+end
+
+-- Build all three export formats from an arbitrary record list — used by
+-- client/live.lua's /mapexportlive to export the accumulated live map (not just
+-- the session), so the ymap pipeline works over a map built across sessions.
+function MapEd.buildExports(recs, lg, name)
+    return buildLua(recs, lg), buildJson(recs, lg), buildYmap(name, recs)
 end
 
 RegisterCommand('mapexport', function(_, args)

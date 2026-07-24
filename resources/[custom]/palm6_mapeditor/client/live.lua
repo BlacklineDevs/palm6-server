@@ -16,6 +16,7 @@
 -- COMMANDS
 --   /mapcommit [map]   publish your session — props AND lights — to a live map
 --   /maplist           list live maps and their prop/erase/light counts
+--   /mapexportlive <m> export a whole live map to Lua/JSON/CodeWalker ymap.xml
 --   /maplivedel        remove the LIVE prop you're aiming at (everywhere)
 --   /maplivegrab       grab the LIVE prop you aim at back into your session to edit it
 --   /maplightdel       remove the LIVE light nearest your aim (everywhere)
@@ -211,6 +212,28 @@ RegisterCommand('maplightdel', function()
 end, false)
 
 RegisterCommand('maplist', function() TriggerServerEvent('palm6_mapeditor:live:list') end, false)
+
+-- Export the accumulated LIVE map (built across sessions) to Lua/JSON/ymap.xml.
+-- The server returns the map's prop ids; we build the files from the matching
+-- live objects (real entities -> accurate ymap quaternions), then save them.
+RegisterCommand('mapexportlive', function(_, args)
+    if not args[1] then Game.Notify('usage: /mapexportlive <mapname>', 'error'); return end
+    TriggerServerEvent('palm6_mapeditor:live:exportRequest', args[1])
+end, false)
+
+RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
+    if type(ids) ~= 'table' or #ids == 0 then Game.Notify('live map "' .. tostring(mapName) .. '" has no props', 'error'); return end
+    if not (MapEd and MapEd.buildExports) then return end
+    local want = {}
+    for _, id in ipairs(ids) do want[tonumber(id)] = true end
+    local recs = {}
+    for id, r in pairs(liveObjs) do if want[id] then recs[#recs + 1] = r end end
+    if #recs == 0 then Game.Notify('live map not streamed in yet — move nearer / retry', 'error'); return end
+    local lua, js, ymap = MapEd.buildExports(recs, {}, mapName)
+    Game.SetClipboard(lua)
+    TriggerServerEvent('palm6_mapeditor:save', mapName, lua, js, ymap)
+    Game.Notify(('exporting live map "%s" — %d/%d props (.lua/.json/.ymap.xml)'):format(mapName, #recs, #ids), 'inform')
+end)
 
 RegisterCommand('mapwipe', function(_, args)
     if not args[1] then Game.Notify('usage: /mapwipe <map>', 'error'); return end
