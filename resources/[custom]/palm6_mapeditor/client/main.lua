@@ -102,6 +102,8 @@ local function clearAll()
 end
 
 -- ---- export ---------------------------------------------------------------
+local function lightList() return (MapEd.getLights and MapEd.getLights()) or {} end
+
 local function buildLua()
     local out = { 'local objects = {' }
     for _, r in ipairs(placed) do
@@ -109,15 +111,24 @@ local function buildLua()
             :format(r.model, r.x, r.y, r.z, r.rx, r.ry, r.rz)
     end
     out[#out + 1] = '}'
+    local lg = lightList()
+    if #lg > 0 then
+        out[#out + 1] = '\nlocal lights = {'
+        for _, l in ipairs(lg) do
+            out[#out + 1] = ("    { coords = vector3(%.3f, %.3f, %.3f), color = {%d, %d, %d}, range = %.1f, intensity = %.1f, kind = '%s' },")
+                :format(l.x, l.y, l.z, l.r, l.g, l.b, l.range, l.intensity, l.kind)
+        end
+        out[#out + 1] = '}'
+    end
     return table.concat(out, '\n')
 end
 
 local function buildJson()
-    local items = {}
+    local objs = {}
     for _, r in ipairs(placed) do
-        items[#items + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+        objs[#objs + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
     end
-    return json.encode(items)
+    return json.encode({ objects = objs, lights = lightList() })
 end
 
 -- CodeWalker .ymap.xml — the streamable format (import in CodeWalker RPF Explorer

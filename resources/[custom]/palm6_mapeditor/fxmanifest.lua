@@ -17,6 +17,7 @@ client_scripts {
     'client/main.lua',      -- editor core
     'client/browser.lua',   -- prop catalog + fuzzy search
     'client/tools.lua',     -- world eraser / mass spawn / per-prop toggles
+    'client/lights.lua',    -- light editor (point/spot, per-frame draw)
 }
 
 server_scripts {

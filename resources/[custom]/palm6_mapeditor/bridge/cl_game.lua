@@ -149,3 +149,14 @@ end
 function Game.Chat(tag, line)
     TriggerEvent('chat:addMessage', { args = { tag, line } })
 end
+
+-- Lights are drawn per-frame (not entities). These are called every frame from
+-- the light render loop over the synced light defs.
+function Game.DrawPointLight(x, y, z, r, g, b, range, intensity)
+    DrawLightWithRange(x + 0.0, y + 0.0, z + 0.0, math.floor(r), math.floor(g), math.floor(b), range + 0.0, intensity + 0.0)
+end
+
+function Game.DrawSpot(x, y, z, dx, dy, dz, r, g, b, dist, brightness, radius, falloff)
+    DrawSpotLight(x + 0.0, y + 0.0, z + 0.0, dx + 0.0, dy + 0.0, dz + 0.0,
+        math.floor(r), math.floor(g), math.floor(b), dist + 0.0, brightness + 0.0, 3.0, radius + 0.0, falloff + 0.0)
+end
