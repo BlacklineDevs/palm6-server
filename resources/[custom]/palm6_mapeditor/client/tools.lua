@@ -45,6 +45,23 @@ RegisterCommand('matgrid', function(_, args)
     Game.Notify(('grid spawned %d (%dx%d @ %.1f)'):format(n, rows, cols, sp), 'success')
 end, false)
 
+-- --- visual gizmo (object_gizmo) -------------------------------------------
+-- /matgizmo — grab the selected object with translate/rotate/scale handles
+-- (W/R/S, Q world/local, LAlt ground, Enter confirm). Syncs the record back.
+RegisterCommand('matgizmo', function()
+    local r = MapEd.selected()
+    if not r then Game.Notify('select a prop first (/matpick)', 'error') return end
+    MapEd.setGizmo(true)
+    Game.SetFreeze(r.obj, false)      -- the gizmo moves via SetEntityMatrix
+    local ok = Game.UseGizmo(r.obj)   -- blocks until Enter; editor loop stands down
+    Game.SetFreeze(r.obj, true)
+    MapEd.setGizmo(false)
+    if not ok then Game.Notify('object_gizmo not started', 'error') return end
+    local x, y, z, rx, ry, rz = Game.GetObjectTransform(r.obj)
+    r.x, r.y, r.z, r.rx, r.ry, r.rz = x, y, z, rx, ry, rz
+    Game.Notify('gizmo applied')
+end, false)
+
 -- --- per-prop toggles ------------------------------------------------------
 RegisterCommand('matfreeze', function()
     local r = MapEd.selected(); if not r then return end

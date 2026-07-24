@@ -26,6 +26,7 @@ local sel = nil              -- index into placed of the selected object
 local catNames, catIdx, propIdx = {}, 1, 0
 local undoStack = {}         -- { {type='spawn'|'delete', rec, index}, ... }
 local axis = 'z'             -- which rotation axis Q/E turns (z=yaw, x=pitch, y=roll)
+local gizmoActive = false    -- while object_gizmo has control, the loop stands down
 
 for name in pairs(Config.QuickProps) do catNames[#catNames + 1] = name end
 table.sort(catNames)
@@ -61,6 +62,7 @@ MapEd = {}
 function MapEd.isEditing() return editing end
 function MapEd.spawnAt(model, x, y, z, rx, ry, rz) spawnProp(model, x, y, z, rx, ry, rz) end
 function MapEd.selected() return selRec() end
+function MapEd.setGizmo(b) gizmoActive = b and true or false end
 
 local function applyTransform(r)
     Game.SetObjectTransform(r.obj, r.x, r.y, r.z, r.rx, r.ry, r.rz)
@@ -224,8 +226,8 @@ RegisterCommand('matpick', function()
         if not bestD or d < bestD then bestD, best = d, i end
     end
     if best then
-        for i, r in ipairs(placed) do Game.SetObjectAlpha(r.obj, i == best and 200 or nil) end
         sel = best
+        highlight()
         Game.Notify('selected ' .. placed[best].model)
     end
 end, false)
@@ -250,7 +252,7 @@ end
 -- ---- live edit loop -------------------------------------------------------
 CreateThread(function()
     while true do
-        if editing then
+        if editing and not gizmoActive then   -- stand down while object_gizmo has control
             drawHud()
             DisableControlAction(0, 21, true)  -- sprint (Shift modifier)
             DisableControlAction(0, 22, true)  -- jump (Space snap)

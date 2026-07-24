@@ -44,6 +44,23 @@ function Game.SetObjectTransform(obj, x, y, z, rx, ry, rz)
     SetEntityRotation(obj, rx + 0.0, ry + 0.0, rz + 0.0, 2, true)
 end
 
+-- Read an object's current transform back (after the visual gizmo moved it).
+function Game.GetObjectTransform(obj)
+    if not (obj and DoesEntityExist(obj)) then return 0, 0, 0, 0, 0, 0 end
+    local c = GetEntityCoords(obj)
+    local r = GetEntityRotation(obj, 2)
+    return c.x, c.y, c.z, r.x, r.y, r.z
+end
+
+-- Hand an entity to object_gizmo's visual handles (translate/rotate/scale,
+-- world/local, snap-to-ground). Blocks until the user presses Enter.
+function Game.UseGizmo(obj)
+    if GetResourceState('object_gizmo') ~= 'started' then return false end
+    if not (obj and DoesEntityExist(obj)) then return false end
+    pcall(function() exports.object_gizmo:useGizmo(obj) end)
+    return true
+end
+
 function Game.SetObjectAlpha(obj, a)
     if obj and DoesEntityExist(obj) then
         if a then SetEntityAlpha(obj, a, false) else ResetEntityAlpha(obj) end
