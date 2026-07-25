@@ -32,11 +32,16 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/matrot <rx> <ry> <rz>` | set exact rotation |
 | `/matfreeze` `/matcollision` | toggle freeze / collision on selected |
 | `/matgrid <rows> <cols> <spacing>` | mass grid-spawn the selected model |
+| `/matscatter <count> <radius>` | scatter N copies of the selected model with random yaw |
+| `/matcopy` | copy the selected prop's coords (vector4) to clipboard |
+| `/mattp` | teleport yourself to the selected prop |
 | `/materase` / `/materaseundo` | hide the vanilla world prop you look at / restore |
 | `/mapexport [name]` | export your **session** to Lua + JSON + CodeWalker ymap.xml |
 | `/mapexportlive <mapname>` | export the accumulated **live map** (built across sessions) to Lua/JSON/ymap.xml |
 | `/mapload <file>` | reload a saved export back into the editor (sessions) |
-| `/matlight [point\|spot]` + `/matlightcolor/range/int` | light editor |
+| `/matlight [point\|spot]` | place a point/spot light at your aim |
+| `/matlightcolor <r> <g> <b>` `/matlightrange <n>` `/matlightint <n>` | tune the selected light |
+| `/matlightpick` / `/matlightdel` | select the light nearest aim / delete the selected light |
 | `/matareadel <radius>` | delete placed props within radius of aim |
 | `/mapcommit [map]` | **publish your session (props + lights) to a live map** (persisted, all players see it) |
 | `/maplist` | list live maps and their prop/erase/light counts |
