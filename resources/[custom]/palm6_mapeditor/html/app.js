@@ -13,7 +13,6 @@
 'use strict';
 
 var RES = 'palm6_mapeditor';
-var THUMB_BASE = 'https://cdn.rage.mp/public/odb/imgs-small/';
 var SEARCH_CAP = 400;   // most props any single search renders at once
 
 var groups = [];        // [{category, models:[...]}]
@@ -23,6 +22,10 @@ var activeCat = -1;     // >=0 while browsing a category, -1 while searching
 var lastCat = -1;       // last browsed category, restored when the search clears
 var modelCat = {};      // model -> category name (shown in the card description)
 var imgOk = 0, imgFail = 0;   // thumbnail load tally (diagnostic; shown in footer)
+// Thumbnails come from client Lua as data: URIs (CEF blocks the CDN directly).
+var thumbData = {};     // model -> dataURI | false(no image) | undefined(unknown)
+var awaiting = {};      // model -> [ {img, thumb}, ... ] cards waiting on a result
+var thumbSent = {};     // model -> true once we've asked Lua (dedupe)
 
 // Normalize a name/query for matching: lowercase, strip every non-alphanumeric.
 // This makes "traffic light", "traffic_light" and "trafficlight" all match
@@ -82,9 +85,41 @@ function joaat(key) {
     h = (h + (h << 15)) >>> 0;
     return h >>> 0;
 }
-// odb filenames are lowercase; joaat already lowercases, so lowercase the name
-// too or a mixed-case archetype would request a wrong-case file and 404.
-function thumbUrl(model) { return THUMB_BASE + String(model).toLowerCase() + '-' + joaat(model) + '.jpg'; }
+// Apply a resolved thumbnail to a card: a data: URI -> show it; false -> the
+// generative fallback tile. Updates the load tally either way.
+function applyThumb(model, img, thumb, data) {
+    if (data) {
+        img.onload = function () { imgOk++; updateThumbStat(); thumb.classList.remove('loading'); };
+        img.onerror = function () {
+            imgFail++; updateThumbStat();
+            thumb.classList.remove('loading'); thumb.classList.add('fallback');
+            if (img.parentNode) img.remove();
+        };
+        img.src = data;
+    } else {
+        imgFail++; updateThumbStat();
+        thumb.classList.remove('loading'); thumb.classList.add('fallback');
+        if (img.parentNode) img.remove();
+    }
+}
+
+// Get a thumbnail for a card: from cache if known, else register the card as
+// waiting and ask client Lua once (it proxies the CDN and replies via message).
+function requestThumb(model, img, thumb) {
+    var d = thumbData[model];
+    if (d !== undefined) { applyThumb(model, img, thumb, d); return; }
+    (awaiting[model] = awaiting[model] || []).push({ img: img, thumb: thumb });
+    if (!thumbSent[model]) { thumbSent[model] = true; post('thumb', { model: model }); }
+}
+
+// Lua delivered a thumbnail result — cache it and update every card waiting on it.
+function onThumb(model, data) {
+    thumbData[model] = (data === undefined ? false : data);
+    var list = awaiting[model];
+    if (!list) return;
+    awaiting[model] = null;
+    for (var i = 0; i < list.length; i++) applyThumb(model, list[i].img, list[i].thumb, thumbData[model]);
+}
 
 var el = {
     app: document.getElementById('app'),
@@ -124,13 +159,8 @@ function makeCard(model) {
     thumb.setAttribute('data-glyph', initials(model));
     var img = document.createElement('img');
     img.alt = '';
-    img.onload = function () { imgOk++; updateThumbStat(); thumb.classList.remove('loading'); };
-    img.onerror = function () {
-        imgFail++; updateThumbStat();
-        thumb.classList.remove('loading'); thumb.classList.add('fallback'); img.remove();
-    };
-    img.src = thumbUrl(model);
     thumb.appendChild(img);
+    requestThumb(model, img, thumb);   // resolves from client Lua (CEF blocks the CDN)
 
     var hint = document.createElement('div');
     hint.className = 'spawn-hint';
@@ -310,4 +340,5 @@ window.addEventListener('message', function (e) {
     var d = e.data || {};
     if (d.action === 'open') show(d.groups);
     else if (d.action === 'close') hide();
+    else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

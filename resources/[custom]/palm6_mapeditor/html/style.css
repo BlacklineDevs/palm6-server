@@ -145,9 +145,9 @@ kbd { font: inherit; }
 
 /* grid */
 .grid {
-    flex: 1 1 auto; overflow-y: auto; padding: 1rem;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
-    gap: 0.85rem; align-content: start;
+    flex: 1 1 auto; overflow-y: auto; padding: 1.1rem;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 1rem; align-content: start;
 }
 .card {
     position: relative; background: var(--surface);
@@ -169,7 +169,7 @@ kbd { font: inherit; }
 .card:hover .spawn-hint { opacity: 1; transform: translateY(0); }
 
 .thumb {
-    position: relative; width: 100%; height: 0; padding-bottom: 82%;
+    position: relative; width: 100%; height: 0; padding-bottom: 92%;
     background: #0a0e15; overflow: hidden;
 }
 .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -182,24 +182,24 @@ kbd { font: inherit; }
 }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
-/* generative fallback for props the odb has no image for: category-hued
-   "schematic swatch" with a crosshatch + the model as the hero. Looks made. */
+/* Clean generative fallback for props the odb has no image for: a soft
+   category-hued glow with a monospace initials badge. Reads intentional, not
+   broken, and stays calm even when a whole category is imageless. */
 .thumb.fallback {
-    background:
-        repeating-linear-gradient(45deg, hsla(var(--h,205),70%,60%,0.05) 0 7px, transparent 7px 14px),
-        radial-gradient(90% 80% at 50% 25%, hsla(var(--h,205),75%,55%,0.20), transparent 70%),
-        #0c111a;
+    background: radial-gradient(78% 68% at 50% 40%, hsla(var(--h,205),58%,46%,0.24), transparent 72%), #0b1019;
 }
 .thumb.fallback::before {
     content: attr(data-glyph);
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    font-family: var(--mono); font-size: 1.9rem; font-weight: 700;
-    color: hsla(var(--h,205), 65%, 68%, 0.9);
-    text-shadow: 0 2px 10px rgba(0,0,0,0.4); letter-spacing: 0.04em;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -54%);
+    width: 3.2rem; height: 3.2rem; display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 1.5rem; font-weight: 700; letter-spacing: 0.02em;
+    color: hsla(var(--h,205), 60%, 78%, 0.96);
+    background: hsla(var(--h,205), 45%, 30%, 0.28); border: 1px solid hsla(var(--h,205), 50%, 60%, 0.30);
+    border-radius: 14px;
 }
 .thumb.fallback::after {
-    content: "no preview"; position: absolute; bottom: 0.4rem; left: 0; right: 0; text-align: center;
-    font-size: 0.56rem; letter-spacing: 0.14em; text-transform: uppercase; color: hsla(var(--h,205),25%,70%,0.55);
+    content: "no preview"; position: absolute; bottom: 0.55rem; left: 0; right: 0; text-align: center;
+    font-size: 0.58rem; letter-spacing: 0.16em; text-transform: uppercase; color: hsla(var(--h,205),22%,72%,0.5);
 }
 
 .spawn-hint {

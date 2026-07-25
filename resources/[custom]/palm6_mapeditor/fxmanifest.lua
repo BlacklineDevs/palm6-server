@@ -20,6 +20,7 @@ client_scripts {
     'client/lights.lua',    -- light editor (point/spot, per-frame draw)
     'client/live.lua',      -- live map streaming (persisted props, all players)
     'client/nui.lua',       -- thumbnail prop-browser NUI controller (/propui)
+    'client/thumbs.lua',    -- NUI thumbnail proxy (CDN -> data URI, CSP bypass)
     'client/prefabs.lua',   -- prefab save/stamp (reusable prop groups)
     'client/entities.lua',  -- scene peds/vehicles (persisted, synced)
 }
