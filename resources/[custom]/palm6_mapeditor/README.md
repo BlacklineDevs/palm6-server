@@ -46,9 +46,14 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/mapwipe <map>` | delete an entire live map — props + lights (everywhere, from the DB) |
 | `/mapworlderase` | erase the vanilla world prop you aim at **for everyone** (persisted) |
 | `/mapworldrestore` | restore the nearest persisted world-erase (everywhere) |
-| `/mapprefabsave <name>` | save your session props as a reusable **prefab** |
+| `/mapprefabsave <name>` | save your session props + lights as a reusable **prefab** |
 | `/mapprefabstamp <name> [yaw]` | stamp a prefab at your aim, rotated by yaw° (one undo group) |
 | `/mapprefablist` / `/mapprefabdel <name>` | list / delete prefabs |
+| `/matped <model> [scenario]` | place a **scene ped** at your aim (persisted, all players) |
+| `/matveh <model>` | place a **scene vehicle** at your aim (persisted, all players) |
+| `/matentdel` | remove the scene ped/vehicle you aim at |
+| `/mapworkmap <name>` | set which map scene entities place onto |
+| `/mapentwipe [map]` / `/mapentlist` | wipe / count scene entities |
 
 Live keys (something selected): **LMB** carry · **Arrows** move · **Shift+Up/Dn**
 height · **Q/E** rotate · **Space** snap · **Esc** exit.
@@ -106,5 +111,12 @@ centred on their centroid (in `palm6_mapeditor_prefabs`). `/mapprefabstamp <name
 the whole group at your crosshair, rotated by `yaw` degrees, as one undo group — then reposition
 and `/mapcommit`. Great for repeating a furnished room, checkpoint, or barrier layout.
 
+**Scene entities (peds / vehicles):** `/matped <model> [scenario]` and `/matveh <model>` place a
+frozen NPC or parked vehicle at your crosshair; they persist (`palm6_mapeditor_entities`) and
+stream to every player. Ambient peds take an optional scenario (e.g. `WORLD_HUMAN_GUARD_STAND`).
+`/mapworkmap <name>` picks the map they belong to; `/matentdel` removes one; `/mapentwipe [map]`
+clears a map's entities. This is a self-contained subsystem — it never touches the prop/light
+live map, so it can't regress it.
+
 ## Roadmap (not yet built)
-- Ped/vehicle placement.
+- Scene-entity editing/grab (currently place + delete); prefab support for entities.

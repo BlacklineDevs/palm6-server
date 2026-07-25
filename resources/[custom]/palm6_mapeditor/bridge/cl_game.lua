@@ -59,6 +59,49 @@ function Game.DeleteObject(obj)
     end
 end
 
+-- Spawn a static scene ped (client-local, frozen, non-reactive). Optional
+-- ambient scenario (e.g. WORLD_HUMAN_GUARD_STAND, WORLD_HUMAN_CLIPBOARD).
+function Game.SpawnPed(model, x, y, z, heading, scenario)
+    local hash = loadModel(model)
+    if not hash then return nil end
+    local ped = CreatePed(4, hash, x + 0.0, y + 0.0, z + 0.0, (heading or 0.0) + 0.0, false, false)
+    SetModelAsNoLongerNeeded(hash)
+    if not DoesEntityExist(ped) then return nil end
+    SetEntityInvincible(ped, true)
+    SetBlockingOfNonTemporaryEvents(ped, true)   -- don't flee / react to the world
+    SetPedCanRagdoll(ped, false)
+    SetPedDiesWhenInjured(ped, false)
+    FreezeEntityPosition(ped, true)
+    if scenario and scenario ~= '' then
+        pcall(function() TaskStartScenarioInPlace(ped, scenario, 0, true) end)
+    end
+    return ped
+end
+
+-- Spawn a static scene vehicle (client-local, frozen, locked).
+function Game.SpawnVehicle(model, x, y, z, heading)
+    local hash = loadModel(model)
+    if not hash then return nil end
+    local veh = CreateVehicle(hash, x + 0.0, y + 0.0, z + 0.0, (heading or 0.0) + 0.0, false, false)
+    SetModelAsNoLongerNeeded(hash)
+    if not DoesEntityExist(veh) then return nil end
+    SetVehicleOnGroundProperly(veh)
+    SetVehicleDoorsLocked(veh, 2)
+    SetEntityInvincible(veh, true)
+    FreezeEntityPosition(veh, true)
+    return veh
+end
+
+-- Delete any entity kind (ped / vehicle / object).
+function Game.DeleteAnyEntity(ent)
+    if ent and DoesEntityExist(ent) then
+        SetEntityAsMissionEntity(ent, true, true)
+        DeleteEntity(ent)
+    end
+end
+
+function Game.PlayerHeading() return GetEntityHeading(PlayerPedId()) end
+
 -- Absolute transform (position + full euler rotation, ZXY like CodeWalker/GTA).
 function Game.SetObjectTransform(obj, x, y, z, rx, ry, rz)
     if not (obj and DoesEntityExist(obj)) then return end

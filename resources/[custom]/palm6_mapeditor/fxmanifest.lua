@@ -21,6 +21,7 @@ client_scripts {
     'client/live.lua',      -- live map streaming (persisted props, all players)
     'client/nui.lua',       -- thumbnail prop-browser NUI controller (/propui)
     'client/prefabs.lua',   -- prefab save/stamp (reusable prop groups)
+    'client/entities.lua',  -- scene peds/vehicles (persisted, synced)
 }
 
 server_scripts {
@@ -28,6 +29,7 @@ server_scripts {
     'server/main.lua',      -- export file writer (ACE-gated)
     'server/live.lua',      -- MySQL persistence + authoritative live sync
     'server/prefabs.lua',   -- prefab storage (own table, ACE-gated)
+    'server/entities.lua',  -- scene ped/vehicle storage (own table, ACE-gated)
 }
 
 ui_page 'html/index.html'

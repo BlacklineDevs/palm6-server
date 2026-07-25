@@ -1,0 +1,135 @@
+-- ============================================================================
+-- palm6_mapeditor/client/entities.lua  —  scene peds / vehicles (client half)
+--
+-- Streams the server's persisted scene entities and spawns them locally (frozen)
+-- on every player. Separate registry from props/lights, and applies the same
+-- yield-safe sync the prop layer learned in audit: an in-flight id guard + a
+-- sync generation, so the boot double-sync can't double-spawn or leak handles.
+--
+-- COMMANDS (editor must be open)
+--   /matped <model> [scenario]  place a scene ped at your aim + heading
+--   /matveh <model>             place a scene vehicle at your aim + heading
+--   /matentdel                  remove the scene entity you're aiming at
+--   /mapworkmap <name>          set the map new scene entities are placed on
+--   /mapentwipe [map]           wipe a map's scene entities (default: work map)
+--   /mapentlist                 count peds / vehicles
+-- ============================================================================
+
+local liveEnts = {}    -- [id] = { obj, kind, model, x, y, z, heading, extra }
+local spawning = {}    -- [id] = true while mid model-load
+local syncGen = 0
+local workMap = Config.LiveDefaultMap   -- map that /matped, /matveh place onto
+
+local function finite(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+
+local function despawn(id)
+    local e = liveEnts[id]
+    if not e then return end
+    Game.DeleteAnyEntity(e.obj)
+    liveEnts[id] = nil
+end
+local function despawnAll()
+    for id in pairs(liveEnts) do Game.DeleteAnyEntity(liveEnts[id].obj) end
+    liveEnts = {}
+end
+
+-- Yield-safe spawn (model load yields): skip if already present/in-flight; drop
+-- the spawned entity if a newer full re-sync superseded us.
+local function spawn(rec, gen)
+    if type(rec) ~= 'table' or not rec.id or type(rec.model) ~= 'string' then return end
+    if rec.kind ~= 'ped' and rec.kind ~= 'veh' then return end
+    if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
+    if liveEnts[rec.id] or spawning[rec.id] then return end
+    spawning[rec.id] = true
+    local obj
+    if rec.kind == 'veh' then
+        obj = Game.SpawnVehicle(rec.model, rec.x, rec.y, rec.z, rec.heading or 0.0)
+    else
+        obj = Game.SpawnPed(rec.model, rec.x, rec.y, rec.z, rec.heading or 0.0, rec.extra)
+    end
+    spawning[rec.id] = nil
+    if not obj then return end
+    if (gen and gen ~= syncGen) or liveEnts[rec.id] then Game.DeleteAnyEntity(obj); return end
+    liveEnts[rec.id] = { obj = obj, kind = rec.kind, model = rec.model, x = rec.x, y = rec.y, z = rec.z, heading = rec.heading, extra = rec.extra }
+end
+
+-- ---- server -> client ------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:ent:add', function(rec) spawn(rec) end)
+RegisterNetEvent('palm6_mapeditor:ent:addBatch', function(list, full)
+    if type(list) ~= 'table' then return end
+    local myGen
+    if full then syncGen = syncGen + 1; myGen = syncGen; despawnAll() end
+    CreateThread(function()
+        for i = 1, #list do
+            if full and myGen ~= syncGen then return end
+            spawn(list[i], full and myGen or nil)
+            if i % 10 == 0 then Wait(0) end
+        end
+    end)
+end)
+RegisterNetEvent('palm6_mapeditor:ent:remove', function(id) despawn(tonumber(id)) end)
+RegisterNetEvent('palm6_mapeditor:ent:removeBatch', function(ids)
+    if type(ids) ~= 'table' then return end
+    for _, id in ipairs(ids) do despawn(tonumber(id)) end
+end)
+
+CreateThread(function()
+    Wait(2500)
+    TriggerServerEvent('palm6_mapeditor:ent:requestSync')
+end)
+
+-- ---- commands --------------------------------------------------------------
+local function placeGate()
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return false end
+    return true
+end
+
+RegisterCommand('mapworkmap', function(_, args)
+    if not args[1] then Game.Notify('work map: ' .. workMap, 'inform'); return end
+    workMap = (tostring(args[1])):gsub('[^%w_%-]', ''):sub(1, 64)
+    if workMap == '' then workMap = Config.LiveDefaultMap end
+    Game.Notify('scene entities now place on map: ' .. workMap, 'success')
+end, false)
+
+RegisterCommand('matped', function(_, args)
+    if not placeGate() then return end
+    if not args[1] then Game.Notify('usage: /matped <model> [scenario]', 'error'); return end
+    local x, y, z = Game.CameraAimPoint(40.0)
+    if not x then x, y, z = Game.PlayerPos() end
+    TriggerServerEvent('palm6_mapeditor:ent:place', 'ped', args[1], x, y, z, Game.PlayerHeading(), args[2] or '', workMap)
+end, false)
+
+RegisterCommand('matveh', function(_, args)
+    if not placeGate() then return end
+    if not args[1] then Game.Notify('usage: /matveh <model>', 'error'); return end
+    local x, y, z = Game.CameraAimPoint(40.0)
+    if not x then x, y, z = Game.PlayerPos() end
+    TriggerServerEvent('palm6_mapeditor:ent:place', 'veh', args[1], x, y, z, Game.PlayerHeading(), '', workMap)
+end, false)
+
+-- Remove the scene entity nearest your aim. Uses nearest-to-aim (not a raycast)
+-- because the editor's shapetest only intersects world+objects, NOT peds or
+-- vehicles — so a raycast could never hit a scene entity.
+RegisterCommand('matentdel', function()
+    local x, y, z = Game.CameraAimPoint(40.0)
+    if not x then x, y, z = Game.PlayerPos() end
+    local best, bestD
+    for id, e in pairs(liveEnts) do
+        local d = (e.x - x) ^ 2 + (e.y - y) ^ 2 + (e.z - z) ^ 2
+        if not bestD or d < bestD then bestD, best = d, id end
+    end
+    if not best then Game.Notify('no scene entities nearby', 'inform'); return end
+    TriggerServerEvent('palm6_mapeditor:ent:remove', best)
+end, false)
+
+RegisterCommand('mapentwipe', function(_, args)
+    TriggerServerEvent('palm6_mapeditor:ent:wipeMap', args[1] or workMap)
+end, false)
+
+RegisterCommand('mapentlist', function() TriggerServerEvent('palm6_mapeditor:ent:list') end, false)
+
+-- Scene entities are our own client entities; delete them on stop so a resource
+-- restart never leaves orphaned peds/vehicles in the world.
+AddEventHandler('onResourceStop', function(res)
+    if res == GetCurrentResourceName() then despawnAll() end
+end)

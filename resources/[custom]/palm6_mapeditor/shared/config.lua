@@ -26,6 +26,10 @@ Config.LiveLightDist  = 120.0       -- only draw a live light within this many m
 Config.PrefabMaxProps = 500         -- max props in a single prefab
 Config.PrefabMaxCount = 200         -- max saved prefabs
 
+-- Scene entities (peds / vehicles) — placed live, persisted, synced to all.
+Config.EntityMax      = 1500        -- max total persisted scene entities
+Config.EntityDrawDist = 300.0       -- (reserved) cull distance if needed later
+
 -- Nudge steps (fine value used while Shift is held).
 Config.Step = {
     move = 0.05, moveFine = 0.01,
