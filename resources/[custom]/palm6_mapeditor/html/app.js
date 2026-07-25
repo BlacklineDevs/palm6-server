@@ -99,7 +99,8 @@ function makeCard(model) {
     var cat = modelCat[model] || '';
     var card = document.createElement('div');
     card.className = 'card';
-    card.setAttribute('role', 'listitem');
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
     card.title = model;
     card.style.setProperty('--h', catHue(cat));
 
@@ -144,6 +145,9 @@ function makeCard(model) {
     card.appendChild(thumb);
     card.appendChild(meta);
     card.addEventListener('click', function () { spawn(model); });
+    card.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); spawn(model); }
+    });
     return card;
 }
 
@@ -173,7 +177,7 @@ function renderGrid(models, ctxLabel, capped) {
     if (capped && models.length > n) {
         var more = document.createElement('div');
         more.className = 'empty';
-        more.textContent = '+ ' + (models.length - n) + ' more — refine your search';
+        more.textContent = '+ ' + (models.length - n) + ' more · refine your search';
         el.grid.appendChild(more);
     }
     el.ctx.textContent = ctxLabel || '';
@@ -237,7 +241,7 @@ function runSearch(rawInput) {
         if (idx !== -1) hits.push([idx, searchIndex[i][1]]);
     }
     hits.sort(function (a, b) { return a[0] - b[0] || (a[1] < b[1] ? -1 : 1); });
-    renderGrid(hits.map(function (h) { return h[1]; }), 'search: "' + q + '" — ' + hits.length + ' match(es)', true);
+    renderGrid(hits.map(function (h) { return h[1]; }), hits.length + ' match(es) for "' + q + '"', true);
 }
 
 function spawn(model) {
@@ -267,9 +271,10 @@ function show(g) {
     var gg = groups[activeCat];
     renderGrid(gg ? gg.models : [], gg ? gg.category : '', false);
     el.app.classList.remove('hidden');
+    el.app.setAttribute('aria-hidden', 'false');
     setTimeout(function () { el.search.focus(); }, 30);
 }
-function hide() { el.app.classList.add('hidden'); }
+function hide() { el.app.classList.add('hidden'); el.app.setAttribute('aria-hidden', 'true'); }
 
 // --- events ---------------------------------------------------------------
 var searchTimer = null;

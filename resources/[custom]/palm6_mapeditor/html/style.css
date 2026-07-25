@@ -160,6 +160,12 @@ kbd { font: inherit; }
     border-color: var(--accent-line);
     box-shadow: 0 12px 26px rgba(0,0,0,0.45), 0 0 0 1px var(--accent-line);
 }
+.card:focus-visible {
+    outline: none; transform: translateY(-3px);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent), 0 12px 26px rgba(0,0,0,0.45);
+}
+.card:focus-visible .spawn-hint { opacity: 1; transform: translateY(0); }
 .card:hover .spawn-hint { opacity: 1; transform: translateY(0); }
 
 .thumb {
