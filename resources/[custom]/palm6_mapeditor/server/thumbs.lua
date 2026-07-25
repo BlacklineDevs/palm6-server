@@ -66,7 +66,13 @@ local function pump()
                 end
                 resolve(model, result)
                 pump()
-            end, 'GET', '', { ['User-Agent'] = 'Mozilla/5.0' })
+            end, 'GET', '', {
+                -- Browser-ish headers + a matching Referer so the CDN's hotlink
+                -- guard can't 403 the fetch (a foreign referer is what it blocks).
+                ['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                ['Referer'] = 'https://rage.mp/',
+                ['Accept'] = 'image/jpeg,image/*,*/*',
+            })
         end)
         if not ok then active = active - 1; resolve(model, false) end
     end
