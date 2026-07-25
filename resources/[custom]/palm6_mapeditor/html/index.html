@@ -3,35 +3,41 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>palm6_mapeditor — prop catalog</title>
+    <title>palm6_mapeditor — prop library</title>
     <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <!-- Hidden until the client sends {action:'open'}. NUI pages are always
-         "loaded"; visibility is driven entirely by SendNUIMessage. -->
-    <div id="app" class="hidden">
-        <div class="panel">
+    <!-- Hidden until the client sends {action:'open'}; visibility is driven by
+         SendNUIMessage, never by the page itself. -->
+    <div id="app" class="hidden" aria-hidden="true">
+        <div class="scrim"></div>
+        <section class="panel" role="dialog" aria-label="Prop library">
+
             <header class="bar">
                 <div class="brand">
-                    <span class="dot"></span>
-                    <span class="title">PROP CATALOG</span>
+                    <span class="mark" aria-hidden="true"></span>
+                    <span class="brand-t">PROP&nbsp;LIBRARY</span>
                     <span id="count" class="count">0</span>
                 </div>
-                <div class="search-wrap">
-                    <input id="search" type="text" placeholder="Search 5,295 props…  (name, e.g. barrel, chair, cone)" autocomplete="off" spellcheck="false" />
-                    <button id="clear" class="clear" title="Clear">×</button>
+                <div class="search">
+                    <svg class="s-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/></svg>
+                    <input id="search" type="text" placeholder="Search 5,295 props — name, e.g. barrier, fence, chair" autocomplete="off" spellcheck="false" aria-label="Search props" />
+                    <button id="clear" class="clear" title="Clear" aria-label="Clear search">&times;</button>
                 </div>
-                <button id="close" class="close" title="Close (Esc)">ESC ×</button>
+                <button id="close" class="close" title="Close (Esc)"><kbd>ESC</kbd></button>
             </header>
+
             <div class="body">
-                <nav id="cats" class="cats"></nav>
-                <main id="grid" class="grid"></main>
+                <nav id="cats" class="cats" aria-label="Categories"></nav>
+                <main id="grid" class="grid" role="list" aria-label="Props"></main>
             </div>
+
             <footer class="foot">
-                <span id="ctx" class="ctx">select a category</span>
-                <span class="hint">click a prop to spawn it at your aim · thumbnails: RAGE odb</span>
+                <span id="ctx" class="ctx">Select a category</span>
+                <span id="thumbstat" class="stat" title="Thumbnails stream from the RAGE object database">thumbnails: 0 loaded &middot; 0 failed</span>
             </footer>
-        </div>
+
+        </section>
     </div>
     <script src="app.js"></script>
 </body>

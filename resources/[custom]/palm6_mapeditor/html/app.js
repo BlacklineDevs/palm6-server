@@ -21,11 +21,36 @@ var allModels = [];     // flat list of raw model names
 var searchIndex = [];   // [[normalizedName, rawName], ...] — normalized = lowercase, alnum-only
 var activeCat = -1;     // >=0 while browsing a category, -1 while searching
 var lastCat = -1;       // last browsed category, restored when the search clears
+var modelCat = {};      // model -> category name (shown in the card description)
+var imgOk = 0, imgFail = 0;   // thumbnail load tally (diagnostic; shown in footer)
 
 // Normalize a name/query for matching: lowercase, strip every non-alphanumeric.
 // This makes "traffic light", "traffic_light" and "trafficlight" all match
 // prop_traffic_light_01, and makes matching case-insensitive.
 function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+// A readable title from a model name: drop a common prefix, underscores->spaces,
+// Title-Case. e.g. prop_barrel_02a -> "Barrel 02a".
+function prettify(model) {
+    var s = String(model).replace(/^(prop_|p_|v_|ba_|xm_|apa_|bkr_|ex_|gr_|h4_|imp_|mp_|sf_|sm_|vw_|w_)/i, '').replace(/_/g, ' ').trim();
+    s = s.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    return s || model;
+}
+
+function updateThumbStat() {
+    if (el.thumbstat) el.thumbstat.textContent = 'thumbnails: ' + imgOk + ' loaded · ' + imgFail + ' failed';
+}
+
+// Deterministic hue per category so a category reads as a cohesive colour set
+// (its swatch, its props' fallback tiles and chips all share it).
+function catHue(s) { return joaat(s || 'prop') % 360; }
+
+// Two-letter monospace mark for the generative fallback, from the readable name.
+function initials(model) {
+    var parts = prettify(model).split(/\s+/).filter(Boolean);
+    var s = (parts[0] ? parts[0][0] : '') + (parts[1] ? parts[1][0] : (parts[0] && parts[0][1] ? parts[0][1] : ''));
+    return (s || '?').toUpperCase().slice(0, 2);
+}
 
 // GTA one-at-a-time (Jenkins) hash of the lowercased name = the model hash the
 // odb filenames use. Verified against known props (prop_roadcone02a=3258159972).
@@ -55,6 +80,7 @@ var el = {
     close: document.getElementById('close'),
     count: document.getElementById('count'),
     ctx: document.getElementById('ctx'),
+    thumbstat: document.getElementById('thumbstat'),
 };
 
 function post(cb, body) {
@@ -65,68 +91,77 @@ function post(cb, body) {
     }).catch(function () { /* dev / browser-preview: no NUI host, ignore */ });
 }
 
-// Build one prop card. loading="lazy" means the browser only fetches a thumbnail
-// once the card scrolls into view, so a 500-prop category costs almost nothing.
+// One prop card: a thumbnail (shimmer -> odb image, or a generative category-hued
+// schematic swatch when the odb has no preview) + title + monospace model id +
+// category chip. onload/onerror update the footer tally so a mass load failure
+// (e.g. the game blocking the CDN) is visible, not silent.
 function makeCard(model) {
+    var cat = modelCat[model] || '';
     var card = document.createElement('div');
     card.className = 'card';
+    card.setAttribute('role', 'listitem');
     card.title = model;
+    card.style.setProperty('--h', catHue(cat));
 
     var thumb = document.createElement('div');
-    thumb.className = 'thumb';
+    thumb.className = 'thumb loading';
+    thumb.setAttribute('data-glyph', initials(model));
     var img = document.createElement('img');
     img.alt = '';
-    // Defer the real URL — loadVisible() assigns src when the card nears the
-    // viewport. Native loading="lazy" is unreliable in FiveM's CEF, so we do it
-    // ourselves with getBoundingClientRect (works on every CEF build).
-    img.setAttribute('data-src', thumbUrl(model));
-    img.onerror = function () { thumb.classList.add('fallback'); img.remove(); };
+    img.onload = function () { imgOk++; updateThumbStat(); thumb.classList.remove('loading'); };
+    img.onerror = function () {
+        imgFail++; updateThumbStat();
+        thumb.classList.remove('loading'); thumb.classList.add('fallback'); img.remove();
+    };
+    img.src = thumbUrl(model);
     thumb.appendChild(img);
 
-    var name = document.createElement('div');
-    name.className = 'name';
-    name.textContent = model;
+    var hint = document.createElement('div');
+    hint.className = 'spawn-hint';
+    hint.textContent = 'SPAWN';
+    thumb.appendChild(hint);
+
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    var title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = prettify(model);
+    var sub = document.createElement('div');
+    sub.className = 'sub';
+    var mid = document.createElement('div');
+    mid.className = 'mid';
+    mid.textContent = model;
+    sub.appendChild(mid);
+    if (cat) {
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = cat;
+        sub.appendChild(chip);
+    }
+    meta.appendChild(title);
+    meta.appendChild(sub);
 
     card.appendChild(thumb);
-    card.appendChild(name);
+    card.appendChild(meta);
     card.addEventListener('click', function () { spawn(model); });
     return card;
 }
 
-// CEF-safe lazy image loading. Assigns each img.src only when its card is within
-// (or near) the grid viewport, measured on scroll — no native loading="lazy" and
-// no IntersectionObserver, both of which misbehave in FiveM's CEF. Keeps a big
-// category from firing hundreds of requests at once while guaranteeing the
-// visible thumbnails actually load.
-var lazyTimer = null;
-function loadVisible() {
-    var gr = el.grid.getBoundingClientRect();
-    var top = gr.top - 350, bottom = gr.bottom + 350;   // prefetch buffer
-    var imgs = el.grid.querySelectorAll('img[data-src]');
-    for (var i = 0; i < imgs.length; i++) {
-        var r = imgs[i].getBoundingClientRect();
-        if (r.bottom >= top && r.top <= bottom) {
-            imgs[i].src = imgs[i].getAttribute('data-src');
-            imgs[i].removeAttribute('data-src');
-        }
-    }
-}
-function scheduleLoad() {
-    if (lazyTimer) return;
-    lazyTimer = setTimeout(function () { lazyTimer = null; loadVisible(); }, 80);
-}
-
 // capped=true only for search (bounds huge result sets). Category browsing
-// passes capped=false and renders the whole category — loading="lazy" means
-// off-screen thumbnails aren't fetched, so even a 600-prop category stays cheap
-// and every prop is reachable by scrolling (not hidden behind "refine search").
+// renders the whole category. Thumbnails load eagerly; the browser throttles the
+// request queue, and off-screen images are cheap (~4KB each).
 function renderGrid(models, ctxLabel, capped) {
     el.grid.scrollTop = 0;
     el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
     if (!models || models.length === 0) {
         var e = document.createElement('div');
         e.className = 'empty';
-        e.textContent = 'no props here';
+        var big = document.createElement('span');
+        big.className = 'big';
+        big.textContent = 'Nothing here';
+        e.appendChild(big);
+        e.appendChild(document.createTextNode('Pick another category or try a different search.'));
         el.grid.appendChild(e);
         el.ctx.textContent = ctxLabel || '';
         return;
@@ -135,8 +170,6 @@ function renderGrid(models, ctxLabel, capped) {
     var n = capped ? Math.min(models.length, SEARCH_CAP) : models.length;
     for (var i = 0; i < n; i++) frag.appendChild(makeCard(models[i]));
     el.grid.appendChild(frag);
-    loadVisible();                        // load the first screenful now
-    setTimeout(loadVisible, 60);          // and again once layout has settled
     if (capped && models.length > n) {
         var more = document.createElement('div');
         more.className = 'empty';
@@ -152,11 +185,16 @@ function renderCats() {
         if (!g) return;
         var row = document.createElement('div');
         row.className = 'cat' + (i === activeCat ? ' active' : '');
+        var sw = document.createElement('span');
+        sw.className = 'swatch';
+        sw.style.background = 'hsl(' + catHue(g.category) + ', 55%, 56%)';
         var label = document.createElement('span');
+        label.className = 'c-name';
         label.textContent = g.category || '(unnamed)';
         var n = document.createElement('span');
         n.className = 'n';
         n.textContent = (g.models || []).length;
+        row.appendChild(sw);
         row.appendChild(label);
         row.appendChild(n);
         // Clicking a category is an explicit action: clear any search text first.
@@ -210,13 +248,14 @@ function spawn(model) {
 
 function show(g) {
     groups = Array.isArray(g) ? g : [];
-    allModels = []; searchIndex = [];
+    allModels = []; searchIndex = []; modelCat = {};
     groups.forEach(function (grp) {
         if (!grp || !Array.isArray(grp.models)) return;
         grp.models.forEach(function (m) {
             if (typeof m !== 'string') return;
             allModels.push(m);
             searchIndex.push([norm(m), m]);
+            if (grp.category && !modelCat[m]) modelCat[m] = grp.category;
         });
     });
     el.count.textContent = allModels.length.toLocaleString();
@@ -241,7 +280,6 @@ el.search.addEventListener('input', function (e) {
 });
 el.clear.addEventListener('click', function () { el.search.value = ''; runSearch(''); el.search.focus(); });
 el.close.addEventListener('click', function () { hide(); post('close'); });
-el.grid.addEventListener('scroll', scheduleLoad);   // load thumbnails as you scroll
 
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') { hide(); post('close'); }
