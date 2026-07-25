@@ -57,13 +57,22 @@ end
 
 local function prefabCount() local n = 0; for _ in pairs(prefabs) do n = n + 1 end; return n end
 
--- Build a relative prefab def from an absolute session snapshot: centre it on
--- the centroid so a stamp can drop it anywhere. Returns nil if nothing valid.
-local function buildDef(props)
+local function cleanLightDef(l)
+    if type(l) ~= 'table' then return nil end
+    return {
+        x = num(l.x, -20000.0, 20000.0, 0.0), y = num(l.y, -20000.0, 20000.0, 0.0), z = num(l.z, -2000.0, 5000.0, 0.0),
+        r = math.floor(num(l.r, 0, 255, 255)), g = math.floor(num(l.g, 0, 255, 200)), b = math.floor(num(l.b, 0, 255, 140)),
+        range = num(l.range, 0.5, 100.0, 8.0), intensity = num(l.intensity, 0.1, 50.0, 5.0),
+        kind = (l.kind == 'spot') and 'spot' or 'point',
+    }
+end
+
+-- Build a relative prefab def (props AND lights) from an absolute session
+-- snapshot: centre everything on the group centroid so a stamp can drop it
+-- anywhere. Returns nil if nothing valid. Loops are input-bounded (not valid-
+-- count-bounded) so a garbage payload can't stall the tick.
+local function buildDef(props, lights)
     local clean = {}
-    -- Bound the loop by the input length capped at PrefabMaxProps, NOT by valid
-    -- props accumulating — otherwise an ACE client could send millions of invalid
-    -- entries (#clean never grows, break never fires) and stall the server tick.
     local limit = math.min(#props, Config.PrefabMaxProps)
     for i = 1, limit do
         local p = props[i]
@@ -76,16 +85,30 @@ local function buildDef(props)
             }
         end
     end
-    if #clean == 0 then return nil end
-    local cx, cy, cz = 0.0, 0.0, 0.0
-    for _, p in ipairs(clean) do cx = cx + p.x; cy = cy + p.y; cz = cz + p.z end
-    local n = #clean
-    cx, cy, cz = cx / n, cy / n, cz / n
-    local out = {}
-    for _, p in ipairs(clean) do
-        out[#out + 1] = { model = p.model, dx = p.x - cx, dy = p.y - cy, dz = p.z - cz, rx = p.rx, ry = p.ry, rz = p.rz }
+    local cleanL = {}
+    lights = type(lights) == 'table' and lights or {}
+    local llimit = math.min(#lights, Config.LiveMaxLights)
+    for i = 1, llimit do
+        local l = cleanLightDef(lights[i])
+        if l then cleanL[#cleanL + 1] = l end
     end
-    return { props = out }
+    if #clean == 0 and #cleanL == 0 then return nil end
+    -- Anchor on the props' centroid (the visual body); fall back to lights if a
+    -- prefab is lights-only.
+    local base = (#clean > 0) and clean or cleanL
+    local cx, cy, cz = 0.0, 0.0, 0.0
+    for _, p in ipairs(base) do cx = cx + p.x; cy = cy + p.y; cz = cz + p.z end
+    local n = #base
+    cx, cy, cz = cx / n, cy / n, cz / n
+    local outP = {}
+    for _, p in ipairs(clean) do
+        outP[#outP + 1] = { model = p.model, dx = p.x - cx, dy = p.y - cy, dz = p.z - cz, rx = p.rx, ry = p.ry, rz = p.rz }
+    end
+    local outL = {}
+    for _, l in ipairs(cleanL) do
+        outL[#outL + 1] = { dx = l.x - cx, dy = l.y - cy, dz = l.z - cz, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind }
+    end
+    return { props = outP, lights = outL }
 end
 
 CreateThread(function()
@@ -129,18 +152,19 @@ RegisterNetEvent('palm6_mapeditor:prefab:requestSync', function()
     TriggerClientEvent('palm6_mapeditor:prefab:syncAll', source, prefabs)
 end)
 
-RegisterNetEvent('palm6_mapeditor:prefab:save', function(name, props)
+RegisterNetEvent('palm6_mapeditor:prefab:save', function(name, props, lights)
     local src = source
     if not isAllowed(src) then pnotify(src, 'not authorized (needs admin)', 'error'); return end
     if not PREADY then pnotify(src, 'prefab DB not ready yet', 'error'); return end
     name = cleanName(name)
     if name == '' then pnotify(src, 'give the prefab a name (letters/numbers)', 'error'); return end
-    if type(props) ~= 'table' or #props == 0 then pnotify(src, 'nothing in your session to save', 'error'); return end
+    if type(props) ~= 'table' then props = {} end
+    if #props == 0 and (type(lights) ~= 'table' or #lights == 0) then pnotify(src, 'nothing in your session to save', 'error'); return end
     if not prefabs[name] and prefabCount() >= Config.PrefabMaxCount then
         pnotify(src, ('prefab limit reached (%d)'):format(Config.PrefabMaxCount), 'error'); return
     end
-    local def = buildDef(props)
-    if not def then pnotify(src, 'no valid props to save', 'error'); return end
+    local def = buildDef(props, lights)
+    if not def then pnotify(src, 'no valid props/lights to save', 'error'); return end
     local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
     local wrote = pcall(function()
         MySQL.query.await([[
@@ -151,8 +175,8 @@ RegisterNetEvent('palm6_mapeditor:prefab:save', function(name, props)
     if not wrote then pnotify(src, 'DB write failed', 'error'); return end
     prefabs[name] = def
     TriggerClientEvent('palm6_mapeditor:prefab:def', -1, name, def)
-    pnotify(src, ('saved prefab "%s" (%d props) — /mapprefabstamp %s'):format(name, #def.props, name), 'success')
-    print(('[palm6_mapeditor] %s saved prefab "%s" (%d props)'):format(who, name, #def.props))
+    pnotify(src, ('saved prefab "%s" (%d props, %d lights)'):format(name, #def.props, #def.lights), 'success')
+    print(('[palm6_mapeditor] %s saved prefab "%s" (%d props, %d lights)'):format(who, name, #def.props, #def.lights))
 end)
 
 RegisterNetEvent('palm6_mapeditor:prefab:delete', function(name)

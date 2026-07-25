@@ -34,8 +34,9 @@ end)
 RegisterCommand('mapprefabsave', function(_, args)
     if not args[1] then Game.Notify('usage: /mapprefabsave <name>', 'error'); return end
     local snap = (MapEd and MapEd.snapshot) and MapEd.snapshot() or {}
-    if #snap == 0 then Game.Notify('nothing in your session to save', 'error'); return end
-    TriggerServerEvent('palm6_mapeditor:prefab:save', args[1], snap)
+    local lsnap = (MapEd and MapEd.getLights) and MapEd.getLights() or {}
+    if #snap == 0 and #lsnap == 0 then Game.Notify('nothing in your session to save', 'error'); return end
+    TriggerServerEvent('palm6_mapeditor:prefab:save', args[1], snap, lsnap)
 end, false)
 
 -- --- stamp -----------------------------------------------------------------
@@ -69,13 +70,26 @@ RegisterCommand('mapprefabstamp', function(_, args)
             if MapEd.spawnAt(p.model, wx, wy, wz, p.rx or 0.0, p.ry or 0.0, rz, true) then n = n + 1 end
         end
     end)
-    Game.Notify(('stamped "%s" — %d props (one /matundo). /mapcommit to publish'):format(name, n), 'success')
+    -- Lights aren't entities (not in the undo batch); re-add them at the same
+    -- yaw-rotated offsets so a lit prefab keeps its lighting.
+    local ln = 0
+    for _, l in ipairs(def.lights or {}) do
+        local dx, dy = l.dx or 0.0, l.dy or 0.0
+        if MapEd.addLight then
+            MapEd.addLight({
+                x = ax + (dx * cos - dy * sin), y = ay + (dx * sin + dy * cos), z = az + (l.dz or 0.0),
+                r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind,
+            })
+            ln = ln + 1
+        end
+    end
+    Game.Notify(('stamped "%s" — %d props, %d lights (/matundo props). /mapcommit to publish'):format(name, n, ln), 'success')
 end, false)
 
 -- --- list / delete ---------------------------------------------------------
 RegisterCommand('mapprefablist', function()
     local names = {}
-    for nm, def in pairs(prefabDefs) do names[#names + 1] = ('%s (%d)'):format(nm, #(def.props or {})) end
+    for nm, def in pairs(prefabDefs) do names[#names + 1] = ('%s (%dp %dl)'):format(nm, #(def.props or {}), #(def.lights or {})) end
     table.sort(names)
     if #names == 0 then Game.Notify('no prefabs yet — build props and /mapprefabsave <name>', 'inform'); return end
     Game.Notify('prefabs:\n' .. table.concat(names, '\n'), 'inform')
