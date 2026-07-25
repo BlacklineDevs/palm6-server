@@ -109,7 +109,12 @@ function requestThumb(model, img, thumb) {
     var d = thumbData[model];
     if (d !== undefined) { applyThumb(model, img, thumb, d); return; }
     (awaiting[model] = awaiting[model] || []).push({ img: img, thumb: thumb });
-    if (!thumbSent[model]) { thumbSent[model] = true; post('thumb', { model: model }); }
+    if (!thumbSent[model]) {
+        thumbSent[model] = true;
+        post('thumb', { model: model });
+        // Safety net: never buffer forever. If no reply in 12s, show the tile.
+        setTimeout(function () { if (thumbData[model] === undefined) onThumb(model, false); }, 12000);
+    }
 }
 
 // Lua delivered a thumbnail result — cache it and update every card waiting on it.

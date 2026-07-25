@@ -31,6 +31,7 @@ server_scripts {
     'server/live.lua',      -- MySQL persistence + authoritative live sync
     'server/prefabs.lua',   -- prefab storage (own table, ACE-gated)
     'server/entities.lua',  -- scene ped/vehicle storage (own table, ACE-gated)
+    'server/thumbs.lua',    -- NUI thumbnail proxy (fetch CDN -> base64 data URI)
 }
 
 ui_page 'html/index.html'
