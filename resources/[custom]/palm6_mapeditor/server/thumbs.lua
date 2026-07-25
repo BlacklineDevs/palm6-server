@@ -17,6 +17,7 @@ local cache = {}       -- [model] = dataURI (string) | false (no image)
 local waiters = {}     -- [model] = { src, ... } clients awaiting this fetch
 local queue = {}
 local active = 0
+local logged = false   -- one-time diagnostic of the first fetch
 
 local B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local function base64(data)
@@ -61,8 +62,20 @@ local function pump()
             PerformHttpRequest(thumbUrl(model), function(code, body)
                 active = active - 1
                 local result = false
-                if code == 200 and type(body) == 'string' and #body > 0 then
+                local isJpeg = type(body) == 'string' and #body > 3
+                    and body:byte(1) == 0xFF and body:byte(2) == 0xD8 and body:byte(3) == 0xFF
+                if code == 200 and isJpeg then
                     result = 'data:image/jpeg;base64,' .. base64(body)
+                end
+                -- One-time diagnostic: tells us in the server console whether the
+                -- fetched body arrived as raw JPEG bytes (b1=255 -> binary intact)
+                -- or was UTF-8-mangled (b1=239 -> the U+FFFD replacement, ef bf bd).
+                if not logged then
+                    logged = true
+                    print(('[palm6_mapeditor] thumb probe: code=%s len=%s b1=%s b2=%s b3=%s jpeg=%s')
+                        :format(tostring(code), body and #body or 'nil',
+                            body and body:byte(1) or 'nil', body and body:byte(2) or 'nil',
+                            body and body:byte(3) or 'nil', tostring(isJpeg)))
                 end
                 resolve(model, result)
                 pump()
