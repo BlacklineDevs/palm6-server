@@ -45,6 +45,21 @@ function updateThumbStat() {
 // (its swatch, its props' fallback tiles and chips all share it).
 function catHue(s) { return joaat(s || 'prop') % 360; }
 
+// Fuzzy match score of a normalized name against a normalized query, or -1.
+// Substring hits rank highest (earlier = better); otherwise a subsequence match
+// (all query chars in order) still qualifies, so "brl" -> barrel, "traflt" ->
+// traffic_light. Mirrors the ox_lib browser's scoring.
+function fuzzyScore(name, q) {
+    var idx = name.indexOf(q);
+    if (idx !== -1) return 1000 - idx;
+    var qi = 0, pos = 0;
+    for (var i = 0; i < name.length && qi < q.length; i++) {
+        if (name.charCodeAt(i) === q.charCodeAt(qi)) { qi++; pos += i; }
+    }
+    if (qi === q.length) return 100 - pos / (name.length || 1);
+    return -1;
+}
+
 // Two-letter monospace mark for the generative fallback, from the readable name.
 function initials(model) {
     var parts = prettify(model).split(/\s+/).filter(Boolean);
@@ -237,10 +252,11 @@ function runSearch(rawInput) {
     renderCats();
     var hits = [];
     for (var i = 0; i < searchIndex.length; i++) {
-        var idx = searchIndex[i][0].indexOf(q);
-        if (idx !== -1) hits.push([idx, searchIndex[i][1]]);
+        var sc = fuzzyScore(searchIndex[i][0], q);
+        if (sc >= 0) hits.push([sc, searchIndex[i][1]]);
     }
-    hits.sort(function (a, b) { return a[0] - b[0] || (a[1] < b[1] ? -1 : 1); });
+    // Higher score first; tie-break alphabetically for stable ordering.
+    hits.sort(function (a, b) { return b[0] - a[0] || (a[1] < b[1] ? -1 : 1); });
     renderGrid(hits.map(function (h) { return h[1]; }), hits.length + ' match(es) for "' + q + '"', true);
 }
 
