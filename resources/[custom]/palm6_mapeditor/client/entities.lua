@@ -17,12 +17,15 @@
 
 local liveEnts = {}    -- [id] = { obj, kind, model, x, y, z, heading, extra }
 local spawning = {}    -- [id] = true while mid model-load
+local canceled = {}    -- [id] = true if removed WHILE its spawn was mid-load
 local syncGen = 0
+local stopping = false
 local workMap = Config.LiveDefaultMap   -- map that /matped, /matveh place onto
 
 local function finite(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
 
 local function despawn(id)
+    if spawning[id] then canceled[id] = true end   -- cancel an in-flight spawn (no DB row will exist)
     local e = liveEnts[id]
     if not e then return end
     Game.DeleteAnyEntity(e.obj)
@@ -33,14 +36,16 @@ local function despawnAll()
     liveEnts = {}
 end
 
--- Yield-safe spawn (model load yields): skip if already present/in-flight; drop
--- the spawned entity if a newer full re-sync superseded us.
+-- Yield-safe spawn (model load yields): skip if already present/in-flight; after
+-- the yield, drop the entity if it was removed (canceled), superseded by a newer
+-- full re-sync (gen), already spawned, or the resource is stopping.
 local function spawn(rec, gen)
     if type(rec) ~= 'table' or not rec.id or type(rec.model) ~= 'string' then return end
     if rec.kind ~= 'ped' and rec.kind ~= 'veh' then return end
     if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
     if liveEnts[rec.id] or spawning[rec.id] then return end
     spawning[rec.id] = true
+    canceled[rec.id] = nil
     local obj
     if rec.kind == 'veh' then
         obj = Game.SpawnVehicle(rec.model, rec.x, rec.y, rec.z, rec.heading or 0.0)
@@ -48,8 +53,10 @@ local function spawn(rec, gen)
         obj = Game.SpawnPed(rec.model, rec.x, rec.y, rec.z, rec.heading or 0.0, rec.extra)
     end
     spawning[rec.id] = nil
-    if not obj then return end
-    if (gen and gen ~= syncGen) or liveEnts[rec.id] then Game.DeleteAnyEntity(obj); return end
+    if not obj then canceled[rec.id] = nil; return end
+    if canceled[rec.id] or stopping or (gen and gen ~= syncGen) or liveEnts[rec.id] then
+        Game.DeleteAnyEntity(obj); canceled[rec.id] = nil; return
+    end
     liveEnts[rec.id] = { obj = obj, kind = rec.kind, model = rec.model, x = rec.x, y = rec.y, z = rec.z, heading = rec.heading, extra = rec.extra }
 end
 
@@ -58,7 +65,10 @@ RegisterNetEvent('palm6_mapeditor:ent:add', function(rec) spawn(rec) end)
 RegisterNetEvent('palm6_mapeditor:ent:addBatch', function(list, full)
     if type(list) ~= 'table' then return end
     local myGen
-    if full then syncGen = syncGen + 1; myGen = syncGen; despawnAll() end
+    -- Clear `spawning` on a full reset so the new generation re-attempts any ids
+    -- still mid-load from an older sync (otherwise the older in-flight spawn would
+    -- be skipped by the guard, then dropped by its gen check → lost for the session).
+    if full then syncGen = syncGen + 1; myGen = syncGen; despawnAll(); spawning = {} end
     CreateThread(function()
         for i = 1, #list do
             if full and myGen ~= syncGen then return end
@@ -94,6 +104,8 @@ end, false)
 RegisterCommand('matped', function(_, args)
     if not placeGate() then return end
     if not args[1] then Game.Notify('usage: /matped <model> [scenario]', 'error'); return end
+    -- A vehicle model would fail in CreatePed on every client — reject early.
+    if Game.ModelIsVehicle(args[1]) then Game.Notify(args[1] .. ' is a vehicle — use /matveh', 'error'); return end
     local x, y, z = Game.CameraAimPoint(40.0)
     if not x then x, y, z = Game.PlayerPos() end
     TriggerServerEvent('palm6_mapeditor:ent:place', 'ped', args[1], x, y, z, Game.PlayerHeading(), args[2] or '', workMap)
@@ -102,6 +114,7 @@ end, false)
 RegisterCommand('matveh', function(_, args)
     if not placeGate() then return end
     if not args[1] then Game.Notify('usage: /matveh <model>', 'error'); return end
+    if not Game.ModelIsVehicle(args[1]) then Game.Notify(args[1] .. ' is not a vehicle model', 'error'); return end
     local x, y, z = Game.CameraAimPoint(40.0)
     if not x then x, y, z = Game.PlayerPos() end
     TriggerServerEvent('palm6_mapeditor:ent:place', 'veh', args[1], x, y, z, Game.PlayerHeading(), '', workMap)
@@ -131,5 +144,5 @@ RegisterCommand('mapentlist', function() TriggerServerEvent('palm6_mapeditor:ent
 -- Scene entities are our own client entities; delete them on stop so a resource
 -- restart never leaves orphaned peds/vehicles in the world.
 AddEventHandler('onResourceStop', function(res)
-    if res == GetCurrentResourceName() then despawnAll() end
+    if res == GetCurrentResourceName() then stopping = true; despawnAll() end   -- stopping: in-flight spawns self-delete
 end)

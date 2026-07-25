@@ -78,10 +78,18 @@ function Game.SpawnPed(model, x, y, z, heading, scenario)
     return ped
 end
 
--- Spawn a static scene vehicle (client-local, frozen, locked).
+-- Is this model a real vehicle model? (Callable without streaming it in.)
+function Game.ModelIsVehicle(model)
+    local hash = type(model) == 'number' and model or joaat(model)
+    return IsModelValid(hash) and IsModelAVehicle(hash)
+end
+
+-- Spawn a static scene vehicle (client-local, frozen, locked). Refuses a
+-- non-vehicle model so a wrong /matveh can't CreateVehicle a ped/object.
 function Game.SpawnVehicle(model, x, y, z, heading)
     local hash = loadModel(model)
     if not hash then return nil end
+    if not IsModelAVehicle(hash) then SetModelAsNoLongerNeeded(hash); return nil end
     local veh = CreateVehicle(hash, x + 0.0, y + 0.0, z + 0.0, (heading or 0.0) + 0.0, false, false)
     SetModelAsNoLongerNeeded(hash)
     if not DoesEntityExist(veh) then return nil end

@@ -28,10 +28,13 @@
 local liveObjs = {}    -- [id] = { obj, model, x, y, z, rx, ry, rz }
 local liveHides = {}   -- [id] = { x, y, z, radius, model }  (world-prop erases)
 local spawning = {}    -- [id] = true while a spawn for this id is mid-model-load
+local canceled = {}    -- [id] = true if removed WHILE its spawn was mid-load
 local syncGen = 0      -- bumped on every full re-sync; in-flight spawns of an
                        -- older gen abort so two full syncs can't fight (leak)
+local stopping = false
 
 local function despawn(id)
+    if spawning[id] then canceled[id] = true end   -- cancel an in-flight spawn (no DB row will exist)
     local r = liveObjs[id]
     if not r then return end
     Game.DeleteObject(r.obj)
@@ -55,10 +58,15 @@ local function spawn(rec, gen)
     if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
     if liveObjs[rec.id] or spawning[rec.id] then return end
     spawning[rec.id] = true
+    canceled[rec.id] = nil
     local obj = Game.SpawnObject(rec.model, rec.x, rec.y, rec.z)   -- yields on model load
     spawning[rec.id] = nil
-    if not obj then return end            -- bad/removed model — skip, don't crash the batch
-    if (gen and gen ~= syncGen) or liveObjs[rec.id] then Game.DeleteObject(obj); return end
+    if not obj then canceled[rec.id] = nil; return end   -- bad/removed model — skip, don't crash the batch
+    -- Drop it if it was removed mid-load (canceled), superseded by a newer full
+    -- sync (gen), already spawned, or the resource is stopping.
+    if canceled[rec.id] or stopping or (gen and gen ~= syncGen) or liveObjs[rec.id] then
+        Game.DeleteObject(obj); canceled[rec.id] = nil; return
+    end
     Game.SetObjectTransform(obj, rec.x, rec.y, rec.z, rec.rx or 0.0, rec.ry or 0.0, rec.rz or 0.0)
     liveObjs[rec.id] = { obj = obj, model = rec.model, x = rec.x, y = rec.y, z = rec.z, rx = rec.rx, ry = rec.ry, rz = rec.rz }
 end
@@ -77,9 +85,12 @@ RegisterNetEvent('palm6_mapeditor:live:addBatch', function(list, full)
         -- Reset atomically BEFORE any yield: bump the generation and clear the
         -- world in this tick. Any older full batch still spawning will see the
         -- new gen and abort, so two syncs can't interleave into duplicates.
+        -- Clear `spawning` too so the new gen re-attempts ids still mid-load from
+        -- an older sync (else they'd be skipped then dropped → lost this session).
         syncGen = syncGen + 1
         myGen = syncGen
         despawnAll()
+        spawning = {}
     end
     CreateThread(function()
         for i = 1, #list do
@@ -301,6 +312,7 @@ end, false)
 -- or permanently-hidden vanilla props (the client re-applies them on next sync).
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
+    stopping = true   -- in-flight spawns self-delete instead of leaking on restart
     despawnAll()
     for id in pairs(liveHides) do
         local h = liveHides[id]
