@@ -59,6 +59,24 @@ RegisterCommand('maphelp', openHelp, false)
 -- Let players bind a key (default H) to pull up the controls sheet in-world.
 RegisterKeyMapping('maphelp', 'Map editor: controls & commands', 'keyboard', 'H')
 
+-- Open the browser straight onto the Activity Log (a searchable history of every
+-- action the editor reported this session). Same focus handling as /propui.
+local function openLog()
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then return end
+    local log = (Game.GetActivityLog and Game.GetActivityLog()) or {}
+    if not open then
+        open = true
+        SetNuiFocus(true, true)
+        SendNUIMessage({ action = 'open', groups = Config.PropGroups or {}, activity = log })
+    else
+        SendNUIMessage({ action = 'activity', log = log })
+    end
+end
+
+RegisterCommand('maplog', openLog, false)
+-- Default key L (silent outside the editor, like /maphelp).
+RegisterKeyMapping('maplog', 'Map editor: activity log', 'keyboard', 'L')
+
 -- Spawn a picked prop. The model name is validated again here (defence in depth,
 -- same strict rule the spawner enforces) even though it came from our own
 -- catalog, then routed through the shared spawn event. Closes so the player can

@@ -522,7 +522,7 @@ function show(g) {
     el.app.setAttribute('aria-hidden', 'false');
     setTimeout(function () { el.search.focus(); }, 30);
 }
-function hide() { el.app.classList.add('hidden'); el.app.setAttribute('aria-hidden', 'true'); helpHide(); }
+function hide() { el.app.classList.add('hidden'); el.app.setAttribute('aria-hidden', 'true'); helpHide(); activityHide(); }
 
 // --- controls & commands reference ----------------------------------------
 // Mirrors README.md exactly (the authoritative command list). Kept as data so
@@ -662,6 +662,69 @@ function helpHide() {
 }
 function helpToggle() { if (helpOpen) helpHide(); else helpShow(); }
 
+// --- activity log ---------------------------------------------------------
+var activityLog = [];        // [{ts, msg, kind}, ...] oldest-first (from client Lua)
+var activityOpen = false;
+var elActivity, elLogBody, elLogFilter;
+
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function clockOf(ts) {
+    // ts is a unix time (seconds) from os.time(); render local HH:MM:SS.
+    var d = new Date((Number(ts) || 0) * 1000);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+}
+
+function renderActivity(filter) {
+    if (!elLogBody) return;
+    elLogBody.textContent = '';
+    var q = norm(filter || '');
+    // Newest first.
+    var rows = [], any = false;
+    for (var i = activityLog.length - 1; i >= 0; i--) {
+        var e = activityLog[i];
+        if (q && norm(e.msg).indexOf(q) === -1) continue;
+        any = true;
+        var row = document.createElement('div');
+        row.className = 'log-row k-' + (e.kind || 'inform');
+        var t = document.createElement('span'); t.className = 'log-t'; t.textContent = clockOf(e.ts);
+        var dot = document.createElement('span'); dot.className = 'log-dot';
+        var m = document.createElement('span'); m.className = 'log-m'; m.textContent = e.msg;
+        row.appendChild(t); row.appendChild(dot); row.appendChild(m);
+        rows.push(row);
+    }
+    if (!any) {
+        elLogBody.appendChild(emptyState(
+            activityLog.length ? 'No matching events' : 'No activity yet',
+            activityLog.length ? 'Clear the filter to see everything.' : 'Actions you take in the editor show up here.'));
+        return;
+    }
+    var frag = document.createDocumentFragment();
+    for (var r = 0; r < rows.length; r++) frag.appendChild(rows[r]);
+    elLogBody.appendChild(frag);
+}
+
+function onActivity(log) {
+    if (Array.isArray(log)) activityLog = log;
+    elActivity = document.getElementById('activityOverlay');
+    elLogBody = document.getElementById('logBody');
+    elLogFilter = document.getElementById('logFilter');
+    renderActivity(elLogFilter ? elLogFilter.value : '');
+}
+function activityShow(log) {
+    onActivity(log);
+    if (!elActivity) return;
+    activityOpen = true;
+    elActivity.classList.remove('hidden');
+    elActivity.setAttribute('aria-hidden', 'false');
+    elLogBody.scrollTop = 0;
+}
+function activityHide() {
+    if (!elActivity || !activityOpen) return;
+    activityOpen = false;
+    elActivity.classList.add('hidden');
+    elActivity.setAttribute('aria-hidden', 'true');
+}
+
 // --- events ---------------------------------------------------------------
 var searchTimer = null;
 el.search.addEventListener('input', function (e) {
@@ -676,24 +739,35 @@ var helpBtn = document.getElementById('help');
 if (helpBtn) helpBtn.addEventListener('click', function () { helpToggle(); });
 var helpCloseBtn = document.getElementById('helpClose');
 if (helpCloseBtn) helpCloseBtn.addEventListener('click', function () { helpHide(); });
+var logCloseBtn = document.getElementById('logClose');
+if (logCloseBtn) logCloseBtn.addEventListener('click', function () { activityHide(); });
+var logFilterInput = document.getElementById('logFilter');
+if (logFilterInput) logFilterInput.addEventListener('input', function (e) { renderActivity(e.target.value); });
+
+// True while any typing field has focus, so single-key shortcuts (H/L) don't
+// fire while the user is typing a query or a log filter.
+function typing() {
+    var a = document.activeElement;
+    return a && (a === el.search || a === logFilterInput || a.tagName === 'INPUT');
+}
 
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
-        // Escape backs out of help first, then closes the whole browser.
+        // Escape backs out of an open overlay first, then closes the browser.
         if (helpOpen) { helpHide(); return; }
+        if (activityOpen) { activityHide(); return; }
         hide(); post('close'); return;
     }
-    // H toggles the controls sheet — but not while the search box has focus,
-    // so typing an "h" into a query never opens the reference.
-    if ((e.key === 'h' || e.key === 'H') && document.activeElement !== el.search) {
-        e.preventDefault(); helpToggle();
-    }
+    if (typing()) return;
+    if (e.key === 'h' || e.key === 'H') { e.preventDefault(); if (activityOpen) activityHide(); helpToggle(); }
+    else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); if (helpOpen) helpHide(); if (activityOpen) activityHide(); else activityShow(); }
 });
 
 window.addEventListener('message', function (e) {
     var d = e.data || {};
-    if (d.action === 'open') { show(d.groups); if (d.help) helpShow(); }
+    if (d.action === 'open') { show(d.groups); if (d.help) helpShow(); if (d.activity) activityShow(d.activity); }
     else if (d.action === 'help') { if (el.app.classList.contains('hidden')) show(groups); helpShow(); }
+    else if (d.action === 'activity') { if (el.app.classList.contains('hidden')) show(groups); activityShow(d.log); }
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

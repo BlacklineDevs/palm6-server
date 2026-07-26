@@ -18,7 +18,7 @@ RegisterNetEvent('palm6_mapeditor:checkPerm', function()
     TriggerClientEvent('palm6_mapeditor:perm', source, isAllowed(source))
 end)
 
-RegisterNetEvent('palm6_mapeditor:save', function(name, luaText, jsonText, ymapXml)
+RegisterNetEvent('palm6_mapeditor:save', function(name, luaText, jsonText, ymapXml, pyText)
     local src = source
     if not isAllowed(src) then deny(src) return end
     local safe = (tostring(name or 'map')):gsub('[^%w_%-]', '')
@@ -27,8 +27,10 @@ RegisterNetEvent('palm6_mapeditor:save', function(name, luaText, jsonText, ymapX
     local base = ('data/exports/%s_%s'):format(safe, stamp)
     SaveResourceFile(GetCurrentResourceName(), base .. '.lua', luaText or '', -1)
     SaveResourceFile(GetCurrentResourceName(), base .. '.json', jsonText or '', -1)
-    if ymapXml then SaveResourceFile(GetCurrentResourceName(), base .. '.ymap.xml', ymapXml, -1) end
-    TriggerClientEvent('ox_lib:notify', src, { title = 'Map Editor', description = 'saved ' .. base .. ' (.lua/.json/.ymap.xml)', type = 'success' })
+    local fmts = '.lua/.json'
+    if ymapXml then SaveResourceFile(GetCurrentResourceName(), base .. '.ymap.xml', ymapXml, -1); fmts = fmts .. '/.ymap.xml' end
+    if pyText then SaveResourceFile(GetCurrentResourceName(), base .. '.py', pyText, -1); fmts = fmts .. '/.py' end
+    TriggerClientEvent('ox_lib:notify', src, { title = 'Map Editor', description = 'saved ' .. base .. ' (' .. fmts .. ')', type = 'success' })
     print(('[palm6_mapeditor] %s saved export %s'):format(GetPlayerName(src) or src, base))
 end)
 

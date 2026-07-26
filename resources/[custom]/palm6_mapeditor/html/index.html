@@ -49,6 +49,19 @@
                 <div id="helpBody" class="help-body"></div>
             </div>
 
+            <!-- Activity log: a searchable history of everything the editor
+                 reported this session; toggled by the L key / the /maplog command. -->
+            <div id="activityOverlay" class="help-overlay hidden" role="dialog" aria-label="Activity log" aria-hidden="true">
+                <div class="help-head">
+                    <span class="help-title">ACTIVITY&nbsp;LOG</span>
+                    <div class="log-search">
+                        <input id="logFilter" type="text" placeholder="Filter events…" autocomplete="off" spellcheck="false" aria-label="Filter activity" />
+                    </div>
+                    <button id="logClose" class="close" title="Back (L)"><kbd>L</kbd></button>
+                </div>
+                <div id="logBody" class="help-body log-body"></div>
+            </div>
+
         </section>
     </div>
     <script src="app.js"></script>

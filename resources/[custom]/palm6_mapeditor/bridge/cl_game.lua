@@ -221,12 +221,36 @@ function Game.SetClipboard(text)
     if lib and lib.setClipboard then lib.setClipboard(text) end
 end
 
+-- Activity log: a rolling in-memory feed of everything the editor reports. Every
+-- Game.Notify is teed into it (one central tap → no per-command wiring), so the
+-- /maplog NUI viewer shows a real, searchable history of the session's actions.
+local activity = {}     -- { { ts, msg, kind }, ... } oldest-first
+local ACTIVITY_MAX = 200
+function Game.LogActivity(msg, kind)
+    activity[#activity + 1] = { ts = os.time(), msg = tostring(msg), kind = kind or 'inform' }
+    if #activity > ACTIVITY_MAX then table.remove(activity, 1) end
+end
+function Game.GetActivityLog() return activity end
+
 function Game.Notify(msg, kind)
+    Game.LogActivity(msg, kind)
     if lib and lib.notify then lib.notify({ title = 'Map Editor', description = msg, type = kind or 'inform' }) end
 end
 
 function Game.Chat(tag, line)
     TriggerEvent('chat:addMessage', { args = { tag, line } })
+end
+
+-- 2D HUD primitives (used by the mass-fill preview prompt in client/tools.lua).
+function Game.DrawRect2D(x, y, w, h, r, g, b, a)
+    DrawRect(x + 0.0, y + 0.0, w + 0.0, h + 0.0, math.floor(r), math.floor(g), math.floor(b), math.floor(a))
+end
+function Game.DrawText2D(s, x, y, scale, r, g, b, center)
+    SetTextFont(4); SetTextScale(scale + 0.0, scale + 0.0)
+    SetTextColour(math.floor(r or 235), math.floor(g or 235), math.floor(b or 235), 235)
+    SetTextOutline()
+    if center then SetTextCentre(true) end
+    BeginTextCommandDisplayText('STRING'); AddTextComponentSubstringPlayerName(s); EndTextCommandDisplayText(x + 0.0, y + 0.0)
 end
 
 -- Lights are drawn per-frame (not entities). These are called every frame from

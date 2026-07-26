@@ -333,6 +333,31 @@ kbd { font: inherit; }
 }
 .help-cmd span { color: var(--muted); flex: 1 1 auto; }
 
+/* activity log */
+.log-search { flex: 1 1 auto; display: flex; justify-content: flex-end; }
+#logFilter {
+    width: min(320px, 100%); background: var(--bg); color: var(--text);
+    border: 1px solid var(--line-2); border-radius: 8px;
+    padding: 0.4rem 0.7rem; font-size: 0.8rem; font-family: var(--ui); outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+#logFilter::placeholder { color: var(--muted); }
+#logFilter:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.log-body { padding-top: 0.8rem; }
+.log-row {
+    display: flex; align-items: baseline; gap: 0.7rem;
+    padding: 0.32rem 0.5rem; border-radius: 7px; font-size: 0.8rem;
+    border-left: 2px solid transparent;
+}
+.log-row:nth-child(odd) { background: rgba(255, 255, 255, 0.014); }
+.log-t { font-family: var(--mono); font-size: 0.68rem; color: #55617e; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); transform: translateY(-1px); }
+.log-m { color: var(--text); flex: 1 1 auto; }
+.log-row.k-success { border-left-color: #2fd27a; } .log-row.k-success .log-dot { background: #2fd27a; }
+.log-row.k-error   { border-left-color: var(--danger); } .log-row.k-error .log-dot { background: var(--danger); }
+.log-row.k-error .log-m { color: #ffc6cd; }
+.log-row.k-inform  { border-left-color: var(--accent-line); } .log-row.k-inform .log-dot { background: var(--accent); }
+
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar { width: 11px; }
 .cats::-webkit-scrollbar-thumb, .grid::-webkit-scrollbar-thumb, .help-body::-webkit-scrollbar-thumb {

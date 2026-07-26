@@ -32,27 +32,65 @@ AddEventHandler('onResourceStop', function(res)
     hides = {}
 end)
 
+-- --- mass-fill ghost preview ----------------------------------------------
+-- Show a set of ghost props (translucent, no collision) and wait for the user
+-- to confirm (Enter) or cancel (Backspace / Esc) before they become real. The
+-- editor's live loop stands down while the preview is up. Confirm solidifies
+-- them as ONE undo group; cancel removes them with no trace.
+local previewing = false
+local function previewConfirm(ghosts, label)
+    if #ghosts == 0 then Game.Notify('nothing to preview', 'error') return end
+    if previewing then MapEd.discardGhosts(ghosts); return end   -- never stack previews
+    previewing = true
+    MapEd.setPreview(true)
+    CreateThread(function()
+        local done = false
+        while not done do
+            -- Bail safely if the editor is toggled off underneath the preview.
+            if not MapEd.isEditing() then MapEd.discardGhosts(ghosts); break end
+            Game.DrawRect2D(0.5, 0.90, 0.46, 0.065, 0, 0, 0, 170)
+            Game.DrawText2D(('~w~Preview: ~b~%s~w~   (%d props)'):format(label, #ghosts), 0.5, 0.877, 0.42, 235, 235, 235, true)
+            Game.DrawText2D('~g~[Enter]~w~ place     ~r~[Backspace]~w~ cancel', 0.5, 0.905, 0.36, 200, 210, 225, true)
+            DisableControlAction(0, 201, true)  -- accept (Enter)
+            DisableControlAction(0, 202, true)  -- cancel (Esc) — don't let it exit the editor
+            DisableControlAction(0, 177, true)  -- cancel (Backspace)
+            if IsDisabledControlJustPressed(0, 201) then
+                local n = MapEd.commitGhosts(ghosts)
+                Game.Notify(('placed %d (%s) — one /matundo'):format(n, label), 'success')
+                done = true
+            elseif IsDisabledControlJustPressed(0, 202) or IsDisabledControlJustPressed(0, 177) then
+                MapEd.discardGhosts(ghosts)
+                Game.Notify('fill cancelled', 'inform')
+                done = true
+            end
+            Wait(0)
+        end
+        MapEd.setPreview(false)
+        previewing = false
+    end)
+end
+
 -- --- mass grid spawn -------------------------------------------------------
 -- /matgrid <rows> <cols> <spacing> — grid of the selected object's model,
--- starting at the selection, using its rotation. One batch.
+-- starting at the selection, using its rotation. Shows a ghost preview first.
 RegisterCommand('matgrid', function(_, args)
     local r = MapEd.selected()
     if not r then Game.Notify('select a prop first (/matpick)', 'error') return end
-    local rows = math.max(1, math.min(20, tonumber(args[1]) or 3))
-    local cols = math.max(1, math.min(20, tonumber(args[2]) or 3))
+    if previewing then Game.Notify('finish the current preview first', 'error') return end
+    local rows = math.max(1, math.min(20, math.floor(tonumber(args[1]) or 3)))
+    local cols = math.max(1, math.min(20, math.floor(tonumber(args[2]) or 3)))
     local sp = tonumber(args[3]) or 2.0
-    local n = 0
-    MapEd.batch(function()
-        for i = 0, rows - 1 do
-            for j = 0, cols - 1 do
-                if not (i == 0 and j == 0) then   -- (0,0) is the existing selection
-                    MapEd.spawnAt(r.model, r.x + i * sp, r.y + j * sp, r.z, r.rx, r.ry, r.rz, true)
-                    n = n + 1
-                end
+    Game.PreloadModels({ r.model })   -- so the ghost loop never yields mid-batch
+    local ghosts = {}
+    for i = 0, rows - 1 do
+        for j = 0, cols - 1 do
+            if not (i == 0 and j == 0) then   -- (0,0) is the existing selection
+                local g = MapEd.spawnGhost(r.model, r.x + i * sp, r.y + j * sp, r.z, r.rx, r.ry, r.rz)
+                if g then ghosts[#ghosts + 1] = g end
             end
         end
-    end)
-    Game.Notify(('grid spawned %d (%dx%d @ %.1f) — one /matundo'):format(n, rows, cols, sp), 'success')
+    end
+    previewConfirm(ghosts, ('grid %dx%d @ %.1f'):format(rows, cols, sp))
 end, false)
 
 -- --- visual gizmo (object_gizmo) -------------------------------------------
@@ -74,20 +112,22 @@ end, false)
 
 -- --- random scatter --------------------------------------------------------
 -- /matscatter <count> <radius> — scatter N copies of the selected model in a
--- radius around it with random yaw. One undo group.
+-- radius around it with random yaw. Shows a ghost preview first (one undo group).
 RegisterCommand('matscatter', function(_, args)
     local r = MapEd.selected()
     if not r then Game.Notify('select a prop first (/matpick)', 'error') return end
+    if previewing then Game.Notify('finish the current preview first', 'error') return end
     local count = math.max(1, math.min(200, math.floor(tonumber(args[1]) or 10)))
     local rad = math.max(0.5, tonumber(args[2]) or 8.0)
-    MapEd.batch(function()
-        for _ = 1, count do
-            local a, d = math.random() * math.pi * 2, math.sqrt(math.random()) * rad
-            MapEd.spawnAt(r.model, r.x + math.cos(a) * d, r.y + math.sin(a) * d, r.z,
-                r.rx, r.ry, math.random() * 360.0, true)
-        end
-    end)
-    Game.Notify(('scattered %d in %.1fm — one /matundo'):format(count, rad), 'success')
+    Game.PreloadModels({ r.model })
+    local ghosts = {}
+    for _ = 1, count do
+        local a, d = math.random() * math.pi * 2, math.sqrt(math.random()) * rad
+        local g = MapEd.spawnGhost(r.model, r.x + math.cos(a) * d, r.y + math.sin(a) * d, r.z,
+            r.rx, r.ry, math.random() * 360.0)
+        if g then ghosts[#ghosts + 1] = g end
+    end
+    previewConfirm(ghosts, ('scatter %d in %.1fm'):format(count, rad))
 end, false)
 
 -- --- per-prop utilities -----------------------------------------------------

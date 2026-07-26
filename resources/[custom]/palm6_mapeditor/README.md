@@ -21,6 +21,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/mapedit` | toggle editor |
 | `/propui` | **visual thumbnail browser** — grid of all 5,295 props with images, category rail, search, favorites, recent |
 | `/maphelp` (key **H**) | **in-game controls & commands sheet** — every keybind and slash command, overlaid on the browser |
+| `/maplog` (key **L**) | **activity log** — searchable history of every action the editor reported this session |
 | `/props` / `/propsearch <q>` | ox_lib catalog browse / fuzzy search (5,295 props) |
 | `/prop <model>` | spawn a specific model at aim |
 | `/matnext` `/matprev` `/matcat` | cycle the quick-prop catalog |
@@ -32,13 +33,13 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/matdel` `/mapclear` | delete selected / all |
 | `/matrot <rx> <ry> <rz>` | set exact rotation |
 | `/matfreeze` `/matcollision` | toggle freeze / collision on selected |
-| `/matgrid <rows> <cols> <spacing>` | mass grid-spawn the selected model |
-| `/matscatter <count> <radius>` | scatter N copies of the selected model with random yaw |
+| `/matgrid <rows> <cols> <spacing>` | mass grid-spawn the selected model — **ghost preview** first (Enter place / Backspace cancel) |
+| `/matscatter <count> <radius>` | scatter N copies of the selected model with random yaw — **ghost preview** first |
 | `/matcopy` | copy the selected prop's coords (vector4) to clipboard |
 | `/mattp` | teleport yourself to the selected prop |
 | `/materase` / `/materaseundo` | hide the vanilla world prop you look at / restore |
-| `/mapexport [name]` | export your **session** to Lua + JSON + CodeWalker ymap.xml |
-| `/mapexportlive <mapname>` | export the accumulated **live map** (built across sessions) to Lua/JSON/ymap.xml |
+| `/mapexport [name]` | export your **session** to Lua + JSON + CodeWalker ymap.xml + Blender/Sollumz .py |
+| `/mapexportlive <mapname>` | export the accumulated **live map** (built across sessions) to Lua/JSON/ymap.xml/.py |
 | `/mapload <file>` | reload a saved export back into the editor (sessions) |
 | `/matlight [point\|spot]` | place a point/spot light at your aim |
 | `/matlightcolor <r> <g> <b>` `/matlightrange <n>` `/matlightint <n>` | tune the selected light |
@@ -109,8 +110,11 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
 - **JSON** — same data, `[{model,x,y,z,rx,ry,rz}]`.
 - **CodeWalker `.ymap.xml`** — full `CMapData` with `CEntityDef` per prop (rotation =
   the object's live quaternion **inverted**, the CEntityDef convention). Import in
-  CodeWalker RPF Explorer → Import XML → binary ymap FiveM streams. Also imports into
-  Sollumz (Blender) directly.
+  CodeWalker RPF Explorer → Import XML → binary ymap FiveM streams.
+- **Blender / Sollumz `.py`** — a Blender script (Scripting tab → Run) that rebuilds the
+  map as one Empty per prop, named by archetype, at the exact GTA transform (position +
+  world quaternion; GTA and Blender are both Z-up so it maps directly). Each empty carries
+  an `archetypeName` custom property for authoring a Sollumz YMAP. Stock `bpy` only.
 
 **Editing a committed prop:** `/maplivegrab` (aim at it) checks that one prop out of the live
 map — it's removed for everyone and dropped back into your session as a normal editable prop;
