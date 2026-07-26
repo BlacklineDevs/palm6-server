@@ -40,6 +40,7 @@ files {
     'html/index.html',
     'html/style.css',
     'html/app.js',
+    'html/fonts/space-grotesk.woff2',   -- palm6 display font (bundled; CEF blocks external font loads)
 }
 
 dependencies {
