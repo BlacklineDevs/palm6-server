@@ -27,6 +27,7 @@ local function openBrowser()
     open = true
     SetNuiFocus(true, true)
     SendNUIMessage({ action = 'open', groups = Config.PropGroups or {} })
+    if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
 end
 
 local function closeBrowser()
@@ -85,6 +86,18 @@ RegisterNUICallback('spawnProp', function(data, cb)
     local model = type(data) == 'table' and data.model or nil
     if type(model) == 'string' and model:match('^[%w_]+$') then
         TriggerEvent('palm6_mapeditor:spawn', model)
+    end
+    closeBrowser()
+    cb('ok')
+end)
+
+-- Stamp a blueprint kit (prefab) at the player's aim. Routes through the same
+-- one-placement-path idea as spawn: validate the name, hand off to prefabs.lua,
+-- and close the browser so the stamp lands where the player is looking.
+RegisterNUICallback('stampPrefab', function(data, cb)
+    local name = type(data) == 'table' and data.name or nil
+    if type(name) == 'string' and #name > 0 and #name <= 64 then
+        TriggerEvent('palm6_mapeditor:stampPrefab', name)
     end
     closeBrowser()
     cb('ok')

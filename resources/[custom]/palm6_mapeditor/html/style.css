@@ -462,6 +462,36 @@ kbd { font: inherit; }
 .spawn-btn:hover { filter: brightness(1.08); box-shadow: 0 8px 26px rgba(255,94,126,0.32); }
 .spawn-btn:active { filter: brightness(0.96); }
 
+/* ---- blueprint kits (prefabs have no thumbnail) ---- */
+.cat.special.is-kits .ic svg { fill: none; }
+.cat.special.is-kits .ic svg circle { fill: currentColor; }
+.kit-tile {
+    position: relative; width: 100%; height: 0; padding-bottom: 56.25%; flex: 0 0 auto; overflow: hidden;
+    background:
+        radial-gradient(70% 60% at 50% 42%, rgba(255,138,61,0.13), transparent 70%),
+        repeating-linear-gradient(0deg, rgba(70,201,255,0.05) 0 1px, transparent 1px 16px),
+        repeating-linear-gradient(90deg, rgba(70,201,255,0.05) 0 1px, transparent 1px 16px),
+        #0a1019;
+}
+.kit-tile svg, .kit-detail-tile svg {
+    position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%);
+    width: 46px; height: 46px; fill: none; stroke: var(--amber-2); stroke-width: 1.5;
+}
+.kit-tile svg circle, .kit-detail-tile svg circle { fill: var(--amber-2); stroke: none; }
+.kit-badge {
+    position: absolute; bottom: 0.5rem; left: 50%; transform: translateX(-50%);
+    font-size: 0.56rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--amber);
+    background: rgba(255,138,61,0.1); border: 1px solid var(--amber-line); padding: 0.1rem 0.5rem; border-radius: 999px;
+}
+.kit-detail-tile {
+    background:
+        radial-gradient(70% 60% at 50% 42%, rgba(255,138,61,0.15), transparent 70%),
+        repeating-linear-gradient(0deg, rgba(70,201,255,0.05) 0 1px, transparent 1px 18px),
+        repeating-linear-gradient(90deg, rgba(70,201,255,0.05) 0 1px, transparent 1px 18px),
+        #0a1019;
+}
+.kit-detail-tile svg { top: 50%; width: 64px; height: 64px; }
+
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar, .detail-info::-webkit-scrollbar { width: 11px; }
 .cats::-webkit-scrollbar-thumb, .grid::-webkit-scrollbar-thumb, .help-body::-webkit-scrollbar-thumb, .detail-info::-webkit-scrollbar-thumb {

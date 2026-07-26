@@ -42,6 +42,7 @@ var thumbSent = {};     // model -> true once we've asked Lua (dedupe)
 // Favorites (Set-like object) + recent (ordered, most-recent-first).
 var favs = {};          // model -> true
 var recent = [];        // [model, ...] most recent first
+var kits = [];          // [{name, props, lights}, ...] blueprint kits (prefabs) from Lua
 
 // ---- persistence (localStorage; degrades to memory-only if unavailable) -----
 function lsGet(key) {
@@ -234,6 +235,7 @@ var el = {
     detailMeta: document.getElementById('detailMeta'),
     detailDesc: document.getElementById('detailDesc'),
     detailFav: document.getElementById('detailFav'),
+    detailSpawnLabel: document.getElementById('detailSpawnLabel'),
 };
 
 function post(cb, body) {
@@ -406,10 +408,12 @@ function renderGrid(models, ctxLabel, capped, showChip, emptyHead, emptyHint) {
 // SVG glyphs for the two pinned pseudo-categories.
 var ICON_STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 18.9 6.1 21l1.2-6.5L2.5 9.9l6.6-.9z"/></svg>';
 var ICON_RECENT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 7.5 5.3" fill="none" stroke-width="2" stroke-linecap="round"/><path d="M12 7v5l3.5 2" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2.5l3 2.2-3 2.2z"/></svg>';
+// Blueprint kits: outline paths (fill none) + one filled node dot.
+var ICON_KIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z" fill="none" stroke-width="1.7"/><path d="M8 4v5h5V4M13 9h7M13 9v11M4 14h9M8 14v6" fill="none" stroke-width="1.7"/><circle cx="17" cy="15" r="1.5"/></svg>';
 
 function makeSpecialRow(id, label, icon, count, active) {
     var row = document.createElement('div');
-    row.className = 'cat special' + (active ? ' active' : '');
+    row.className = 'cat special is-' + id + (active ? ' active' : '');
     row.innerHTML = '<span class="ic">' + icon + '</span>';
     var name = document.createElement('span');
     name.className = 'c-name';
@@ -421,7 +425,7 @@ function makeSpecialRow(id, label, icon, count, active) {
     row.appendChild(n);
     row.addEventListener('click', function () {
         el.search.value = ''; el.clear.style.display = 'none';
-        if (id === 'fav') selectFav(); else selectRecent();
+        if (id === 'fav') selectFav(); else if (id === 'recent') selectRecent(); else selectKits();
     });
     return row;
 }
@@ -429,7 +433,8 @@ function makeSpecialRow(id, label, icon, count, active) {
 function renderCats() {
     el.cats.textContent = '';
 
-    // Pinned pseudo-categories: Favorites + Recent, always at the top.
+    // Pinned pseudo-categories: Blueprint kits + Favorites + Recent, at the top.
+    el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
     el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
     el.cats.appendChild(makeSpecialRow('recent', 'Recent', ICON_RECENT, recentModels().length, view.type === 'recent'));
     var sep = document.createElement('div');
@@ -484,8 +489,66 @@ function selectRecent() {
         'Nothing spawned yet', 'Props you place show up here for quick reuse.');
 }
 
+// ---- blueprint kits (prefabs) --------------------------------------------
+function onKits(list) {
+    kits = Array.isArray(list) ? list : [];
+    if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh rail count
+    if (view.type === 'kits') selectKits();
+}
+
+function makeKitCard(kit) {
+    var card = document.createElement('div');
+    card.className = 'card kit-card';
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+    card.title = kit.name;
+
+    var tile = document.createElement('div');
+    tile.className = 'kit-tile';
+    tile.innerHTML = ICON_KIT;
+    var badge = document.createElement('div');
+    badge.className = 'kit-badge';
+    badge.textContent = kit.props + (kit.props === 1 ? ' prop' : ' props');
+    tile.appendChild(badge);
+
+    var meta = document.createElement('div'); meta.className = 'meta';
+    var title = document.createElement('div'); title.className = 'title'; title.textContent = prettify(kit.name);
+    var sub = document.createElement('div'); sub.className = 'sub';
+    var info = document.createElement('div'); info.className = 'mid';
+    info.textContent = kit.props + ' props' + (kit.lights ? ' · ' + kit.lights + ' lights' : '');
+    sub.appendChild(info);
+    meta.appendChild(title); meta.appendChild(sub);
+
+    card.appendChild(tile); card.appendChild(meta);
+    card.addEventListener('click', function () { openKitDetail(kit); });
+    card.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openKitDetail(kit); }
+    });
+    return card;
+}
+
+function selectKits() {
+    view = { type: 'kits' }; lastBrowse = view;
+    renderCats();
+    el.grid.scrollTop = 0;
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+    if (!kits.length) {
+        el.grid.appendChild(emptyState('No blueprint kits yet',
+            'Build props in the editor and save them with /mapprefabsave <name>. They appear here to stamp anywhere.'));
+        el.ctx.textContent = 'Blueprint kits';
+        return;
+    }
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < kits.length; i++) frag.appendChild(makeKitCard(kits[i]));
+    el.grid.appendChild(frag);
+    el.ctx.textContent = kits.length + (kits.length === 1 ? ' blueprint kit' : ' blueprint kits');
+}
+
 // Restore whatever view was active before the user started typing a search.
 function restoreBrowse() {
+    if (lastBrowse.type === 'kits') { selectKits(); return; }
     if (lastBrowse.type === 'fav') { selectFav(); return; }
     if (lastBrowse.type === 'recent') { selectRecent(); return; }
     var ci = lastBrowse.type === 'cat' ? lastBrowse.i : 0;
@@ -540,6 +603,10 @@ function spawn(model) {
 // places the prop. Reuses the thumbnail pipeline + favorites so nothing is duped.
 var detailOpen = false;
 var detailModelName = null;
+var detailMode = 'prop';      // 'prop' | 'kit'
+var detailKitName = null;
+
+function setDetailButton(label) { if (el.detailSpawnLabel) el.detailSpawnLabel.textContent = label; }
 
 // A short, honest, deterministic blurb (GTA props ship no official descriptions).
 function describe(model, cat) {
@@ -561,6 +628,9 @@ function metaRow(k, v) {
 function openDetail(model) {
     if (!modelSet[model]) return;
     detailModelName = model;
+    detailMode = 'prop'; detailKitName = null;
+    if (el.detailFav) el.detailFav.style.display = '';
+    setDetailButton('Spawn prop');
     var cat = modelCat[model] || '';
 
     // Preview reuses the exact thumbnail pipeline (server proxy -> data URI).
@@ -609,6 +679,45 @@ function closeDetail() {
     el.detail.classList.add('hidden');
     el.detail.setAttribute('aria-hidden', 'true');
     detailModelName = null;
+    detailKitName = null;
+}
+
+// Detail view for a blueprint kit (prefab): reuses the panel with a blueprint
+// preview tile, kit metadata, and a "Stamp at aim" button in place of Spawn.
+function openKitDetail(kit) {
+    detailMode = 'kit';
+    detailKitName = kit.name;
+
+    el.detailPreview.textContent = '';
+    var tile = document.createElement('div');
+    tile.className = 'thumb kit-detail-tile';
+    tile.innerHTML = ICON_KIT;
+    el.detailPreview.appendChild(tile);
+
+    el.detailTitle.textContent = prettify(kit.name);
+    el.detailModel.textContent = kit.name;
+    el.detailChip.textContent = 'PREFAB'; el.detailChip.style.display = '';
+    el.detailDesc.textContent = 'A saved blueprint of ' + kit.props + (kit.props === 1 ? ' prop' : ' props') +
+        (kit.lights ? ' and ' + kit.lights + (kit.lights === 1 ? ' light' : ' lights') : '') +
+        '. Stamp it at your crosshair to drop the whole group as one placement, then reposition or /mapcommit to publish it live.';
+
+    el.detailMeta.textContent = '';
+    el.detailMeta.appendChild(metaRow('Type', 'Blueprint kit'));
+    el.detailMeta.appendChild(metaRow('Props', String(kit.props)));
+    el.detailMeta.appendChild(metaRow('Lights', String(kit.lights)));
+    el.detailMeta.appendChild(metaRow('Target', 'Your aim'));
+
+    if (el.detailFav) el.detailFav.style.display = 'none';
+    setDetailButton('Stamp at aim');
+
+    el.detail.classList.remove('hidden');
+    el.detail.setAttribute('aria-hidden', 'false');
+    detailOpen = true;
+}
+
+function stampKit(name) {
+    hide();                       // close so the stamp lands at the crosshair
+    post('stampPrefab', { name: name });
 }
 
 function show(g) {
@@ -869,9 +978,12 @@ if (logFilterInput) logFilterInput.addEventListener('input', function (e) { rend
 var detailBackBtn = document.getElementById('detailBack');
 if (detailBackBtn) detailBackBtn.addEventListener('click', function () { closeDetail(); });
 var detailSpawnBtn = document.getElementById('detailSpawn');
-if (detailSpawnBtn) detailSpawnBtn.addEventListener('click', function () { if (detailModelName) spawn(detailModelName); });
+if (detailSpawnBtn) detailSpawnBtn.addEventListener('click', function () {
+    if (detailMode === 'kit') { if (detailKitName) stampKit(detailKitName); }
+    else if (detailModelName) spawn(detailModelName);
+});
 if (el.detailFav) el.detailFav.addEventListener('click', function () {
-    if (!detailModelName) return;
+    if (detailMode !== 'prop' || !detailModelName) return;
     toggleFav(detailModelName);
     el.detailFav.classList.toggle('on', isFav(detailModelName));
 });
@@ -905,6 +1017,7 @@ window.addEventListener('message', function (e) {
     // record it for the Recent view even while the browser is closed. pushRecent
     // dedupes, so the browser-click path double-firing this is harmless.
     else if (d.action === 'recent') { if (typeof d.model === 'string') pushRecent(d.model); }
+    else if (d.action === 'kits') onKits(d.kits);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

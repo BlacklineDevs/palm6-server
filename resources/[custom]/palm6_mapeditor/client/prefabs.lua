@@ -6,6 +6,10 @@
 -- at the player's aim point, rotated by an optional yaw — so you can drop a
 -- whole furnished room or checkpoint in one command, then /mapcommit it live.
 --
+-- Prefabs are the editor's "blueprint kits": the NUI (/propui) surfaces them as
+-- a pinned Blueprint Kits view (Prefabs.sendKits pushes the list; the Stamp
+-- button routes back through palm6_mapeditor:stampPrefab).
+--
 -- COMMANDS
 --   /mapprefabsave <name>        save your current session props as a prefab
 --   /mapprefabstamp <name> [yaw] stamp a prefab at your aim (yaw in degrees)
@@ -15,14 +19,26 @@
 
 local prefabDefs = {}   -- [name] = { props = { {model,dx,dy,dz,rx,ry,rz}, ... } }
 
+-- Push the current kit list to the NUI (name + prop/light counts). Sent on every
+-- sync so the Blueprint Kits view stays current, and again when the browser opens.
+local function sendKits()
+    local list = {}
+    for nm, def in pairs(prefabDefs) do
+        list[#list + 1] = { name = nm, props = #(def.props or {}), lights = #(def.lights or {}) }
+    end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    SendNUIMessage({ action = 'kits', kits = list })
+end
+
 RegisterNetEvent('palm6_mapeditor:prefab:syncAll', function(all)
     prefabDefs = (type(all) == 'table') and all or {}
+    sendKits()
 end)
 RegisterNetEvent('palm6_mapeditor:prefab:def', function(name, def)
-    if type(name) == 'string' and type(def) == 'table' then prefabDefs[name] = def end
+    if type(name) == 'string' and type(def) == 'table' then prefabDefs[name] = def; sendKits() end
 end)
 RegisterNetEvent('palm6_mapeditor:prefab:removed', function(name)
-    if type(name) == 'string' then prefabDefs[name] = nil end
+    if type(name) == 'string' then prefabDefs[name] = nil; sendKits() end
 end)
 
 CreateThread(function()
@@ -42,15 +58,15 @@ end, false)
 -- --- stamp -----------------------------------------------------------------
 -- Spawn the prefab's props at the aim point. Each prop's centre-relative offset
 -- (dx,dy) is rotated by the stamp yaw, and yaw is added to its own rotation, so
--- the whole group rotates as one. Spawns as ONE undo group.
-RegisterCommand('mapprefabstamp', function(_, args)
+-- the whole group rotates as one. Spawns as ONE undo group. Shared by the
+-- /mapprefabstamp command and the NUI Stamp button.
+local function stampPrefab(name, yaw)
     if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return end
-    local name = args[1]
     local def = name and prefabDefs[name]
     if not def or type(def.props) ~= 'table' then Game.Notify('no prefab "' .. tostring(name) .. '" (/mapprefablist)', 'error'); return end
     local ax, ay, az = Game.CameraAimPoint(60.0)
     if not ax then ax, ay, az = Game.PlayerPos() end
-    local yaw = tonumber(args[2]) or 0.0
+    yaw = tonumber(yaw) or 0.0
     local rad = math.rad(yaw)
     local cos, sin = math.cos(rad), math.sin(rad)
     local n = 0
@@ -84,7 +100,15 @@ RegisterCommand('mapprefabstamp', function(_, args)
         end
     end
     Game.Notify(('stamped "%s" — %d props, %d lights (/matundo props). /mapcommit to publish'):format(name, n, ln), 'success')
-end, false)
+end
+
+RegisterCommand('mapprefabstamp', function(_, args) stampPrefab(args[1], args[2]) end, false)
+
+-- NUI Stamp button routes here (nui.lua's stampPrefab callback fires this event).
+AddEventHandler('palm6_mapeditor:stampPrefab', function(name) stampPrefab(name, 0.0) end)
+
+-- Exposed for nui.lua: push the kit list to the NUI when the browser opens.
+Prefabs = { sendKits = sendKits, stamp = stampPrefab }
 
 -- --- list / delete ---------------------------------------------------------
 RegisterCommand('mapprefablist', function()

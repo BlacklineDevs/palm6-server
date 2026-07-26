@@ -19,7 +19,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | Command | Does |
 |---|---|
 | `/mapedit` | toggle editor |
-| `/propui` | **visual thumbnail browser** — grid of all 5,295 props with images, category rail, search, favorites, recent |
+| `/propui` | **visual thumbnail browser** — 5,295 props with images, category rail, search, favorites, recent, **blueprint kits** (prefabs), and a click-through detail view (preview + description + Spawn) |
 | `/maphelp` (key **H**) | **in-game controls & commands sheet** — every keybind and slash command, overlaid on the browser |
 | `/maplog` (key **L**) | **activity log** — searchable history of every action the editor reported this session |
 | `/mapcam` (key **B**) | **freecam** — detach a smooth camera: WASD fly, mouse look, Shift fast, mouse-wheel FOV zoom, Backspace exit |
@@ -121,7 +121,9 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
 map — it's removed for everyone and dropped back into your session as a normal editable prop;
 reposition it and `/mapcommit` republishes. Only one prop is ever checked out at a time.
 
-**Prefabs:** `/mapprefabsave <name>` stores your current session props as a reusable group,
+**Prefabs = Blueprint Kits:** saved prefabs also surface in `/propui` under the **Blueprint kits**
+rail view — click a kit to see its prop/light counts and a **Stamp at aim** button (same as
+`/mapprefabstamp`, stamped at your crosshair). `/mapprefabsave <name>` stores your current session props as a reusable group,
 centred on their centroid (in `palm6_mapeditor_prefabs`). `/mapprefabstamp <name> [yaw]` drops
 the whole group at your crosshair, rotated by `yaw` degrees, as one undo group — then reposition
 and `/mapcommit`. Great for repeating a furnished room, checkpoint, or barrier layout.
