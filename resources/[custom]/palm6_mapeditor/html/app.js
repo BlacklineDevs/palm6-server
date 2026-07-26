@@ -207,9 +207,13 @@ function requestThumb(model, img, thumb) {
 function onThumb(model, data) {
     thumbData[model] = (data === undefined ? false : data);
     var list = awaiting[model];
-    if (!list) return;
-    awaiting[model] = null;
-    for (var i = 0; i < list.length; i++) applyThumb(model, list[i].img, list[i].thumb, thumbData[model]);
+    if (list) {
+        awaiting[model] = null;
+        for (var i = 0; i < list.length; i++) applyThumb(model, list[i].img, list[i].thumb, thumbData[model]);
+    }
+    // If the detail panel is open on this model, refresh its preview meta +
+    // description now that we know whether the image exists.
+    if (detailOpen && detailModelName === model) refreshDetailMeta(model);
 }
 
 var el = {
@@ -588,6 +592,15 @@ function openDetail(model) {
     el.detail.classList.remove('hidden');
     el.detail.setAttribute('aria-hidden', 'false');
     detailOpen = true;
+}
+
+// Update just the Preview meta row + description in place (no rebuild/flicker),
+// e.g. when a slow thumbnail resolves while the detail is open.
+function refreshDetailMeta(model) {
+    var res = thumbData[model] === false ? 'no image' : (thumbData[model] ? '384 × 216' : 'loading…');
+    var rows = el.detailMeta.querySelectorAll('.meta-row dd');
+    if (rows[3]) rows[3].textContent = res;
+    el.detailDesc.textContent = describe(model, modelCat[model] || '');
 }
 
 function closeDetail() {

@@ -45,6 +45,34 @@
                 <span id="thumbstat" class="stat" title="Thumbnails stream from the RAGE object database">thumbnails: 0 loaded &middot; 0 failed</span>
             </footer>
 
+            <aside id="detail" class="detail hidden" role="dialog" aria-label="Prop details" aria-hidden="true">
+                <div class="detail-head">
+                    <button id="detailBack" class="detail-back" title="Back (Esc)">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h10"/></svg>
+                        <span>Back</span>
+                    </button>
+                    <button id="detailFav" class="detail-fav" title="Favorite (F)" aria-label="Toggle favorite">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 18.9 6.1 21l1.2-6.5L2.5 9.9l6.6-.9z"/></svg>
+                    </button>
+                </div>
+                <div class="detail-preview" id="detailPreview"></div>
+                <div class="detail-info">
+                    <div class="detail-title" id="detailTitle"></div>
+                    <div class="detail-subrow">
+                        <span class="detail-model" id="detailModel"></span>
+                        <span class="detail-chip" id="detailChip"></span>
+                    </div>
+                    <dl class="detail-meta" id="detailMeta"></dl>
+                    <p class="detail-desc" id="detailDesc"></p>
+                </div>
+                <div class="detail-foot">
+                    <button id="detailSpawn" class="spawn-btn" type="button">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="M4.5 7.7l7.5 4.2 7.5-4.2M12 12v8.5"/></svg>
+                        <span>Spawn prop</span>
+                    </button>
+                </div>
+            </aside>
+
             <div id="helpOverlay" class="help-overlay hidden" role="dialog" aria-label="Controls and commands" aria-hidden="true">
                 <div class="help-head">
                     <span class="help-title">CONTROLS&nbsp;&amp;&nbsp;COMMANDS</span>
