@@ -139,6 +139,7 @@ end, false)
 RegisterCommand('mattp', function()
     local r = MapEd.selected(); if not r then return end
     Game.TeleportPlayer(r.x, r.y, r.z)
+    Game.LogActivity('teleported to ' .. tostring(r.model))
 end, false)
 
 -- --- area delete -----------------------------------------------------------

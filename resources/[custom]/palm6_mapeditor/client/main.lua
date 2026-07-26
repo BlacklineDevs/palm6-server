@@ -76,7 +76,12 @@ end
 local function spawnAtAim(model)
     local x, y, z = Game.CameraAimPoint(30.0)
     if not x then x, y, z = Game.PlayerPos() end
-    spawnProp(model, x, y, z)
+    local rec = spawnProp(model, x, y, z)
+    if rec then
+        Game.LogActivity('spawned ' .. model)
+        SendNUIMessage({ action = 'recent', model = model })   -- feed the browser's Recent view
+    end
+    return rec
 end
 
 -- Minimal API for client/tools.lua (world eraser / mass spawn / per-prop).
@@ -144,12 +149,15 @@ local function deleteSelected(noUndo)
     table.remove(placed, sel)
     selectLast()
     highlight()
+    Game.LogActivity('deleted ' .. tostring(r.model))
 end
 
 local function duplicateSelected()
     local r = selRec()
     if not r then return end
-    spawnProp(r.model, r.x + 0.5, r.y + 0.5, r.z, r.rx, r.ry, r.rz)
+    if spawnProp(r.model, r.x + 0.5, r.y + 0.5, r.z, r.rx, r.ry, r.rz) then
+        Game.LogActivity('duplicated ' .. tostring(r.model))
+    end
 end
 
 local function removeRec(rec)
@@ -161,12 +169,14 @@ local function undo()
     if not op then Game.Notify('nothing to undo') return end
     if op.type == 'spawn' then
         removeRec(op.rec)
+        Game.LogActivity('undid spawn of ' .. tostring(op.rec and op.rec.model))
     elseif op.type == 'batch' then
         for _, rec in ipairs(op.recs) do removeRec(rec) end
         Game.Notify('undid batch (' .. #op.recs .. ')')
     elseif op.type == 'delete' then
         local o = op.rec
         spawnProp(o.model, o.x, o.y, o.z, o.rx, o.ry, o.rz, true)   -- noUndo
+        Game.LogActivity('undid delete of ' .. tostring(o.model))
     end
     selectLast(); highlight()
 end
@@ -229,6 +239,10 @@ end
 -- CodeWalker .ymap.xml — the streamable format (import in CodeWalker RPF Explorer
 -- -> right-click -> Import XML). This is the differentiator most editors can't do.
 local function buildYmap(name, recs)
+    -- The name is embedded raw in <name>%s</name>; keep it to identifier chars so a
+    -- stray &/</>/quote can't produce malformed XML the CodeWalker import rejects.
+    name = tostring(name or 'palm6_map'):gsub('[^%w_%-]', '')
+    if name == '' then name = 'palm6_map' end
     recs = recs or placed
     local ex = { minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9 }
     local ents = {}
@@ -284,6 +298,10 @@ end
 -- placements to author a YMAP (or import the sibling .ymap.xml directly). Stock
 -- bpy only — no fragile addon-internal calls — so the script always runs.
 local function buildSollumz(name, recs)
+    -- Name goes raw into a Python string literal (MAP_NAME = "..."); constrain it to
+    -- identifier chars so a quote/backslash/newline can't break the generated .py.
+    name = tostring(name or 'palm6_map'):gsub('[^%w_%-]', '')
+    if name == '' then name = 'palm6_map' end
     recs = recs or placed
     local rows = {}
     for _, r in ipairs(recs) do
@@ -411,6 +429,7 @@ RegisterCommand('matrot', function(_, args)
     if not r then return end
     r.rx = tonumber(args[1]) or r.rx; r.ry = tonumber(args[2]) or r.ry; r.rz = tonumber(args[3]) or r.rz
     applyTransform(r)
+    Game.LogActivity(('set rotation on %s'):format(tostring(r.model)))
 end, false)
 RegisterCommand('matpick', function()
     if not editing then return end

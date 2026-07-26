@@ -504,9 +504,11 @@ function show(g) {
         if (!grp || !Array.isArray(grp.models)) return;
         grp.models.forEach(function (m) {
             if (typeof m !== 'string') return;
-            allModels.push(m);
-            modelSet[m] = true;
-            searchIndex.push([norm(m), m]);
+            // A model can be listed in more than one category; index it once so the
+            // count, search results and Favorites never show duplicate cards. (The
+            // category grids still render from groups[i].models, so a shared prop
+            // still appears under each of its categories when browsing.)
+            if (!modelSet[m]) { allModels.push(m); searchIndex.push([norm(m), m]); modelSet[m] = true; }
             if (grp.category && !modelCat[m]) modelCat[m] = grp.category;
         });
     });
@@ -520,7 +522,10 @@ function show(g) {
     renderGrid(gg ? gg.models : [], gg ? gg.category : '', false, false);
     el.app.classList.remove('hidden');
     el.app.setAttribute('aria-hidden', 'false');
-    setTimeout(function () { el.search.focus(); }, 30);
+    // Don't steal focus into the search box when we opened straight onto an
+    // overlay (/maphelp, /maplog): a focused #search makes typing() true, which
+    // would kill the H/L toggle that dismisses the overlay.
+    setTimeout(function () { if (!helpOpen && !activityOpen) el.search.focus(); }, 30);
 }
 function hide() { el.app.classList.add('hidden'); el.app.setAttribute('aria-hidden', 'true'); helpHide(); activityHide(); }
 
@@ -649,6 +654,7 @@ function buildHelp() {
 function helpShow() {
     if (!helpBuilt) buildHelp();
     if (!elHelp) return;
+    activityHide();          // only one overlay at a time, whatever opened it
     helpOpen = true;
     elHelp.classList.remove('hidden');
     elHelp.setAttribute('aria-hidden', 'false');
@@ -713,6 +719,7 @@ function onActivity(log) {
 function activityShow(log) {
     onActivity(log);
     if (!elActivity) return;
+    helpHide();              // only one overlay at a time, whatever opened it
     activityOpen = true;
     elActivity.classList.remove('hidden');
     elActivity.setAttribute('aria-hidden', 'false');
@@ -768,6 +775,10 @@ window.addEventListener('message', function (e) {
     if (d.action === 'open') { show(d.groups); if (d.help) helpShow(); if (d.activity) activityShow(d.activity); }
     else if (d.action === 'help') { if (el.app.classList.contains('hidden')) show(groups); helpShow(); }
     else if (d.action === 'activity') { if (el.app.classList.contains('hidden')) show(groups); activityShow(d.log); }
+    // A prop was spawned from a slash command (/prop, /matnext, browser click):
+    // record it for the Recent view even while the browser is closed. pushRecent
+    // dedupes, so the browser-click path double-firing this is harmless.
+    else if (d.action === 'recent') { if (typeof d.model === 'string') pushRecent(d.model); }
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

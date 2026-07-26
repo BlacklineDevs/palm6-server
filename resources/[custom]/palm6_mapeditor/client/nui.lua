@@ -101,14 +101,26 @@ end)
 -- key even while a NUI holds keyboard focus. Also closes if the editor is somehow
 -- toggled off underneath the browser.
 CreateThread(function()
+    local escFrames = 0
     while true do
         if open then
-            if IsRawKeyPressed(0x1B)                                   -- VK_ESCAPE, hardware-level
-                or (MapEd and MapEd.isEditing and not MapEd.isEditing()) then
+            if MapEd and MapEd.isEditing and not MapEd.isEditing() then
+                -- Editor toggled off underneath the browser: release focus at once.
                 closeBrowser()
+                escFrames = 0
+            elseif IsRawKeyPressed(0x1B) then                          -- VK_ESCAPE, hardware-level
+                -- Normal Esc is OWNED by the page JS: it backs out an open overlay
+                -- (help / activity) first, then posts 'close'. This raw-key path must
+                -- NOT steal that, so it's only a dead-page panic hatch — it fires just
+                -- when Esc is HELD ~0.4s, which a quick tap never reaches.
+                escFrames = escFrames + 1
+                if escFrames >= 25 then closeBrowser(); escFrames = 0 end
+            else
+                escFrames = 0
             end
             Wait(0)
         else
+            escFrames = 0
             Wait(300)
         end
     end
