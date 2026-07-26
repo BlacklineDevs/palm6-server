@@ -147,7 +147,7 @@ kbd { font: inherit; }
 .grid {
     flex: 1 1 auto; overflow-y: auto; padding: 1.1rem;
     display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 1rem; align-content: start;
+    gap: 1rem; align-content: start; align-items: start;
 }
 .card {
     position: relative; background: var(--surface);
@@ -168,13 +168,19 @@ kbd { font: inherit; }
 .card:focus-visible .spawn-hint { opacity: 1; transform: translateY(0); }
 .card:hover .spawn-hint { opacity: 1; transform: translateY(0); }
 
-/* odb renders are 16:9 (384x216) — match that so the whole prop shows crisp,
-   not squashed into a square. contain (not cover) keeps the full prop visible. */
+/* odb renders are 16:9 (384x216). flex:0 0 auto stops the thumb collapsing when
+   the card is a flex/grid item (the "skinny cards" bug). cover + slight scale
+   crops the odb's baked-in name text at the top/bottom edges. */
 .thumb {
     position: relative; width: 100%; height: 0; padding-bottom: 56.25%;
-    background: #090d14; overflow: hidden;
+    background: #0b0f17; overflow: hidden; flex: 0 0 auto;
 }
-.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.14); display: block; }
+/* scrim so the odb light-studio backgrounds blend into the dark UI + hide edge text */
+.thumb:not(.fallback)::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(8,12,19,0.55), transparent 22%, transparent 74%, rgba(8,12,19,0.62));
+}
 
 /* loading shimmer until an image resolves */
 .thumb.loading::after {
