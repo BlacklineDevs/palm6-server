@@ -2,119 +2,107 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>propui preview (open in a normal browser)</title>
+<!-- Loads the REAL style.css + app.js so this harness never drifts from
+     production. Only the <body> markup is duplicated from index.html (it rarely
+     changes). Open directly in Chrome: real odb photos load here because a normal
+     browser has no FiveM CSP / CDN hotlink guard, so the bootstrap prefills
+     window.thumbData with direct CDN URLs (bypassing the Lua thumb proxy). -->
+<link rel="stylesheet" href="style.css" />
 <style>
-/* === real style.css, inlined, + a dark body bg so it renders standalone === */
-* { margin: 0; padding: 0; box-sizing: border-box; }
-:root {
-    --bg:#0a0d13; --panel:#0e131c; --surface:#141b27; --surface-2:#1a2231;
-    --line:#202a39; --line-2:#2b3849; --text:#e7edf5; --muted:#8593a6; --dim:#55617e;
-    --accent:#2ab8ff; --accent-2:#66d0ff; --accent-soft:rgba(42,184,255,0.13); --accent-line:rgba(42,184,255,0.42);
-    --danger:#ff5c6c; --shadow:0 30px 80px rgba(0,0,0,0.6);
-    --ui:"Segoe UI",system-ui,"Inter",Roboto,sans-serif;
-    --mono:"Cascadia Code","Cascadia Mono",ui-monospace,Consolas,"SF Mono",monospace;
-}
-html,body { width:100%; height:100%; font-family:var(--ui); color:var(--text); overflow:hidden; -webkit-font-smoothing:antialiased; user-select:none;
-    background:radial-gradient(80% 60% at 50% 0%, #12203a, #05070b); }
-kbd { font:inherit; }
-#app { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
-.panel { position:relative; width:min(1240px,90vw); height:min(820px,88vh); background:var(--panel); border:1px solid var(--line-2); border-radius:16px; box-shadow:var(--shadow); display:flex; flex-direction:column; overflow:hidden;
-    background-image:linear-gradient(var(--panel),var(--panel)),linear-gradient(rgba(255,255,255,0.014) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.014) 1px,transparent 1px); background-size:auto,26px 26px,26px 26px; }
-.bar { display:flex; align-items:center; gap:1.1rem; padding:0.85rem 1.15rem; border-bottom:1px solid var(--line); background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent); }
-.brand { display:flex; align-items:center; gap:0.6rem; }
-.mark { width:13px; height:13px; transform:rotate(45deg); background:linear-gradient(135deg,var(--accent-2),var(--accent)); border-radius:3px; box-shadow:0 0 14px var(--accent-line); }
-.brand-t { font-weight:700; letter-spacing:0.16em; font-size:0.78rem; color:#fff; }
-.count { font-size:0.66rem; font-weight:600; color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); padding:0.12rem 0.5rem; border-radius:999px; }
-.search { position:relative; flex:1 1 auto; display:flex; align-items:center; }
-.s-icon { position:absolute; left:0.8rem; width:16px; height:16px; fill:none; stroke:var(--muted); stroke-width:2; stroke-linecap:round; }
-#search { width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line-2); border-radius:10px; padding:0.62rem 2rem 0.62rem 2.4rem; font-size:0.9rem; outline:none; }
-#search::placeholder { color:var(--muted); }
-.close { background:var(--surface); border:1px solid var(--line-2); border-radius:9px; padding:0.42rem 0.6rem; }
-.close kbd { font-size:0.66rem; font-weight:700; color:var(--muted); font-family:var(--mono); }
-.body { flex:1 1 auto; display:flex; min-height:0; }
-.cats { flex:0 0 234px; overflow-y:auto; border-right:1px solid var(--line); padding:0.55rem; background:linear-gradient(180deg,rgba(0,0,0,0.12),transparent); }
-.cat { position:relative; display:flex; align-items:center; gap:0.6rem; padding:0.55rem 0.7rem 0.55rem 0.85rem; margin-bottom:2px; border-radius:9px; cursor:pointer; font-size:0.83rem; color:var(--muted); border:1px solid transparent; }
-.cat::before { content:""; position:absolute; left:0; top:50%; transform:translateY(-50%) scaleY(0); width:3px; height:62%; border-radius:3px; background:var(--accent); transition:transform .14s; }
-.cat .swatch { width:9px; height:9px; border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,0.14); }
-.cat .c-name { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.cat .n { font-size:0.66rem; color:#55617e; }
-.cat:hover { background:var(--surface); color:var(--text); }
-.cat.active { background:var(--accent-soft); color:#fff; }
-.cat.active::before { transform:translateY(-50%) scaleY(1); }
-.cat.active .n { color:var(--accent); }
-.grid { flex:1 1 auto; overflow-y:auto; padding:1.1rem; display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:1rem; align-content:start; }
-.card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column; transition:transform .12s,border-color .12s,box-shadow .12s; }
-.card:hover { transform:translateY(-3px); border-color:var(--accent-line); box-shadow:0 12px 26px rgba(0,0,0,.45),0 0 0 1px var(--accent-line); }
-.card:hover .spawn-hint { opacity:1; transform:translateY(0); }
-.thumb { position:relative; width:100%; height:0; padding-bottom:64%; background:#0b0f17; overflow:hidden; }
-.thumb img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scale(1.14); display:block; }
-.thumb:not(.fallback)::after { content:""; position:absolute; inset:0; pointer-events:none; background:linear-gradient(180deg,rgba(8,12,19,0.55),transparent 22%,transparent 74%,rgba(8,12,19,0.62)); }
-.thumb.fallback { background:radial-gradient(78% 68% at 50% 40%,hsla(var(--h,205),58%,46%,0.24),transparent 72%),#0b1019; }
-.thumb.fallback::before { content:attr(data-glyph); position:absolute; top:50%; left:50%; transform:translate(-50%,-54%); width:3.2rem; height:3.2rem; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:1.5rem; font-weight:700; color:hsla(var(--h,205),60%,78%,0.96); background:hsla(var(--h,205),45%,30%,0.28); border:1px solid hsla(var(--h,205),50%,60%,0.30); border-radius:14px; }
-.thumb.fallback::after { content:"no preview"; position:absolute; bottom:0.55rem; left:0; right:0; text-align:center; font-size:0.58rem; letter-spacing:0.16em; text-transform:uppercase; color:hsla(var(--h,205),22%,72%,0.5); }
-.spawn-hint { position:absolute; top:0.5rem; right:0.5rem; background:var(--accent); color:#05121c; font-size:0.6rem; font-weight:800; padding:0.16rem 0.42rem; border-radius:6px; opacity:0; transform:translateY(-4px); transition:opacity .12s,transform .12s; }
-.meta { padding:0.5rem 0.6rem 0.55rem; border-top:1px solid var(--line); background:var(--panel); }
-.title { font-size:0.78rem; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.sub { display:flex; align-items:center; gap:0.35rem; margin-top:3px; min-width:0; }
-.mid { font-family:var(--mono); font-size:0.6rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; }
-.chip { flex:0 0 auto; font-size:0.54rem; padding:0.08rem 0.34rem; border-radius:5px; color:hsla(var(--h,205),45%,78%,0.95); background:hsla(var(--h,205),55%,50%,0.14); border:1px solid hsla(var(--h,205),50%,55%,0.22); max-width:46%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.foot { display:flex; align-items:center; justify-content:space-between; padding:0.55rem 1.15rem; border-top:1px solid var(--line); background:linear-gradient(0deg,rgba(0,0,0,0.16),transparent); font-size:0.7rem; color:var(--muted); }
-.stat { color:#55617e; }
+  /* standalone-only: give the page a dark ground (in FiveM the game is behind). */
+  html, body { background: radial-gradient(80% 60% at 50% 0%, #0d1626, #05070d); }
 </style>
 </head>
 <body>
-<!-- PREVIEW ONLY. Open in a normal browser (Chrome). Images load from the RAGE
-     CDN here (no FiveM CSP), so this shows exactly how /propui looks with photos.
-     Not loaded by the resource (not in fxmanifest files{}). -->
-<div id="app">
-    <div class="panel">
-        <header class="bar">
-            <div class="brand"><span class="mark"></span><span class="brand-t">PROP&nbsp;LIBRARY</span><span id="count" class="count">31</span></div>
-            <div class="search"><svg class="s-icon" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/></svg><input id="search" placeholder="Search 5,295 props by name (barrier, fence, chair…)"/></div>
-            <button class="close"><kbd>ESC</kbd></button>
-        </header>
-        <div class="body"><nav id="cats" class="cats"></nav><main id="grid" class="grid"></main></div>
-        <footer class="foot"><span id="ctx">Street &amp; barriers</span><span class="stat">preview · images from RAGE odb</span></footer>
+    <div id="app" class="hidden" aria-hidden="true">
+        <div class="scrim"></div>
+        <section class="panel" role="dialog" aria-label="Prop library">
+
+            <header class="bar">
+                <div class="brand">
+                    <span class="mark" aria-hidden="true"></span>
+                    <span class="brand-t">PROP&nbsp;LIBRARY</span>
+                    <span id="count" class="count">0</span>
+                </div>
+                <div class="search">
+                    <svg class="s-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/></svg>
+                    <input id="search" type="text" placeholder="Search 5,295 props by name (barrier, fence, chair…)" autocomplete="off" spellcheck="false" aria-label="Search props" />
+                    <button id="clear" class="clear" title="Clear" aria-label="Clear search">&times;</button>
+                </div>
+                <button id="help" class="help-btn" title="Controls &amp; commands (H)" aria-label="Controls and commands"><kbd>?</kbd></button>
+                <button id="close" class="close" title="Close (Esc)"><kbd>ESC</kbd></button>
+            </header>
+
+            <div class="body">
+                <nav id="cats" class="cats" aria-label="Categories"></nav>
+                <main id="grid" class="grid" role="group" aria-label="Props"></main>
+            </div>
+
+            <footer class="foot">
+                <span id="ctx" class="ctx">Select a category</span>
+                <span id="thumbstat" class="stat" title="Thumbnails stream from the RAGE object database">thumbnails: 0 loaded &middot; 0 failed</span>
+            </footer>
+
+            <div id="helpOverlay" class="help-overlay hidden" role="dialog" aria-label="Controls and commands" aria-hidden="true">
+                <div class="help-head">
+                    <span class="help-title">CONTROLS&nbsp;&amp;&nbsp;COMMANDS</span>
+                    <span class="help-sub">in-editor keys and every slash command</span>
+                    <button id="helpClose" class="close" title="Back (H)"><kbd>H</kbd></button>
+                </div>
+                <div id="helpBody" class="help-body"></div>
+            </div>
+
+            <div id="activityOverlay" class="help-overlay hidden" role="dialog" aria-label="Activity log" aria-hidden="true">
+                <div class="help-head">
+                    <span class="help-title">ACTIVITY&nbsp;LOG</span>
+                    <div class="log-search">
+                        <input id="logFilter" type="text" placeholder="Filter events…" autocomplete="off" spellcheck="false" aria-label="Filter activity" />
+                    </div>
+                    <button id="logClose" class="close" title="Back (L)"><kbd>L</kbd></button>
+                </div>
+                <div id="logBody" class="help-body log-body"></div>
+            </div>
+
+        </section>
     </div>
-</div>
-<script>
-function joaat(k){k=String(k).toLowerCase();var h=0;for(var i=0;i<k.length;i++){h=(h+k.charCodeAt(i))>>>0;h=(h+(h<<10))>>>0;h=(h^(h>>>6))>>>0;}h=(h+(h<<3))>>>0;h=(h^(h>>>11))>>>0;h=(h+(h<<15))>>>0;return h>>>0;}
-function url(m){return 'https://cdn.rage.mp/public/odb/imgs-small/'+m.toLowerCase()+'-'+joaat(m)+'.jpg';}
-function catHue(s){return joaat(s||'prop')%360;}
-function prettify(m){var s=String(m).replace(/^(prop_|p_|v_|ba_|xm_|apa_|bkr_)/i,'').replace(/_/g,' ').trim();return s.replace(/\b\w/g,function(c){return c.toUpperCase();})||m;}
-function initials(m){var p=prettify(m).split(/\s+/).filter(Boolean);return((p[0]?p[0][0]:'')+(p[1]?p[1][0]:(p[0]&&p[0][1]?p[0][1]:''))||'?').toUpperCase().slice(0,2);}
-var groups=[
- {category:'Street & barriers',models:['prop_barrier_work05','prop_barrier_work06a','prop_mp_barrier_02b','prop_roadcone02a','prop_worklight_03b','prop_barrier_wire_wm','prop_fnclink_03crnr1','prop_fncwood_16d']},
- {category:'Containers',models:['prop_container_01a','prop_boxpile_07d','prop_barrel_02a','prop_dumpster_02a','prop_bin_01a','prop_recyclebin_04_a']},
- {category:'Interior',models:['prop_off_chair_05','prop_off_desk_01','prop_table_03','v_res_tre_couch','prop_ff_shelf_01','p_cs_office_chair','prop_filedrawer_01']},
- {category:'Lights',models:['prop_wall_light_09a','prop_streetlight_01','prop_worklight_03b','prop_wall_light_10a']},
- {category:'Nature',models:['prop_bush_med_02','prop_tree_birch_04','prop_plant_int_03b','prop_flowerpot_01']}
-];
-var modelCat={}; groups.forEach(function(g){g.models.forEach(function(m){if(!modelCat[m])modelCat[m]=g.category;});});
-function card(m){
- var cat=modelCat[m]||'';var c=document.createElement('div');c.className='card';c.title=m;c.style.setProperty('--h',catHue(cat));
- var t=document.createElement('div');t.className='thumb';t.setAttribute('data-glyph',initials(m));
- var img=document.createElement('img');img.onerror=function(){t.classList.add('fallback');img.remove();};img.src=url(m);t.appendChild(img);
- var h=document.createElement('div');h.className='spawn-hint';h.textContent='SPAWN';t.appendChild(h);
- var meta=document.createElement('div');meta.className='meta';
- var ti=document.createElement('div');ti.className='title';ti.textContent=prettify(m);
- var sub=document.createElement('div');sub.className='sub';
- var mid=document.createElement('div');mid.className='mid';mid.textContent=m;sub.appendChild(mid);
- var chip=document.createElement('span');chip.className='chip';chip.textContent=cat;sub.appendChild(chip);
- meta.appendChild(ti);meta.appendChild(sub);c.appendChild(t);c.appendChild(meta);return c;
-}
-var cats=document.getElementById('cats'),grid=document.getElementById('grid');
-groups.forEach(function(g,i){
- var r=document.createElement('div');r.className='cat'+(i===0?' active':'');
- var sw=document.createElement('span');sw.className='swatch';sw.style.background='hsl('+catHue(g.category)+',55%,56%)';
- var l=document.createElement('span');l.className='c-name';l.textContent=g.category;
- var n=document.createElement('span');n.className='n';n.textContent=g.models.length;
- r.appendChild(sw);r.appendChild(l);r.appendChild(n);
- r.onclick=function(){[].forEach.call(cats.children,function(x){x.classList.remove('active');});r.classList.add('active');render(g);document.getElementById('ctx').textContent=g.category;};
- cats.appendChild(r);
-});
-function render(g){grid.innerHTML='';g.models.forEach(function(m){grid.appendChild(card(m));});}
-render(groups[0]);
-</script>
+
+    <script src="app.js"></script>
+    <script>
+    /* Bootstrap the harness with real prop names + direct-CDN thumbnails. */
+    (function () {
+        var groups = [
+            { category: 'Street & barriers', models: ['prop_barrier_work05', 'prop_barrier_work06a', 'prop_mp_barrier_02b', 'prop_roadcone02a', 'prop_worklight_03b', 'prop_barier_wire_wp', 'prop_barier_conc_01a', 'prop_barier_conc_02a'] },
+            { category: 'Containers', models: ['prop_barrel_02a', 'prop_box_wood02a_mf', 'prop_crate_02a', 'prop_dumpster_01a', 'prop_bin_01a', 'prop_pallet_02a'] },
+            { category: 'Interior', models: ['prop_off_chair_01', 'prop_table_03', 'prop_couch_03', 'prop_bookcase_01'] },
+            { category: 'Lights', models: ['prop_streetlight_01', 'prop_lamppost_01', 'prop_wall_light_10a', 'prop_light_va_02'] },
+            { category: 'Nature', models: ['prop_bush_med_01', 'prop_tree_birch_01', 'prop_plant_int_01a', 'prop_flower_01'] },
+        ];
+        // Prefill thumbData so requestThumb resolves from cache (no NUI host here).
+        groups.forEach(function (g) {
+            g.models.forEach(function (m) {
+                window.thumbData[m] = 'https://cdn.rage.mp/public/odb/imgs-small/' + m.toLowerCase() + '-' + window.joaat(m) + '.jpg';
+            });
+        });
+        try {
+            localStorage.setItem('palm6_mapeditor.favs', JSON.stringify({ prop_roadcone02a: true, prop_barrel_02a: true }));
+            localStorage.setItem('palm6_mapeditor.recent', JSON.stringify(['prop_worklight_03b', 'prop_dumpster_01a', 'prop_bush_med_01']));
+        } catch (e) {}
+        if (typeof loadPrefs === 'function') loadPrefs();
+        window.postMessage({ action: 'open', groups: groups }, '*');
+        // Preview helpers: press H for the controls sheet, L for a sample activity log.
+        window.addEventListener('keydown', function (e) {
+            if (e.key === 'l' || e.key === 'L') {
+                var now = Math.floor(Date.now() / 1000);
+                window.postMessage({ action: 'activity', log: [
+                    { ts: now - 90, msg: 'spawned prop_barrel_02a', kind: 'inform' },
+                    { ts: now - 60, msg: 'grid spawned 8 (3x3 @ 2.0) — one /matundo', kind: 'success' },
+                    { ts: now - 20, msg: 'select a prop first (/matpick)', kind: 'error' },
+                ] }, '*');
+            }
+        });
+    })();
+    </script>
 </body>
 </html>

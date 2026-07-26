@@ -22,6 +22,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/propui` | **visual thumbnail browser** — grid of all 5,295 props with images, category rail, search, favorites, recent |
 | `/maphelp` (key **H**) | **in-game controls & commands sheet** — every keybind and slash command, overlaid on the browser |
 | `/maplog` (key **L**) | **activity log** — searchable history of every action the editor reported this session |
+| `/mapcam` (key **B**) | **freecam** — detach a smooth camera: WASD fly, mouse look, Shift fast, mouse-wheel FOV zoom, Backspace exit |
 | `/props` / `/propsearch <q>` | ox_lib catalog browse / fuzzy search (5,295 props) |
 | `/prop <model>` | spawn a specific model at aim |
 | `/matnext` `/matprev` `/matcat` | cycle the quick-prop catalog |

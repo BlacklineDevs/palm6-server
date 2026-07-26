@@ -141,16 +141,35 @@ function Game.SetObjectAlpha(obj, a)
     end
 end
 
+-- The camera the aim raycasts shoot from: the scripted freecam (client/freecam.lua)
+-- when /mapcam is active, otherwise the gameplay cam. EditorCam is a global set by
+-- freecam.lua; when it's absent/inactive this is byte-for-byte the old behaviour, so
+-- the default (freecam-off) editing path is unchanged. Returns cx,cy,cz, pitchRad, yawRad.
+local function camView()
+    if EditorCam and EditorCam.active and EditorCam.pos then
+        local p, r = EditorCam.pos, EditorCam.rot
+        return p.x, p.y, p.z, math.rad(r.x), math.rad(r.z)
+    end
+    local c = GetGameplayCamCoord()
+    local rot = GetGameplayCamRot(2)
+    return c.x, c.y, c.z, math.rad(rot.x), math.rad(rot.z)
+end
+
+-- Heading (yaw) of the active view in radians — for the editor's camera-relative
+-- arrow nudge, so it stays correct while the freecam is driving.
+function Game.CamHeadingRad()
+    if EditorCam and EditorCam.active and EditorCam.rot then return math.rad(EditorCam.rot.z) end
+    return math.rad(GetGameplayCamRot(2).z)
+end
+
 -- Where the camera crosshair hits world+objects (aim-to-place). x,y,z or nil.
 function Game.CameraAimPoint(maxDist)
-    local cam = GetGameplayCamCoord()
-    local rot = GetGameplayCamRot(2)
-    local rz, rx = math.rad(rot.z), math.rad(rot.x)
+    local cx, cy, cz, rx, rz = camView()
     local cosx = math.abs(math.cos(rx))
     local dx, dy, dz = -math.sin(rz) * cosx, math.cos(rz) * cosx, math.sin(rx)
     local d = maxDist or 30.0
-    local ex, ey, ez = cam.x + dx * d, cam.y + dy * d, cam.z + dz * d
-    local ray = StartExpensiveSynchronousShapeTestLosProbe(cam.x, cam.y, cam.z, ex, ey, ez, 1 + 16, PlayerPedId(), 0)
+    local ex, ey, ez = cx + dx * d, cy + dy * d, cz + dz * d
+    local ray = StartExpensiveSynchronousShapeTestLosProbe(cx, cy, cz, ex, ey, ez, 1 + 16, PlayerPedId(), 0)
     local _, hit, coords = GetShapeTestResult(ray)
     if hit == 1 then return coords.x, coords.y, coords.z end
     return nil
@@ -184,17 +203,40 @@ end
 -- What world entity the crosshair is pointing at (for select / world-erase).
 -- Returns entity, model, hitX, hitY, hitZ  (entity 0 if none).
 function Game.RaycastEntity(maxDist)
-    local cam = GetGameplayCamCoord()
-    local rot = GetGameplayCamRot(2)
-    local rz, rx = math.rad(rot.z), math.rad(rot.x)
+    local cx, cy, cz, rx, rz = camView()
     local cosx = math.abs(math.cos(rx))
     local dx, dy, dz = -math.sin(rz) * cosx, math.cos(rz) * cosx, math.sin(rx)
     local d = maxDist or 30.0
-    local ray = StartExpensiveSynchronousShapeTestLosProbe(cam.x, cam.y, cam.z,
-        cam.x + dx * d, cam.y + dy * d, cam.z + dz * d, 1 + 16, PlayerPedId(), 0)
+    local ray = StartExpensiveSynchronousShapeTestLosProbe(cx, cy, cz,
+        cx + dx * d, cy + dy * d, cz + dz * d, 1 + 16, PlayerPedId(), 0)
     local _, hit, coords, _, ent = GetShapeTestResult(ray)
     if hit == 1 then return ent or 0, ent and ent ~= 0 and GetEntityModel(ent) or 0, coords.x, coords.y, coords.z end
     return 0, 0, 0.0, 0.0, 0.0
+end
+
+-- ---- freecam (client/freecam.lua) -----------------------------------------
+-- Scripted camera used by /mapcam. Isolated here so the natives stay in the bridge.
+function Game.GameplayCamState()
+    local c = GetGameplayCamCoord()
+    local r = GetGameplayCamRot(2)
+    return c.x, c.y, c.z, r.x, r.z, GetGameplayCamFov()
+end
+function Game.CamCreate(x, y, z, pitch, yaw, fov)
+    local cam = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA',
+        x + 0.0, y + 0.0, z + 0.0, pitch + 0.0, 0.0, yaw + 0.0, fov + 0.0, true, 2)
+    SetCamActive(cam, true)
+    RenderScriptCams(true, false, 0, true, false)
+    return cam
+end
+function Game.CamApply(cam, x, y, z, pitch, yaw, fov)
+    if not cam then return end
+    SetCamCoord(cam, x + 0.0, y + 0.0, z + 0.0)
+    SetCamRot(cam, pitch + 0.0, 0.0, yaw + 0.0, 2)
+    SetCamFov(cam, fov + 0.0)
+end
+function Game.CamDestroy(cam)
+    RenderScriptCams(false, false, 0, true, false)
+    if cam then DestroyCam(cam, false) end
 end
 
 -- World eraser: hide all instances of a model in a tight sphere (vanilla map

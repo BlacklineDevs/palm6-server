@@ -480,7 +480,7 @@ CreateThread(function()
                 local shift = IsDisabledControlPressed(0, 21)
                 local step = shift and Config.Step.moveFine or Config.Step.move
                 local moved = false
-                local rad = math.rad(GetGameplayCamRot(2).z)
+                local rad = Game.CamHeadingRad()                  -- gameplay cam, or freecam when active
                 local fx, fy = -math.sin(rad), math.cos(rad)      -- camera-forward on ground
                 if IsDisabledControlPressed(0, 24) then           -- LMB carry to aim
                     local ax, ay, az = Game.CameraAimPoint(30.0)

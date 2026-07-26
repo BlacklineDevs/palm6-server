@@ -549,6 +549,7 @@ var CMD_GROUPS = [
         ['/prop <model>', 'spawn a specific model at aim'],
         ['/matnext · /matprev · /matcat', 'cycle the quick-prop catalog'],
         ['/matpick', 'select the object nearest aim'],
+        ['/mapcam', 'freecam — WASD fly, mouse look, wheel zoom'],
         ['/matdup', 'duplicate selected'],
         ['/matundo', 'undo last spawn / delete'],
         ['/matdel · /mapclear', 'delete selected / all']
