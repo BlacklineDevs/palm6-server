@@ -222,6 +222,14 @@ var el = {
     count: document.getElementById('count'),
     ctx: document.getElementById('ctx'),
     thumbstat: document.getElementById('thumbstat'),
+    detail: document.getElementById('detail'),
+    detailPreview: document.getElementById('detailPreview'),
+    detailTitle: document.getElementById('detailTitle'),
+    detailModel: document.getElementById('detailModel'),
+    detailChip: document.getElementById('detailChip'),
+    detailMeta: document.getElementById('detailMeta'),
+    detailDesc: document.getElementById('detailDesc'),
+    detailFav: document.getElementById('detailFav'),
 };
 
 function post(cb, body) {
@@ -319,7 +327,7 @@ function makeCard(model, showChip) {
 
     var hint = document.createElement('div');
     hint.className = 'spawn-hint';
-    hint.textContent = 'SPAWN';
+    hint.textContent = 'INSPECT';   // click opens the detail view, not an instant spawn
     thumb.appendChild(hint);
 
     var meta = document.createElement('div');
@@ -344,9 +352,9 @@ function makeCard(model, showChip) {
 
     card.appendChild(thumb);
     card.appendChild(meta);
-    card.addEventListener('click', function () { spawn(model); });
+    card.addEventListener('click', function () { openDetail(model); });
     card.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); spawn(model); }
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openDetail(model); }
         else if (ev.key === 'f' || ev.key === 'F') { ev.preventDefault(); toggleFav(model); }
     });
     return card;
@@ -522,6 +530,74 @@ function spawn(model) {
     post('spawnProp', { model: model });
 }
 
+// --- prop detail view -----------------------------------------------------
+// Clicking a card opens this instead of spawning: a large preview, metadata, a
+// generated description, a favorite toggle, and the Spawn button that actually
+// places the prop. Reuses the thumbnail pipeline + favorites so nothing is duped.
+var detailOpen = false;
+var detailModelName = null;
+
+// A short, honest, deterministic blurb (GTA props ship no official descriptions).
+function describe(model, cat) {
+    var c = cat ? cat.toLowerCase() : 'general';
+    var s = prettify(model) + ' is a ' + c + ' asset from the GTA V object library. ';
+    if (thumbData[model] === false) s += 'No preview image has been generated for this model yet, but it is indexed and ready to place. ';
+    s += 'Spawn it to drop the prop at your crosshair, then position it with the editor controls or the gizmo.';
+    return s;
+}
+
+function metaRow(k, v) {
+    var row = document.createElement('div'); row.className = 'meta-row';
+    var dt = document.createElement('dt'); dt.textContent = k;
+    var dd = document.createElement('dd'); dd.textContent = v;
+    row.appendChild(dt); row.appendChild(dd);
+    return row;
+}
+
+function openDetail(model) {
+    if (!modelSet[model]) return;
+    detailModelName = model;
+    var cat = modelCat[model] || '';
+
+    // Preview reuses the exact thumbnail pipeline (server proxy -> data URI).
+    el.detailPreview.textContent = '';
+    var thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    thumb.setAttribute('data-glyph', initials(model));
+    thumb.style.setProperty('--h', catHue(cat));
+    var img = document.createElement('img'); img.alt = '';
+    thumb.appendChild(img);
+    el.detailPreview.appendChild(thumb);
+    requestThumb(model, img, thumb);
+
+    el.detailTitle.textContent = prettify(model);
+    el.detailModel.textContent = model;
+    if (cat) { el.detailChip.textContent = cat; el.detailChip.style.display = ''; }
+    else { el.detailChip.style.display = 'none'; }
+    el.detailDesc.textContent = describe(model, cat);
+
+    el.detailMeta.textContent = '';
+    el.detailMeta.appendChild(metaRow('Category', cat || 'Uncategorized'));
+    el.detailMeta.appendChild(metaRow('Model', model));
+    el.detailMeta.appendChild(metaRow('Hash', String(joaat(model))));
+    var res = thumbData[model] === false ? 'no image' : (thumbData[model] ? '384 × 216' : 'loading…');
+    el.detailMeta.appendChild(metaRow('Preview', res));
+
+    el.detailFav.classList.toggle('on', isFav(model));
+
+    el.detail.classList.remove('hidden');
+    el.detail.setAttribute('aria-hidden', 'false');
+    detailOpen = true;
+}
+
+function closeDetail() {
+    if (!detailOpen) return;
+    detailOpen = false;
+    el.detail.classList.add('hidden');
+    el.detail.setAttribute('aria-hidden', 'true');
+    detailModelName = null;
+}
+
 function show(g) {
     groups = Array.isArray(g) ? g : [];
     allModels = []; searchIndex = []; modelCat = {}; modelSet = {};
@@ -552,7 +628,7 @@ function show(g) {
     // would kill the H/L toggle that dismisses the overlay.
     setTimeout(function () { if (!helpOpen && !activityOpen) el.search.focus(); }, 30);
 }
-function hide() { el.app.classList.add('hidden'); el.app.setAttribute('aria-hidden', 'true'); helpHide(); activityHide(); }
+function hide() { el.app.classList.add('hidden'); el.app.setAttribute('aria-hidden', 'true'); helpHide(); activityHide(); closeDetail(); }
 
 // --- controls & commands reference ----------------------------------------
 // Mirrors README.md exactly (the authoritative command list). Kept as data so
@@ -777,6 +853,16 @@ if (logCloseBtn) logCloseBtn.addEventListener('click', function () { activityHid
 var logFilterInput = document.getElementById('logFilter');
 if (logFilterInput) logFilterInput.addEventListener('input', function (e) { renderActivity(e.target.value); });
 
+var detailBackBtn = document.getElementById('detailBack');
+if (detailBackBtn) detailBackBtn.addEventListener('click', function () { closeDetail(); });
+var detailSpawnBtn = document.getElementById('detailSpawn');
+if (detailSpawnBtn) detailSpawnBtn.addEventListener('click', function () { if (detailModelName) spawn(detailModelName); });
+if (el.detailFav) el.detailFav.addEventListener('click', function () {
+    if (!detailModelName) return;
+    toggleFav(detailModelName);
+    el.detailFav.classList.toggle('on', isFav(detailModelName));
+});
+
 // True while any typing field has focus, so single-key shortcuts (H/L) don't
 // fire while the user is typing a query or a log filter.
 function typing() {
@@ -786,9 +872,10 @@ function typing() {
 
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
-        // Escape backs out of an open overlay first, then closes the browser.
+        // Escape backs out of an open overlay / detail first, then closes the browser.
         if (helpOpen) { helpHide(); return; }
         if (activityOpen) { activityHide(); return; }
+        if (detailOpen) { closeDetail(); return; }
         hide(); post('close'); return;
     }
     if (typing()) return;
