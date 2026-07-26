@@ -24,6 +24,7 @@
                     <input id="search" type="text" placeholder="Search 5,295 props by name (barrier, fence, chair…)" autocomplete="off" spellcheck="false" aria-label="Search props" />
                     <button id="clear" class="clear" title="Clear" aria-label="Clear search">&times;</button>
                 </div>
+                <button id="help" class="help-btn" title="Controls &amp; commands (H)" aria-label="Controls and commands"><kbd>?</kbd></button>
                 <button id="close" class="close" title="Close (Esc)"><kbd>ESC</kbd></button>
             </header>
 
@@ -36,6 +37,17 @@
                 <span id="ctx" class="ctx">Select a category</span>
                 <span id="thumbstat" class="stat" title="Thumbnails stream from the RAGE object database">thumbnails: 0 loaded &middot; 0 failed</span>
             </footer>
+
+            <!-- Controls & commands reference, overlaid on the panel; toggled by
+                 the header "?" button, the H key, or the /maphelp command. -->
+            <div id="helpOverlay" class="help-overlay hidden" role="dialog" aria-label="Controls and commands" aria-hidden="true">
+                <div class="help-head">
+                    <span class="help-title">CONTROLS&nbsp;&amp;&nbsp;COMMANDS</span>
+                    <span class="help-sub">in-editor keys and every slash command</span>
+                    <button id="helpClose" class="close" title="Back (H)"><kbd>H</kbd></button>
+                </div>
+                <div id="helpBody" class="help-body"></div>
+            </div>
 
         </section>
     </div>

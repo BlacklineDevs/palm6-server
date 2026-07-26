@@ -40,6 +40,25 @@ RegisterCommand('propui', function()
     if open then closeBrowser() else openBrowser() end
 end, false)
 
+-- Open the browser straight onto the Controls & Commands reference sheet. Same
+-- focus handling as /propui; the page shows the help overlay on top of the grid.
+local function openHelp()
+    -- Silent no-op outside the editor: the default keybind is H (a common key),
+    -- so it must never notify or act unless the map editor is actually open.
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then return end
+    if not open then
+        open = true
+        SetNuiFocus(true, true)
+        SendNUIMessage({ action = 'open', groups = Config.PropGroups or {}, help = true })
+    else
+        SendNUIMessage({ action = 'help' })
+    end
+end
+
+RegisterCommand('maphelp', openHelp, false)
+-- Let players bind a key (default H) to pull up the controls sheet in-world.
+RegisterKeyMapping('maphelp', 'Map editor: controls & commands', 'keyboard', 'H')
+
 -- Spawn a picked prop. The model name is validated again here (defence in depth,
 -- same strict rule the spawner enforces) even though it came from our own
 -- catalog, then routed through the shared spawn event. Closes so the player can

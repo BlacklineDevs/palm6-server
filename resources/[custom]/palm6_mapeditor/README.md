@@ -19,7 +19,8 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | Command | Does |
 |---|---|
 | `/mapedit` | toggle editor |
-| `/propui` | **visual thumbnail browser** — grid of all 5,295 props with images, category rail, search |
+| `/propui` | **visual thumbnail browser** — grid of all 5,295 props with images, category rail, search, favorites, recent |
+| `/maphelp` (key **H**) | **in-game controls & commands sheet** — every keybind and slash command, overlaid on the browser |
 | `/props` / `/propsearch <q>` | ox_lib catalog browse / fuzzy search (5,295 props) |
 | `/prop <model>` | spawn a specific model at aim |
 | `/matnext` `/matprev` `/matcat` | cycle the quick-prop catalog |
@@ -91,9 +92,13 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
 - `client/main.lua` — editor core (spawn/select/undo/HUD/export).
 - `client/browser.lua` — prop catalog + fuzzy search (`data/prop_groups.lua`).
 - `client/tools.lua` — world eraser, mass grid, per-prop toggles, gizmo command.
-- `client/nui.lua` + `html/` — the visual thumbnail prop browser (`/propui`). Self-contained
-  NUI (no build step); thumbnails load from the RAGE odb CDN, addressed by `joaat(name)`
-  computed in-page, so nothing is bundled (~93%+ coverage, clean fallback tile otherwise).
+- `client/nui.lua` + `html/` — the visual thumbnail prop browser (`/propui`) and the
+  controls sheet (`/maphelp`, key **H**). Self-contained NUI (no build step); thumbnails load
+  from the RAGE odb CDN, addressed by `joaat(name)` computed in-page, so nothing is bundled
+  (~93%+ coverage, clean fallback tile otherwise). The browser has **Favorites** (star any
+  prop; pinned view) and **Recent** (auto-tracked spawns), both persisted in localStorage, plus
+  **smart search** — conceptual keyword aliases ("trash"→bins/dumpsters, "seat"→chairs/benches)
+  layered over fuzzy substring/subsequence matching.
 - `client/live.lua` — live-map streaming (spawns/syncs the persisted props on each client).
 - `server/main.lua` — writes export files (ACE-gated).
 - `server/live.lua` — MySQL persistence + authoritative live sync (owns `palm6_mapeditor_props`).
