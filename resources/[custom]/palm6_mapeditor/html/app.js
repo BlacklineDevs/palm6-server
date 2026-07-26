@@ -193,6 +193,7 @@ function applyThumb(model, img, thumb, data) {
 function requestThumb(model, img, thumb) {
     var d = thumbData[model];
     if (d !== undefined) { applyThumb(model, img, thumb, d); return; }
+    thumb.classList.add('loading');   // shimmer only once a real fetch is in flight
     (awaiting[model] = awaiting[model] || []).push({ img: img, thumb: thumb });
     if (!thumbSent[model]) {
         thumbSent[model] = true;
@@ -260,6 +261,28 @@ function recentModels() {
 // [A-Za-z0-9_] so this rarely matters, but keeps querySelectorAll safe).
 function cssEsc(s) { return String(s).replace(/["\\]/g, '\\$&'); }
 
+// Lazy thumbnail loading: a card requests its image only when it scrolls into
+// view, so opening a big category never floods the server proxy (cap 16) and
+// starves later requests into the fallback tile. IntersectionObserver is reliable
+// in CEF (the earlier failure was a hand-rolled getBoundingClientRect loader, not
+// IO). rootMargin fetches a screen ahead so scrolling stays ahead of the loads.
+var thumbObserver = null;
+function observeThumb(model, img, thumb) {
+    if (!('IntersectionObserver' in window)) { requestThumb(model, img, thumb); return; }
+    if (!thumbObserver) {
+        thumbObserver = new IntersectionObserver(function (entries) {
+            for (var i = 0; i < entries.length; i++) {
+                if (!entries[i].isIntersecting) continue;
+                var t = entries[i].target;
+                thumbObserver.unobserve(t);
+                var im = t.querySelector('img'), m = t.getAttribute('data-model');
+                if (m && im) requestThumb(m, im, t);
+            }
+        }, { root: el.grid, rootMargin: '350px 0px' });
+    }
+    thumbObserver.observe(thumb);
+}
+
 // One prop card: a thumbnail (shimmer -> odb image, or a generative category-hued
 // schematic swatch when the odb has no preview) + title + monospace model id +
 // category chip, with a favorite star. onload/onerror update the footer tally so
@@ -275,12 +298,13 @@ function makeCard(model, showChip) {
     card.style.setProperty('--h', catHue(cat));
 
     var thumb = document.createElement('div');
-    thumb.className = 'thumb loading';
+    thumb.className = 'thumb';
     thumb.setAttribute('data-glyph', initials(model));
+    thumb.setAttribute('data-model', model);
     var img = document.createElement('img');
     img.alt = '';
     thumb.appendChild(img);
-    requestThumb(model, img, thumb);   // resolves from client Lua (CEF blocks the CDN)
+    observeThumb(model, img, thumb);   // lazy: request only when scrolled into view
 
     // Favorite star (top-left). Click toggles without spawning.
     var star = document.createElement('button');
@@ -346,6 +370,7 @@ function emptyState(headline, hint) {
 // shown for search / Favorites / Recent where results span categories.
 function renderGrid(models, ctxLabel, capped, showChip, emptyHead, emptyHint) {
     el.grid.scrollTop = 0;
+    if (thumbObserver) thumbObserver.disconnect();   // stop watching the old cards
     el.grid.textContent = '';
     imgOk = 0; imgFail = 0; updateThumbStat();
     if (!models || models.length === 0) {
