@@ -579,6 +579,7 @@ function onScene(list, lights) {
     sceneLights = Array.isArray(lights) ? lights : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Scene count
     if (view.type === 'scene') selectScene(true);
+    else if (view.type === 'perf') selectPerf();   // perf meters derive from the scene set
 }
 
 function makeLightRow(item) {
@@ -805,6 +806,7 @@ function onLive(list) {
     live = Array.isArray(list) ? list : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Live count
     if (view.type === 'live') selectLive(true);
+    else if (view.type === 'perf') selectPerf();   // perf meters derive from the live set
 }
 
 function makeLiveRow(item) {
@@ -928,6 +930,7 @@ function onEnts(list) {
     ents = Array.isArray(list) ? list : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh count + perf entity tally
     if (view.type === 'ents') selectEnts(true);
+    else if (view.type === 'perf') selectPerf();   // perf entity count derives from the entities set
 }
 
 function makeEntRow(item) {
@@ -1010,8 +1013,14 @@ var HOTSPOT_MIN = 30;    // objects in one zone before it's flagged a cluster
 
 function perfBudgets() {
     var c = perf.caps || {}, lp = perf.live || {};
+    // LiveMaxProps is a PER-MAP cap, so the meter measures the busiest map (the
+    // one nearest its limit), not the all-maps total — that's what would hit the
+    // cap first. Single map -> just its count; labelled with the map when >1.
+    var maps = liveMaps();
+    var busiest = maps.reduce(function (a, m) { return m.count > a.count ? m : a; }, { name: '', count: 0 });
+    var propLabel = maps.length > 1 ? ('Live props · busiest map “' + busiest.name + '”') : 'Live props';
     return [
-        { label: 'Live props', used: live.length, cap: c.liveProps || 0 },
+        { label: propLabel, used: busiest.count || live.length, cap: c.liveProps || 0 },
         { label: 'Live lights', used: lp.lights || 0, cap: c.liveLights || 0 },
         { label: 'World-erases', used: lp.hides || 0, cap: c.hides || 0 },
         { label: 'Scene entities', used: (lp.peds || 0) + (lp.veh || 0), cap: c.entities || 0 },
@@ -1083,6 +1092,13 @@ function perfTips(spots) {
     });
     if (spots.length) {
         tips.push('Dense clusters raise draw calls and cost FPS for every player. Spread objects out, or turn a repeated group into a Blueprint kit and reuse it.');
+    }
+    // Every named map streams to everyone at once, so the real client load is the
+    // all-maps total — the per-map cap doesn't bound it. Flag it when more than
+    // one map is live so a builder isn't lulled by healthy per-map meters.
+    var maps = liveMaps();
+    if (maps.length > 1) {
+        tips.push(live.length + ' live props across ' + maps.length + ' maps all stream to every player at once — that total is the real client load, not any single map’s cap.');
     }
     if (!over.length && !near.length && !spots.length) {
         tips.push('This map is well within budget with no dense clusters. Nice and light.');
