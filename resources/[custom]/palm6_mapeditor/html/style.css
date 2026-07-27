@@ -609,6 +609,19 @@ kbd { font: inherit; }
 .cat-switch-btn:hover { color: var(--text); border-color: var(--amber-line); }
 .cat-switch-btn.active { color: #2a0a06; background: var(--brand-grad); border-color: transparent; font-weight: 700; }
 
+/* ---- ped behaviour (scenario) selector ---- */
+.scenario-pick { display: flex; flex-direction: column; gap: 0.25rem; padding: 0 0 0.55rem; }
+.scenario-lab {
+    font-family: var(--display); font-size: 0.56rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+}
+.scenario-sel {
+    width: 100%; background: var(--input); color: var(--text); border: 1px solid var(--line-2);
+    clip-path: var(--cut-sm); padding: 0.42rem 0.5rem; font-family: var(--ui); font-size: 0.76rem;
+    cursor: pointer; outline: none; transition: border-color 0.14s, box-shadow 0.14s;
+}
+.scenario-sel:focus { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+.scenario-sel option { background: var(--panel); color: var(--text); }
+
 /* ---- entity cards (Peds / Vehicles — no odb thumbnails, generative tile) ---- */
 .ent-tile {
     position: relative; width: 100%; height: 0; padding-bottom: 64%; flex: 0 0 auto; overflow: hidden;

@@ -60,6 +60,38 @@ Config.PedGroups = {
     } },
 }
 
+-- Ped behaviours: GTA scenario names applied via TaskStartScenarioInPlace when a
+-- ped is placed (so scene peds idle/guard/lean/work instead of standing frozen).
+-- The Peds browser shows these in a "Ped behaviour" selector; the chosen one is
+-- passed as the entity's `extra`. '' = no scenario (stand still). Unknown names
+-- fail gracefully (the spawn just skips the task), so this list is safe to extend.
+Config.PedScenarios = {
+    { id = '',                                 label = 'None (stand still)' },
+    { id = 'WORLD_HUMAN_GUARD_STAND',          label = 'Guard — stand' },
+    { id = 'WORLD_HUMAN_GUARD_PATROL',         label = 'Guard — patrol' },
+    { id = 'WORLD_HUMAN_COP_IDLES',            label = 'Cop — idle' },
+    { id = 'WORLD_HUMAN_CLIPBOARD',            label = 'Clipboard' },
+    { id = 'WORLD_HUMAN_SMOKING',              label = 'Smoking' },
+    { id = 'WORLD_HUMAN_LEANING',             label = 'Leaning on wall' },
+    { id = 'WORLD_HUMAN_DRINKING',             label = 'Drinking' },
+    { id = 'WORLD_HUMAN_AA_COFFEE',            label = 'Coffee' },
+    { id = 'WORLD_HUMAN_MOBILE_FILM_SHOCKING', label = 'Filming on phone' },
+    { id = 'WORLD_HUMAN_STAND_MOBILE',         label = 'On phone' },
+    { id = 'WORLD_HUMAN_HANG_OUT_STREET',      label = 'Hanging out' },
+    { id = 'WORLD_HUMAN_TOURIST_MAP',          label = 'Tourist — map' },
+    { id = 'WORLD_HUMAN_STAND_IMPATIENT',      label = 'Impatient' },
+    { id = 'WORLD_HUMAN_SEAT_LEDGE',           label = 'Sit on ledge' },
+    { id = 'WORLD_HUMAN_MUSCLE_FLEX',          label = 'Flexing' },
+    { id = 'WORLD_HUMAN_JOG_STANDING',         label = 'Jog in place' },
+    { id = 'WORLD_HUMAN_SUNBATHE',             label = 'Sunbathe' },
+    { id = 'WORLD_HUMAN_PARTYING',             label = 'Partying' },
+    { id = 'WORLD_HUMAN_PICNIC',               label = 'Picnic (sit)' },
+    { id = 'WORLD_HUMAN_WELDING',              label = 'Welding' },
+    { id = 'WORLD_HUMAN_HAMMERING',            label = 'Hammering' },
+    { id = 'WORLD_HUMAN_BUM_STANDING',         label = 'Loitering' },
+    { id = 'WORLD_HUMAN_BINOCULARS',           label = 'Binoculars' },
+}
+
 Config.VehGroups = {
     { category = 'Police & Emergency', models = {
         'police', 'police2', 'police3', 'police4', 'policet', 'sheriff', 'sheriff2',

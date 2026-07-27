@@ -31,6 +31,7 @@ local function openBrowser()
         groups = Config.PropGroups or {},
         peds = Config.PedGroups or {},         -- Peds tab catalog
         vehs = Config.VehGroups or {},         -- Vehicles tab catalog
+        scenarios = Config.PedScenarios or {}, -- ped behaviour options
     })
     if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
     if Scene and Scene.push then Scene.push() end                 -- populate the Scene outliner
@@ -130,8 +131,9 @@ end)
 RegisterNUICallback('placeEnt', function(data, cb)
     local kind = type(data) == 'table' and data.kind or nil
     local model = type(data) == 'table' and data.model or nil
+    local scenario = type(data) == 'table' and data.scenario or ''
     if (kind == 'ped' or kind == 'veh') and type(model) == 'string' and model:match('^[%w_]+$') then
-        TriggerEvent('palm6_mapeditor:placeEnt', kind, model)
+        TriggerEvent('palm6_mapeditor:placeEnt', kind, model, scenario)
     end
     closeBrowser()
     cb('ok')

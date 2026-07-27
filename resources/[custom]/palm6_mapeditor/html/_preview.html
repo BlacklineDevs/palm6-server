@@ -127,7 +127,14 @@
             { category: 'Police & Emergency', models: ['police', 'police2', 'sheriff', 'ambulance', 'firetruk'] },
             { category: 'Super', models: ['adder', 'zentorno', 't20'] },
         ];
-        window.postMessage({ action: 'open', groups: groups, peds: peds, vehs: vehs }, '*');
+        var scenarios = [
+            { id: '', label: 'None (stand still)' },
+            { id: 'WORLD_HUMAN_GUARD_STAND', label: 'Guard — stand' },
+            { id: 'WORLD_HUMAN_SMOKING', label: 'Smoking' },
+            { id: 'WORLD_HUMAN_LEANING', label: 'Leaning on wall' },
+            { id: 'WORLD_HUMAN_CLIPBOARD', label: 'Clipboard' },
+        ];
+        window.postMessage({ action: 'open', groups: groups, peds: peds, vehs: vehs, scenarios: scenarios }, '*');
         // Seed the outliners + Performance panel so those rail views show data.
         window.postMessage({ action: 'scene', props: [
             { id: 1, model: 'prop_barrel_02a', x: 120.4, y: -1002.2, z: 29.4 },

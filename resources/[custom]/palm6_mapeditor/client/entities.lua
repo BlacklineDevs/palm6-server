@@ -124,14 +124,16 @@ end, false)
 -- Place a ped/vehicle chosen in the /propui Peds or Vehicles browser. Same aim +
 -- place path as the commands above; kind/model already validated in nui.lua, and
 -- re-checked here (a vehicle model can't spawn as a ped and vice-versa).
-AddEventHandler('palm6_mapeditor:placeEnt', function(kind, model)
+AddEventHandler('palm6_mapeditor:placeEnt', function(kind, model, scenario)
     if not placeGate() then return end
     if (kind ~= 'ped' and kind ~= 'veh') or type(model) ~= 'string' or not model:match('^[%w_]+$') then return end
     if kind == 'veh' and not Game.ModelIsVehicle(model) then Game.Notify(model .. ' is not a vehicle model', 'error'); return end
     if kind == 'ped' and Game.ModelIsVehicle(model) then Game.Notify(model .. ' is a vehicle — use the Vehicles tab', 'error'); return end
     local x, y, z = Game.CameraAimPoint(40.0)
     if not x then x, y, z = Game.PlayerPos() end
-    TriggerServerEvent('palm6_mapeditor:ent:place', kind, model, x, y, z, Game.PlayerHeading(), '', workMap)
+    -- Scenario is a ped behaviour (server clamps it to [%w_]); vehicles ignore it.
+    local extra = (kind == 'ped' and type(scenario) == 'string') and scenario or ''
+    TriggerServerEvent('palm6_mapeditor:ent:place', kind, model, x, y, z, Game.PlayerHeading(), extra, workMap)
 end)
 
 -- Remove the scene entity nearest your aim. Uses nearest-to-aim (not a raycast)

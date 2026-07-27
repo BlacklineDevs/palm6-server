@@ -33,6 +33,8 @@ var searchIndex = [];   // [[normalizedName, rawName], ...] — normalized = low
 var modelCat = {};      // model -> category name (shown in the card description)
 var catalog = 'props';  // active catalogue: 'props' | 'peds' | 'vehs'
 var catalogs = { props: [], peds: [], vehs: [] };  // raw group lists per catalogue
+var scenarios = [];     // [{id,label}] ped behaviour options
+var pedScenario = '';   // scenario applied to placed peds ('' = stand still)
 var view = { type: 'cat', i: 0 };   // current view: {type:'cat',i} | 'fav' | 'recent' | 'search'
 var lastBrowse = { type: 'cat', i: 0 }; // last non-search view, restored when search clears
 var imgOk = 0, imgFail = 0;   // thumbnail load tally (diagnostic; shown in footer)
@@ -338,7 +340,7 @@ function makeEntCard(model, showChip) {
     card.appendChild(tile); card.appendChild(meta);
     // No pushRecent: Recent is a prop-catalogue view; entity models would pollute
     // it and try to load a (nonexistent) odb thumbnail.
-    function place() { hide(); post('placeEnt', { kind: kind, model: model }); }
+    function place() { hide(); post('placeEnt', { kind: kind, model: model, scenario: kind === 'ped' ? pedScenario : '' }); }
     card.addEventListener('click', place);
     card.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); place(); }
@@ -505,9 +507,26 @@ function catalogSwitcher() {
     return wrap;
 }
 
+// Ped behaviour (scenario) selector — shown in the Peds catalogue; the chosen
+// scenario is applied to every ped placed until changed.
+function scenarioSelector() {
+    var wrap = document.createElement('div'); wrap.className = 'scenario-pick';
+    var lab = document.createElement('div'); lab.className = 'scenario-lab'; lab.textContent = 'Ped behaviour';
+    var sel = document.createElement('select'); sel.className = 'scenario-sel';
+    scenarios.forEach(function (s) {
+        var o = document.createElement('option'); o.value = s.id; o.textContent = s.label;
+        if (s.id === pedScenario) o.selected = true;
+        sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () { pedScenario = sel.value; });
+    wrap.appendChild(lab); wrap.appendChild(sel);
+    return wrap;
+}
+
 function renderCats() {
     el.cats.textContent = '';
     el.cats.appendChild(catalogSwitcher());
+    if (catalog === 'peds' && scenarios.length) el.cats.appendChild(scenarioSelector());
 
     // Pinned pseudo-categories belong to the prop catalogue (Scene/Live/Entities/
     // Performance/Kits/Favorites/Recent are all prop-map concepts). The Peds and
@@ -1715,10 +1734,11 @@ function switchCatalog(name) {
     setTimeout(function () { if (!helpOpen && !activityOpen) el.search.focus(); }, 0);
 }
 
-function show(g, peds, vehs) {
+function show(g, peds, vehs, scen) {
     catalogs.props = Array.isArray(g) ? g : [];
     if (Array.isArray(peds)) catalogs.peds = peds;   // preserve on re-open paths that omit them (help/activity)
     if (Array.isArray(vehs)) catalogs.vehs = vehs;
+    if (Array.isArray(scen)) scenarios = scen;
     catalog = 'props';
     buildIndex(catalogs.props);
     setSearchPlaceholder();
@@ -1993,7 +2013,7 @@ document.addEventListener('keydown', function (e) {
 
 window.addEventListener('message', function (e) {
     var d = e.data || {};
-    if (d.action === 'open') { show(d.groups, d.peds, d.vehs); if (d.help) helpShow(); if (d.activity) activityShow(d.activity); }
+    if (d.action === 'open') { show(d.groups, d.peds, d.vehs, d.scenarios); if (d.help) helpShow(); if (d.activity) activityShow(d.activity); }
     else if (d.action === 'help') { if (el.app.classList.contains('hidden')) show(catalogs.props); helpShow(); }
     else if (d.action === 'activity') { if (el.app.classList.contains('hidden')) show(catalogs.props); activityShow(d.log); }
     // A prop was spawned from a slash command (/prop, /matnext, browser click):
