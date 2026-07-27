@@ -46,6 +46,7 @@ var kits = [];          // [{name, props, lights}, ...] blueprint kits (prefabs)
 var scene = [];         // [{id, model, x, y, z}, ...] session placed props (outliner)
 var sceneLights = [];   // [{id, kind, x, y, z, r, g, b}, ...] session lights (outliner)
 var live = [];          // [{id, model, x, y, z}, ...] committed live-map props
+var ents = [];          // [{id, kind, model, x, y, z}, ...] scene peds/vehicles
 var perf = { live: {}, caps: {} };  // Performance panel: live light/erase/entity counts + caps from Lua
 
 // ---- persistence (localStorage; degrades to memory-only if unavailable) -----
@@ -422,6 +423,10 @@ var ICON_WORLD = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy
 var ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9" fill="none"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none"/></svg>';
 // Performance: a gauge/speedometer dial.
 var ICON_GAUGE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19a8.5 8.5 0 1 1 16 0" fill="none" stroke-width="1.7" stroke-linecap="round"/><path d="M12 15.5l4.2-4.8" fill="none" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.6"/></svg>';
+// Entities: a person (peds) for the rail; per-row ped/vehicle glyphs below.
+var ICON_ENT = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.2" fill="none" stroke-width="1.7"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0" fill="none" stroke-width="1.7" stroke-linecap="round"/></svg>';
+var ICON_PED = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="6.5" r="3" fill="none" stroke-width="1.6"/><path d="M6 20a6 6 0 0 1 12 0" fill="none" stroke-width="1.6" stroke-linecap="round"/></svg>';
+var ICON_CAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l1.8-4.2A2 2 0 0 1 6.6 7.5h10.8a2 2 0 0 1 1.8 1.3L21 13v4.5H3z" fill="none" stroke-width="1.6" stroke-linejoin="round"/><circle cx="7" cy="17.5" r="1.4"/><circle cx="17" cy="17.5" r="1.4"/></svg>';
 
 function makeSpecialRow(id, label, icon, count, active) {
     var row = document.createElement('div');
@@ -441,6 +446,7 @@ function makeSpecialRow(id, label, icon, count, active) {
         else if (id === 'recent') selectRecent();
         else if (id === 'kits') selectKits();
         else if (id === 'live') selectLive();
+        else if (id === 'ents') selectEnts();
         else if (id === 'perf') selectPerf();
         else selectScene();
     });
@@ -453,6 +459,7 @@ function renderCats() {
     // Pinned pseudo-categories: Scene + Live map + Blueprint kits + Favorites + Recent.
     el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length + sceneLights.length, view.type === 'scene'));
     el.cats.appendChild(makeSpecialRow('live', 'Live map', ICON_WORLD, live.length, view.type === 'live'));
+    el.cats.appendChild(makeSpecialRow('ents', 'Entities', ICON_ENT, ents.length, view.type === 'ents'));
     el.cats.appendChild(makeSpecialRow('perf', 'Performance', ICON_GAUGE, perfHealthTag(), view.type === 'perf'));
     el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
     el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
@@ -870,6 +877,85 @@ function selectLive(keepScroll) {
     el.grid.scrollTop = prev;
 }
 
+// ---- entities outliner (scene peds / vehicles) ---------------------------
+// Peds and vehicles can't be raycast in-world, so this list is the only precise
+// way to jump to or remove a specific one. Backed by the client's liveEnts set
+// (pushed on open + on any add/remove); delete routes through the audited
+// ent:remove server event.
+function onEnts(list) {
+    ents = Array.isArray(list) ? list : [];
+    if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh count + perf entity tally
+    if (view.type === 'ents') selectEnts(true);
+}
+
+function makeEntRow(item) {
+    var isVeh = item.kind === 'veh';
+    var row = document.createElement('div');
+    row.className = 'scene-row'; row.tabIndex = 0; row.setAttribute('role', 'button');
+    row.title = 'Jump to ' + item.model;
+    var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = isVeh ? ICON_CAR : ICON_PED;
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = prettify(item.model);
+    var co = document.createElement('div'); co.className = 'scene-coords';
+    co.textContent = (isVeh ? 'Vehicle' : 'Ped') + '  ·  ' + item.model + '  ·  '
+        + item.x.toFixed(1) + ', ' + item.y.toFixed(1) + ', ' + item.z.toFixed(1);
+    main.appendChild(nm); main.appendChild(co);
+    var del = document.createElement('button');
+    del.className = 'scene-del'; del.title = 'Delete everywhere'; del.setAttribute('aria-label', 'Delete entity');
+    del.innerHTML = ICON_TRASH;
+    del.addEventListener('click', function (ev) { ev.stopPropagation(); post('entDelete', { id: item.id }); });
+    row.appendChild(ic); row.appendChild(main); row.appendChild(del);
+    row.addEventListener('click', function () { hide(); post('entGoto', { id: item.id }); });
+    row.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); hide(); post('entGoto', { id: item.id }); }
+        else if (ev.key === 'Delete') { ev.preventDefault(); post('entDelete', { id: item.id }); }
+    });
+    return row;
+}
+
+function selectEnts(keepScroll) {
+    view = { type: 'ents' }; lastBrowse = view;
+    renderCats();
+    var prev = keepScroll ? el.grid.scrollTop : 0;
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+
+    if (!ents.length) {
+        el.grid.appendChild(emptyState('No scene entities',
+            'Place peds and vehicles with /matped and /matveh — they list here to jump to or remove (they can’t be clicked in-world).'));
+        el.ctx.textContent = 'Entities';
+        return;
+    }
+    // Peds first, then vehicles; stable by model within each group.
+    var sorted = ents.slice().sort(function (a, b) {
+        if (a.kind !== b.kind) return a.kind === 'veh' ? 1 : -1;
+        return a.model < b.model ? -1 : (a.model > b.model ? 1 : 0);
+    });
+    var peds = sorted.filter(function (e) { return e.kind !== 'veh'; });
+    var vehs = sorted.filter(function (e) { return e.kind === 'veh'; });
+    var container = document.createElement('div'); container.className = 'scene-view';
+    if (peds.length) {
+        var ph = document.createElement('div'); ph.className = 'scene-section';
+        ph.textContent = peds.length + (peds.length === 1 ? ' ped' : ' peds');
+        container.appendChild(ph);
+        var pl = document.createElement('div'); pl.className = 'scene-list';
+        peds.forEach(function (e) { pl.appendChild(makeEntRow(e)); });
+        container.appendChild(pl);
+    }
+    if (vehs.length) {
+        var vh = document.createElement('div'); vh.className = 'scene-section';
+        vh.textContent = vehs.length + (vehs.length === 1 ? ' vehicle' : ' vehicles');
+        container.appendChild(vh);
+        var vl = document.createElement('div'); vl.className = 'scene-list';
+        vehs.forEach(function (e) { vl.appendChild(makeEntRow(e)); });
+        container.appendChild(vl);
+    }
+    el.grid.appendChild(container);
+    el.ctx.textContent = ents.length + (ents.length === 1 ? ' scene entity' : ' scene entities');
+    el.grid.scrollTop = prev;
+}
+
 // ---- performance panel ---------------------------------------------------
 // A budget + density view over the whole map. Live prop / light / world-erase /
 // entity counts are watched against the same caps that bound what every client
@@ -1036,6 +1122,7 @@ function selectPerf() {
 // Restore whatever view was active before the user started typing a search.
 function restoreBrowse() {
     if (lastBrowse.type === 'perf') { selectPerf(); return; }
+    if (lastBrowse.type === 'ents') { selectEnts(); return; }
     if (lastBrowse.type === 'live') { selectLive(); return; }
     if (lastBrowse.type === 'scene') { selectScene(); return; }
     if (lastBrowse.type === 'kits') { selectKits(); return; }
@@ -1549,6 +1636,7 @@ window.addEventListener('message', function (e) {
     else if (d.action === 'kits') onKits(d.kits);
     else if (d.action === 'scene') onScene(d.props, d.lights);
     else if (d.action === 'live') onLive(d.props);
+    else if (d.action === 'entities') onEnts(d.ents);
     else if (d.action === 'perf') onPerf(d);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);

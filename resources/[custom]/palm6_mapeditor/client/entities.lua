@@ -61,7 +61,7 @@ local function spawn(rec, gen)
 end
 
 -- ---- server -> client ------------------------------------------------------
-RegisterNetEvent('palm6_mapeditor:ent:add', function(rec) spawn(rec) end)
+RegisterNetEvent('palm6_mapeditor:ent:add', function(rec) spawn(rec); if Entities then Entities.push() end end)
 RegisterNetEvent('palm6_mapeditor:ent:addBatch', function(list, full)
     if type(list) ~= 'table' then return end
     local myGen
@@ -77,10 +77,11 @@ RegisterNetEvent('palm6_mapeditor:ent:addBatch', function(list, full)
         end
     end)
 end)
-RegisterNetEvent('palm6_mapeditor:ent:remove', function(id) despawn(tonumber(id)) end)
+RegisterNetEvent('palm6_mapeditor:ent:remove', function(id) despawn(tonumber(id)); if Entities then Entities.push() end end)
 RegisterNetEvent('palm6_mapeditor:ent:removeBatch', function(ids)
     if type(ids) ~= 'table' then return end
     for _, id in ipairs(ids) do despawn(tonumber(id)) end
+    if Entities then Entities.push() end
 end)
 
 CreateThread(function()
@@ -141,14 +142,40 @@ end, false)
 
 RegisterCommand('mapentlist', function() TriggerServerEvent('palm6_mapeditor:ent:list') end, false)
 
--- Counts for the Performance panel: scene peds / vehicles currently streamed in.
-Entities = { count = function()
+-- Scene-entity outliner + Performance counts. liveEnts already holds the full
+-- streamed set (peds + vehicles), so the /propui "Entities" view is built
+-- client-side — no server enumeration. Delete reuses the audited ent:remove
+-- server event; goto is a local teleport. Peds/vehicles can't be raycast, so an
+-- outliner is the only precise way to jump to or remove a specific one.
+Entities = {}
+function Entities.count()
     local peds, veh = 0, 0
     for _, e in pairs(liveEnts) do
         if e.kind == 'veh' then veh = veh + 1 else peds = peds + 1 end
     end
     return peds, veh
-end }
+end
+function Entities.list()
+    local out = {}
+    for id, e in pairs(liveEnts) do
+        out[#out + 1] = { id = id, kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z }
+    end
+    return out
+end
+function Entities.push()
+    SendNUIMessage({ action = 'entities', ents = Entities.list() })
+end
+function Entities.deleteById(id)
+    id = tonumber(id)
+    if id and liveEnts[id] then TriggerServerEvent('palm6_mapeditor:ent:remove', id) end
+end
+function Entities.gotoById(id)
+    id = tonumber(id)
+    local e = id and liveEnts[id]
+    if not e then return end
+    Game.TeleportPlayer(e.x, e.y, e.z)
+    Game.Notify('jumped to ' .. tostring(e.model), 'inform')
+end
 
 -- Scene entities are our own client entities; delete them on stop so a resource
 -- restart never leaves orphaned peds/vehicles in the world.

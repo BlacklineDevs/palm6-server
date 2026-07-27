@@ -30,6 +30,7 @@ local function openBrowser()
     if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
     if Scene and Scene.push then Scene.push() end                 -- populate the Scene outliner
     if Live and Live.push then Live.push() end                    -- populate the Live-map outliner
+    if Entities and Entities.push then Entities.push() end         -- populate the Entities outliner
     if Perf and Perf.push then Perf.push() end                    -- populate the Performance panel
 end
 
@@ -210,6 +211,21 @@ end)
 RegisterNUICallback('liveGoto', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id then TriggerEvent('palm6_mapeditor:liveGoto', id) end
+    closeBrowser()
+    cb('ok')
+end)
+
+-- Entities outliner (peds / vehicles). Delete reuses the audited ent:remove
+-- server event and stays open (the ent:remove broadcast re-pushes the list);
+-- goto teleports and closes so the player lands on the entity.
+RegisterNUICallback('entDelete', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and Entities and Entities.deleteById then Entities.deleteById(id) end
+    cb('ok')
+end)
+RegisterNUICallback('entGoto', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and Entities and Entities.gotoById then Entities.gotoById(id) end
     closeBrowser()
     cb('ok')
 end)

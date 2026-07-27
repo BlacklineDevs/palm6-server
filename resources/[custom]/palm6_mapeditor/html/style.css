@@ -598,6 +598,9 @@ kbd { font: inherit; }
     background: var(--lc, #ffc88c); box-shadow: 0 0 9px var(--lc, #ffc88c);
 }
 
+/* ---- entities outliner ---- */
+.cat.special.is-ents .ic svg { fill: none; }
+
 /* ---- performance panel ---- */
 .cat.special.is-perf .ic svg { fill: none; }
 .cat.special.is-perf .ic svg circle { fill: currentColor; }

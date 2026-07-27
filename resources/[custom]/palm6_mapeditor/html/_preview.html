@@ -131,6 +131,12 @@
             for (var i = 0; i < 38; i++) liveProps.push({ id: 100 + i, model: 'prop_barrel_02a', x: 200 + (i % 6), y: 300 + Math.floor(i / 6), z: 30 });
             liveProps.push({ id: 200, model: 'prop_streetlight_01', x: 800, y: -50, z: 30 });
             window.postMessage({ action: 'live', props: liveProps }, '*');
+            window.postMessage({ action: 'entities', ents: [
+                { id: 1, kind: 'ped', model: 's_m_y_cop_01', x: 210.0, y: 305.0, z: 30 },
+                { id: 2, kind: 'ped', model: 'a_f_y_business_02', x: 215.0, y: 300.0, z: 30 },
+                { id: 3, kind: 'veh', model: 'police', x: 220.0, y: 308.0, z: 30 },
+                { id: 4, kind: 'veh', model: 'ambulance', x: 225.0, y: 312.0, z: 30 },
+            ] }, '*');
             window.postMessage({ action: 'perf', live: { lights: 231, hides: 4, peds: 6, veh: 3 },
                 caps: { liveProps: 6000, liveLights: 256, hides: 2000, entities: 1500, commit: 1000 } }, '*');
         })();
