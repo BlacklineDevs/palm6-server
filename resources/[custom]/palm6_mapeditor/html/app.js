@@ -926,6 +926,13 @@ function selectLive(keepScroll) {
 // way to jump to or remove a specific one. Backed by the client's liveEnts set
 // (pushed on open + on any add/remove); delete routes through the audited
 // ent:remove server event.
+var entSel = {};   // id -> true (entities multi-select)
+function entSelectedIds() {
+    var out = [];
+    for (var i = 0; i < ents.length; i++) if (entSel[ents[i].id]) out.push(ents[i].id);
+    return out;
+}
+
 function onEnts(list) {
     ents = Array.isArray(list) ? list : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh count + perf entity tally
@@ -933,11 +940,51 @@ function onEnts(list) {
     else if (view.type === 'perf') selectPerf();   // perf entity count derives from the entities set
 }
 
+// Select-all across both groups + batch delete, mirroring the scene/live outliners.
+function entToolbar(all) {
+    var selIds = entSelectedIds();
+    var bar = document.createElement('div'); bar.className = 'scene-toolbar';
+    var left = document.createElement('label'); left.className = 'scene-selall';
+    var box = document.createElement('input'); box.type = 'checkbox';
+    box.checked = selIds.length > 0 && selIds.length === all.length;
+    box.indeterminate = selIds.length > 0 && selIds.length < all.length;
+    box.setAttribute('aria-label', 'Select all');
+    box.addEventListener('change', function () {
+        if (box.checked) { all.forEach(function (o) { entSel[o.id] = true; }); } else { entSel = {}; }
+        selectEnts(true);
+    });
+    var lab = document.createElement('span');
+    lab.textContent = selIds.length > 0 ? (selIds.length + ' selected')
+        : (ents.length + (ents.length === 1 ? ' entity' : ' entities'));
+    left.appendChild(box); left.appendChild(lab);
+    bar.appendChild(left);
+    if (selIds.length > 0) {
+        var actions = document.createElement('div'); actions.className = 'scene-actions';
+        var clr = document.createElement('button'); clr.className = 'scene-batch-clear'; clr.type = 'button';
+        clr.textContent = 'Clear';
+        clr.addEventListener('click', function () { entSel = {}; selectEnts(true); });
+        var del = document.createElement('button'); del.className = 'scene-batch-del'; del.type = 'button';
+        del.textContent = 'Delete ' + selIds.length;
+        del.addEventListener('click', function () { post('entDeleteMany', { ids: selIds }); entSel = {}; selectEnts(true); });
+        actions.appendChild(clr); actions.appendChild(del);
+        bar.appendChild(actions);
+    }
+    return bar;
+}
+
 function makeEntRow(item) {
     var isVeh = item.kind === 'veh';
     var row = document.createElement('div');
-    row.className = 'scene-row'; row.tabIndex = 0; row.setAttribute('role', 'button');
+    row.className = 'scene-row' + (entSel[item.id] ? ' picked' : ''); row.tabIndex = 0; row.setAttribute('role', 'button');
     row.title = 'Jump to ' + item.model;
+    var check = document.createElement('input');
+    check.type = 'checkbox'; check.className = 'scene-check';
+    check.checked = !!entSel[item.id]; check.setAttribute('aria-label', 'Select ' + item.model);
+    check.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    check.addEventListener('change', function () {
+        if (check.checked) entSel[item.id] = true; else delete entSel[item.id];
+        selectEnts(true);
+    });
     var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = isVeh ? ICON_CAR : ICON_PED;
     var main = document.createElement('div'); main.className = 'scene-main';
     var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = prettify(item.model);
@@ -949,7 +996,7 @@ function makeEntRow(item) {
     del.className = 'scene-del'; del.title = 'Delete everywhere'; del.setAttribute('aria-label', 'Delete entity');
     del.innerHTML = ICON_TRASH;
     del.addEventListener('click', function (ev) { ev.stopPropagation(); post('entDelete', { id: item.id }); });
-    row.appendChild(ic); row.appendChild(main); row.appendChild(del);
+    row.appendChild(check); row.appendChild(ic); row.appendChild(main); row.appendChild(del);
     row.addEventListener('click', function () { hide(); post('entGoto', { id: item.id }); });
     row.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); hide(); post('entGoto', { id: item.id }); }
@@ -966,6 +1013,10 @@ function selectEnts(keepScroll) {
     el.grid.textContent = '';
     imgOk = 0; imgFail = 0; updateThumbStat();
 
+    // prune selection of ids no longer present
+    var valid = {}; ents.forEach(function (o) { valid[o.id] = true; });
+    Object.keys(entSel).forEach(function (k) { if (!valid[k]) delete entSel[k]; });
+
     if (!ents.length) {
         el.grid.appendChild(emptyState('No scene entities',
             'Place peds and vehicles with /matped and /matveh — they list here to jump to or remove (they can’t be clicked in-world).'));
@@ -980,6 +1031,7 @@ function selectEnts(keepScroll) {
     var peds = sorted.filter(function (e) { return e.kind !== 'veh'; });
     var vehs = sorted.filter(function (e) { return e.kind === 'veh'; });
     var container = document.createElement('div'); container.className = 'scene-view';
+    container.appendChild(entToolbar(sorted));
     if (peds.length) {
         var ph = document.createElement('div'); ph.className = 'scene-section';
         ph.textContent = peds.length + (peds.length === 1 ? ' ped' : ' peds');

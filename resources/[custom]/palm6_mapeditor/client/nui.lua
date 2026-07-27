@@ -223,6 +223,11 @@ RegisterNUICallback('entDelete', function(data, cb)
     if id and Entities and Entities.deleteById then Entities.deleteById(id) end
     cb('ok')
 end)
+RegisterNUICallback('entDeleteMany', function(data, cb)
+    local ids = type(data) == 'table' and data.ids or nil
+    if type(ids) == 'table' and Entities and Entities.deleteByIds then Entities.deleteByIds(ids) end
+    cb('ok')
+end)
 RegisterNUICallback('entGoto', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id and Entities and Entities.gotoById then Entities.gotoById(id) end

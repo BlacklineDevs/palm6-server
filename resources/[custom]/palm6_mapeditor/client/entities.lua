@@ -169,6 +169,15 @@ function Entities.deleteById(id)
     id = tonumber(id)
     if id and liveEnts[id] then TriggerServerEvent('palm6_mapeditor:ent:remove', id) end
 end
+-- Batch delete (outliner multi-select): loops the audited per-id remove, exactly
+-- like the live-map multi-delete. Each removal broadcasts + re-pushes the list.
+function Entities.deleteByIds(ids)
+    if type(ids) ~= 'table' then return end
+    for _, id in ipairs(ids) do
+        local n = tonumber(id)
+        if n and liveEnts[n] then TriggerServerEvent('palm6_mapeditor:ent:remove', n) end
+    end
+end
 function Entities.gotoById(id)
     id = tonumber(id)
     local e = id and liveEnts[id]
