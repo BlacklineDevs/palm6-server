@@ -598,6 +598,34 @@ kbd { font: inherit; }
     background: var(--lc, #ffc88c); box-shadow: 0 0 9px var(--lc, #ffc88c);
 }
 
+/* ---- catalogue switcher (Props / Peds / Vehicles) ---- */
+.cat-switch { display: flex; gap: 0.3rem; padding: 0 0 0.55rem; }
+.cat-switch-btn {
+    flex: 1 1 0; cursor: pointer; background: var(--surface); border: 1px solid var(--line-2);
+    color: var(--muted); clip-path: var(--cut-sm); padding: 0.42rem 0.2rem;
+    font-family: var(--display); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.07em;
+    transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.cat-switch-btn:hover { color: var(--text); border-color: var(--amber-line); }
+.cat-switch-btn.active { color: #2a0a06; background: var(--brand-grad); border-color: transparent; font-weight: 700; }
+
+/* ---- entity cards (Peds / Vehicles — no odb thumbnails, generative tile) ---- */
+.ent-tile {
+    position: relative; width: 100%; height: 0; padding-bottom: 64%; flex: 0 0 auto; overflow: hidden;
+    background:
+        radial-gradient(70% 60% at 50% 40%, rgba(70, 201, 255, 0.12), transparent 70%),
+        repeating-linear-gradient(0deg, rgba(70, 201, 255, 0.05) 0 1px, transparent 1px 16px),
+        repeating-linear-gradient(90deg, rgba(70, 201, 255, 0.05) 0 1px, transparent 1px 16px),
+        #0a1019;
+}
+.ent-tile svg {
+    position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%);
+    width: 46px; height: 46px; fill: none; stroke: var(--cyan); stroke-width: 1.5; stroke-linejoin: round;
+}
+.ent-tile svg circle { fill: var(--cyan); stroke: none; }
+.ent-card:hover .ent-tile svg { stroke: var(--amber-2); }
+.ent-card:hover .ent-tile svg circle { fill: var(--amber-2); }
+
 /* ---- live-map map picker ---- */
 .map-chips {
     display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.15rem 0.15rem 0.35rem;

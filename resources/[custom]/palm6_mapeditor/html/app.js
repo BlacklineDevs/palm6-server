@@ -31,6 +31,8 @@ var allModels = [];     // flat list of raw model names
 var modelSet = {};      // model -> true (membership, for fav/recent validity)
 var searchIndex = [];   // [[normalizedName, rawName], ...] — normalized = lowercase, alnum-only
 var modelCat = {};      // model -> category name (shown in the card description)
+var catalog = 'props';  // active catalogue: 'props' | 'peds' | 'vehs'
+var catalogs = { props: [], peds: [], vehs: [] };  // raw group lists per catalogue
 var view = { type: 'cat', i: 0 };   // current view: {type:'cat',i} | 'fav' | 'recent' | 'search'
 var lastBrowse = { type: 'cat', i: 0 }; // last non-search view, restored when search clears
 var imgOk = 0, imgFail = 0;   // thumbnail load tally (diagnostic; shown in footer)
@@ -308,7 +310,44 @@ function observeThumb(model, img, thumb) {
 // category chip, with a favorite star. onload/onerror update the footer tally so
 // a mass load failure (e.g. the game blocking the CDN) is visible, not silent.
 // showChip=false suppresses the category chip when every card shares one category.
+// A ped/vehicle card for the Peds/Vehicles catalogues: a generative tile (no
+// odb thumbnails for entities), title, model id, category chip. Click places the
+// entity at the player's aim (ent:place) and closes — the same one-action model
+// the prop cards had before the detail view.
+function makeEntCard(model, showChip) {
+    var kind = catalog === 'peds' ? 'ped' : 'veh';
+    var cat = modelCat[model] || '';
+    var card = document.createElement('div');
+    card.className = 'card ent-card';
+    card.setAttribute('role', 'button'); card.tabIndex = 0; card.title = model;
+    card.style.setProperty('--h', catHue(cat));
+
+    var tile = document.createElement('div'); tile.className = 'ent-tile';
+    tile.innerHTML = kind === 'ped' ? ICON_PED : ICON_CAR;
+    var hint = document.createElement('div'); hint.className = 'spawn-hint'; hint.textContent = 'PLACE';
+    tile.appendChild(hint);
+
+    var meta = document.createElement('div'); meta.className = 'meta';
+    var title = document.createElement('div'); title.className = 'title'; title.textContent = prettify(model);
+    var sub = document.createElement('div'); sub.className = 'sub';
+    var mid = document.createElement('div'); mid.className = 'mid'; mid.textContent = model;
+    sub.appendChild(mid);
+    if (cat && showChip) { var chip = document.createElement('span'); chip.className = 'chip'; chip.textContent = cat; sub.appendChild(chip); }
+    meta.appendChild(title); meta.appendChild(sub);
+
+    card.appendChild(tile); card.appendChild(meta);
+    // No pushRecent: Recent is a prop-catalogue view; entity models would pollute
+    // it and try to load a (nonexistent) odb thumbnail.
+    function place() { hide(); post('placeEnt', { kind: kind, model: model }); }
+    card.addEventListener('click', place);
+    card.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); place(); }
+    });
+    return card;
+}
+
 function makeCard(model, showChip) {
+    if (catalog !== 'props') return makeEntCard(model, showChip);
     var cat = modelCat[model] || '';
     var card = document.createElement('div');
     card.className = 'card';
@@ -453,20 +492,38 @@ function makeSpecialRow(id, label, icon, count, active) {
     return row;
 }
 
+// Props / Peds / Vehicles catalogue switcher (top of the category rail).
+function catalogSwitcher() {
+    var wrap = document.createElement('div'); wrap.className = 'cat-switch';
+    [['props', 'Props'], ['peds', 'Peds'], ['vehs', 'Vehicles']].forEach(function (c) {
+        var b = document.createElement('button'); b.type = 'button';
+        b.className = 'cat-switch-btn' + (catalog === c[0] ? ' active' : '');
+        b.textContent = c[1];
+        b.addEventListener('click', function () { switchCatalog(c[0]); });
+        wrap.appendChild(b);
+    });
+    return wrap;
+}
+
 function renderCats() {
     el.cats.textContent = '';
+    el.cats.appendChild(catalogSwitcher());
 
-    // Pinned pseudo-categories: Scene + Live map + Blueprint kits + Favorites + Recent.
-    el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length + sceneLights.length, view.type === 'scene'));
-    el.cats.appendChild(makeSpecialRow('live', 'Live map', ICON_WORLD, live.length, view.type === 'live'));
-    el.cats.appendChild(makeSpecialRow('ents', 'Entities', ICON_ENT, ents.length, view.type === 'ents'));
-    el.cats.appendChild(makeSpecialRow('perf', 'Performance', ICON_GAUGE, perfHealthTag(), view.type === 'perf'));
-    el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
-    el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
-    el.cats.appendChild(makeSpecialRow('recent', 'Recent', ICON_RECENT, recentModels().length, view.type === 'recent'));
-    var sep = document.createElement('div');
-    sep.className = 'cat-sep';
-    el.cats.appendChild(sep);
+    // Pinned pseudo-categories belong to the prop catalogue (Scene/Live/Entities/
+    // Performance/Kits/Favorites/Recent are all prop-map concepts). The Peds and
+    // Vehicles catalogues show only their own categories.
+    if (catalog === 'props') {
+        el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length + sceneLights.length, view.type === 'scene'));
+        el.cats.appendChild(makeSpecialRow('live', 'Live map', ICON_WORLD, live.length, view.type === 'live'));
+        el.cats.appendChild(makeSpecialRow('ents', 'Entities', ICON_ENT, ents.length, view.type === 'ents'));
+        el.cats.appendChild(makeSpecialRow('perf', 'Performance', ICON_GAUGE, perfHealthTag(), view.type === 'perf'));
+        el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
+        el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
+        el.cats.appendChild(makeSpecialRow('recent', 'Recent', ICON_RECENT, recentModels().length, view.type === 'recent'));
+        var sep = document.createElement('div');
+        sep.className = 'cat-sep';
+        el.cats.appendChild(sep);
+    }
 
     groups.forEach(function (g, i) {
         if (!g) return;
@@ -1510,8 +1567,11 @@ function stampKit(name) {
     post('stampPrefab', { name: name });
 }
 
-function show(g) {
-    groups = Array.isArray(g) ? g : [];
+// Build the flat index (allModels / searchIndex / modelCat / modelSet) + the
+// header count for a group list. Shared by the prop catalogue and the Peds /
+// Vehicles catalogues so search, favorites and dedupe work in each.
+function buildIndex(groupList) {
+    groups = Array.isArray(groupList) ? groupList : [];
     allModels = []; searchIndex = []; modelCat = {}; modelSet = {};
     groups.forEach(function (grp) {
         if (!grp || !Array.isArray(grp.models)) return;
@@ -1519,20 +1579,56 @@ function show(g) {
             if (typeof m !== 'string') return;
             // A model can be listed in more than one category; index it once so the
             // count, search results and Favorites never show duplicate cards. (The
-            // category grids still render from groups[i].models, so a shared prop
+            // category grids still render from groups[i].models, so a shared model
             // still appears under each of its categories when browsing.)
             if (!modelSet[m]) { allModels.push(m); searchIndex.push([norm(m), m]); modelSet[m] = true; }
             if (grp.category && !modelCat[m]) modelCat[m] = grp.category;
         });
     });
     el.count.textContent = allModels.length.toLocaleString();
+}
+
+// Catalogue-aware search placeholder.
+function setSearchPlaceholder() {
+    el.search.placeholder = catalog === 'peds' ? 'Search peds by name (cop, ballas, animal…)'
+        : catalog === 'vehs' ? 'Search vehicles by name (police, adder, boat…)'
+        : 'Search 5,295 props by name (barrier, fence, chair…)';
+}
+
+// Show the first category of the active catalogue.
+function showFirstCategory() {
     view = { type: 'cat', i: groups.length ? 0 : -1 };
     lastBrowse = view;
+    var gg = groups[view.i];
+    renderGrid(gg ? gg.models : [], gg ? gg.category : '', false, false);
+}
+
+// Switch between the Props / Peds / Vehicles catalogues. Rebuilds the index +
+// rail + grid from the chosen catalogue; the prop path is 'props' and unchanged.
+function switchCatalog(name) {
+    if (name !== 'props' && name !== 'peds' && name !== 'vehs') return;
+    if (catalog === name) return;
+    catalog = name;
+    liveRenaming = false;
+    el.search.value = ''; el.clear.style.display = 'none';
+    buildIndex(catalogs[name]);
+    setSearchPlaceholder();
+    renderCats();
+    showFirstCategory();
+    setTimeout(function () { if (!helpOpen && !activityOpen) el.search.focus(); }, 0);
+}
+
+function show(g, peds, vehs) {
+    catalogs.props = Array.isArray(g) ? g : [];
+    if (Array.isArray(peds)) catalogs.peds = peds;   // preserve on re-open paths that omit them (help/activity)
+    if (Array.isArray(vehs)) catalogs.vehs = vehs;
+    catalog = 'props';
+    buildIndex(catalogs.props);
+    setSearchPlaceholder();
     el.search.value = '';
     el.clear.style.display = 'none';
     renderCats();
-    var gg = groups[view.i];
-    renderGrid(gg ? gg.models : [], gg ? gg.category : '', false, false);
+    showFirstCategory();
     el.app.classList.remove('hidden');
     el.app.setAttribute('aria-hidden', 'false');
     // Don't steal focus into the search box when we opened straight onto an
@@ -1800,9 +1896,9 @@ document.addEventListener('keydown', function (e) {
 
 window.addEventListener('message', function (e) {
     var d = e.data || {};
-    if (d.action === 'open') { show(d.groups); if (d.help) helpShow(); if (d.activity) activityShow(d.activity); }
-    else if (d.action === 'help') { if (el.app.classList.contains('hidden')) show(groups); helpShow(); }
-    else if (d.action === 'activity') { if (el.app.classList.contains('hidden')) show(groups); activityShow(d.log); }
+    if (d.action === 'open') { show(d.groups, d.peds, d.vehs); if (d.help) helpShow(); if (d.activity) activityShow(d.activity); }
+    else if (d.action === 'help') { if (el.app.classList.contains('hidden')) show(catalogs.props); helpShow(); }
+    else if (d.action === 'activity') { if (el.app.classList.contains('hidden')) show(catalogs.props); activityShow(d.log); }
     // A prop was spawned from a slash command (/prop, /matnext, browser click):
     // record it for the Recent view even while the browser is closed. pushRecent
     // dedupes, so the browser-click path double-firing this is harmless.

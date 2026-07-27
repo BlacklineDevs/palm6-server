@@ -26,7 +26,12 @@ local function openBrowser()
     if open then return end
     open = true
     SetNuiFocus(true, true)
-    SendNUIMessage({ action = 'open', groups = Config.PropGroups or {} })
+    SendNUIMessage({
+        action = 'open',
+        groups = Config.PropGroups or {},
+        peds = Config.PedGroups or {},         -- Peds tab catalog
+        vehs = Config.VehGroups or {},         -- Vehicles tab catalog
+    })
     if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
     if Scene and Scene.push then Scene.push() end                 -- populate the Scene outliner
     if Live and Live.push then Live.push() end                    -- populate the Live-map outliner
@@ -114,6 +119,19 @@ RegisterNUICallback('spawnProp', function(data, cb)
     local model = type(data) == 'table' and data.model or nil
     if type(model) == 'string' and model:match('^[%w_]+$') then
         TriggerEvent('palm6_mapeditor:spawn', model)
+    end
+    closeBrowser()
+    cb('ok')
+end)
+
+-- Place a ped or vehicle from the Peds/Vehicles browser at the player's aim.
+-- Routes through entities.lua (same aim + place path as /matped /matveh) and
+-- closes the browser so the fresh entity is visible.
+RegisterNUICallback('placeEnt', function(data, cb)
+    local kind = type(data) == 'table' and data.kind or nil
+    local model = type(data) == 'table' and data.model or nil
+    if (kind == 'ped' or kind == 'veh') and type(model) == 'string' and model:match('^[%w_]+$') then
+        TriggerEvent('palm6_mapeditor:placeEnt', kind, model)
     end
     closeBrowser()
     cb('ok')
