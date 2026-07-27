@@ -115,6 +115,19 @@ RegisterNUICallback('sceneDelete', function(data, cb)
     cb('ok')
 end)
 
+-- Save the selected scene props as a new blueprint kit (prefab). Stays open so
+-- the freshly-saved kit appears in the Blueprint kits view.
+RegisterNUICallback('sceneSaveKit', function(data, cb)
+    local name = type(data) == 'table' and data.name or nil
+    local ids = type(data) == 'table' and data.ids or nil
+    if type(name) == 'string' and type(ids) == 'table' and Prefabs and Prefabs.saveFromSelection then
+        local clean = {}
+        for _, id in ipairs(ids) do local n = tonumber(id); if n then clean[#clean + 1] = n end end
+        Prefabs.saveFromSelection(name, clean)
+    end
+    cb('ok')
+end)
+
 RegisterNUICallback('sceneDeleteMany', function(data, cb)
     local ids = type(data) == 'table' and data.ids or nil
     if type(ids) == 'table' and MapEd and MapEd.deleteByIds then

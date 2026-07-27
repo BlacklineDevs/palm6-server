@@ -563,7 +563,9 @@ function onScene(list) {
 
 function gotoScene(id) { hide(); post('sceneGoto', { id: id }); }
 
-var sceneSel = {};   // id -> true (outliner multi-select)
+var sceneSel = {};        // id -> true (outliner multi-select)
+var sceneSaving = false;  // naming bar open for "save selection as kit"
+var sceneSaveName = '';
 function sceneSelectedIds() {
     var out = [];
     for (var i = 0; i < scene.length; i++) if (sceneSel[scene[i].id]) out.push(scene[i].id);
@@ -628,15 +630,51 @@ function sceneToolbar() {
 
     if (selIds.length > 0) {
         var actions = document.createElement('div'); actions.className = 'scene-actions';
+        var save = document.createElement('button'); save.className = 'scene-batch-save'; save.type = 'button';
+        save.textContent = 'Save as kit';
+        save.addEventListener('click', function () { sceneSaving = true; selectScene(true); });
         var clr = document.createElement('button'); clr.className = 'scene-batch-clear'; clr.type = 'button';
         clr.textContent = 'Clear';
-        clr.addEventListener('click', function () { sceneSel = {}; selectScene(true); });
+        clr.addEventListener('click', function () { sceneSel = {}; sceneSaving = false; selectScene(true); });
         var del = document.createElement('button'); del.className = 'scene-batch-del'; del.type = 'button';
         del.textContent = 'Delete ' + selIds.length;
-        del.addEventListener('click', function () { post('sceneDeleteMany', { ids: selIds }); sceneSel = {}; selectScene(true); });
-        actions.appendChild(clr); actions.appendChild(del);
+        del.addEventListener('click', function () { post('sceneDeleteMany', { ids: selIds }); sceneSel = {}; sceneSaving = false; selectScene(true); });
+        actions.appendChild(save); actions.appendChild(clr); actions.appendChild(del);
         bar.appendChild(actions);
     }
+    return bar;
+}
+
+function doSaveKit() {
+    var ids = sceneSelectedIds();
+    var name = (sceneSaveName || '').trim();
+    if (!ids.length) { cancelSaveKit(); return; }
+    if (!name) return;   // require a name
+    post('sceneSaveKit', { name: name, ids: ids });
+    sceneSaving = false; sceneSaveName = ''; sceneSel = {};
+    selectScene(true);
+}
+function cancelSaveKit() { sceneSaving = false; sceneSaveName = ''; selectScene(true); }
+
+function sceneSaveBar() {
+    var bar = document.createElement('div'); bar.className = 'scene-savebar';
+    var input = document.createElement('input');
+    input.type = 'text'; input.className = 'scene-name-input'; input.maxLength = 48;
+    input.placeholder = 'Kit name (e.g. downtown_checkpoint)…';
+    input.value = sceneSaveName || '';
+    input.addEventListener('input', function () { sceneSaveName = input.value; });
+    input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); doSaveKit(); }
+        else if (ev.key === 'Escape') { ev.stopPropagation(); cancelSaveKit(); }
+    });
+    var cancel = document.createElement('button'); cancel.className = 'scene-batch-clear'; cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', cancelSaveKit);
+    var go = document.createElement('button'); go.className = 'scene-save-go'; go.type = 'button';
+    go.textContent = 'Save kit';
+    go.addEventListener('click', doSaveKit);
+    bar.appendChild(input); bar.appendChild(cancel); bar.appendChild(go);
+    setTimeout(function () { input.focus(); }, 0);
     return bar;
 }
 
@@ -657,8 +695,10 @@ function selectScene(keepScroll) {
         el.ctx.textContent = 'Scene';
         return;
     }
+    if (!sceneSelectedIds().length) sceneSaving = false;   // no selection -> no naming bar
     var container = document.createElement('div'); container.className = 'scene-view';
     container.appendChild(sceneToolbar());
+    if (sceneSaving) container.appendChild(sceneSaveBar());
     var list = document.createElement('div'); list.className = 'scene-list';
     for (var i = 0; i < scene.length; i++) list.appendChild(makeSceneRow(scene[i]));
     container.appendChild(list);

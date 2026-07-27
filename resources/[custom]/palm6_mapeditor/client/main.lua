@@ -253,6 +253,19 @@ function MapEd.snapshot()
     end
     return out
 end
+-- Snapshot only the placed props with the given ids (outliner "save selection as
+-- kit"). Absolute coords; the server centroid-relativises them into a prefab.
+function MapEd.snapshotIds(ids)
+    local want = {}
+    for _, id in ipairs(ids or {}) do want[id] = true end
+    local out = {}
+    for _, r in ipairs(placed) do
+        if want[r.id] then
+            out[#out + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+        end
+    end
+    return out
+end
 function MapEd.clearSession() clearAll() end
 
 -- ---- export ---------------------------------------------------------------

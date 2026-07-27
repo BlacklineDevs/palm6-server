@@ -107,8 +107,20 @@ RegisterCommand('mapprefabstamp', function(_, args) stampPrefab(args[1], args[2]
 -- NUI Stamp button routes here (nui.lua's stampPrefab callback fires this event).
 AddEventHandler('palm6_mapeditor:stampPrefab', function(name) stampPrefab(name, 0.0) end)
 
--- Exposed for nui.lua: push the kit list to the NUI when the browser opens.
-Prefabs = { sendKits = sendKits, stamp = stampPrefab }
+-- Save the outliner's selected props as a new blueprint kit. The subset's
+-- absolute coords go to the server, which centroid-relativises them; the server
+-- then broadcasts prefab:def -> sendKits, so the kit appears in the NUI at once.
+local function saveFromSelection(name, ids)
+    local safe = type(name) == 'string' and name:gsub('%s+', '_'):gsub('[^%w_%-]', '') or ''
+    if safe == '' then Game.Notify('name the kit (letters / numbers)', 'error'); return end
+    local snap = (MapEd and MapEd.snapshotIds) and MapEd.snapshotIds(ids) or {}
+    if #snap == 0 then Game.Notify('select props first', 'error'); return end
+    TriggerServerEvent('palm6_mapeditor:prefab:save', safe, snap, {})
+    Game.Notify(('saving kit "%s" (%d props)...'):format(safe, #snap), 'inform')
+end
+
+-- Exposed for nui.lua: push the kit list, stamp a kit, save a selection as a kit.
+Prefabs = { sendKits = sendKits, stamp = stampPrefab, saveFromSelection = saveFromSelection }
 
 -- --- list / delete ---------------------------------------------------------
 RegisterCommand('mapprefablist', function()

@@ -512,6 +512,29 @@ kbd { font: inherit; }
     padding: 0.32rem 0.8rem; font-size: 0.72rem; font-weight: 600; cursor: pointer; font-family: var(--ui); transition: all 0.12s;
 }
 .scene-batch-del:hover { background: rgba(255,107,107,0.24); color: #fff; }
+.scene-batch-save {
+    background: var(--amber-soft); border: 1px solid var(--amber-line); color: var(--amber); border-radius: 7px;
+    padding: 0.32rem 0.8rem; font-size: 0.72rem; font-weight: 600; cursor: pointer; font-family: var(--ui); transition: all 0.12s;
+}
+.scene-batch-save:hover { background: rgba(255,138,61,0.2); color: var(--amber-2); }
+
+.scene-savebar {
+    display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.15rem 0.2rem;
+}
+.scene-name-input {
+    flex: 1 1 auto; background: var(--input); color: var(--text);
+    border: 1px solid var(--line-2); clip-path: var(--cut-sm);
+    padding: 0.5rem 0.75rem; font-size: 0.82rem; font-family: var(--ui); outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.scene-name-input::placeholder { color: var(--muted); }
+.scene-name-input:focus { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+.scene-save-go {
+    flex: 0 0 auto; border: none; clip-path: var(--cut-sm); cursor: pointer;
+    background: var(--brand-grad); color: #2a0a06; font-family: var(--display); font-weight: 700;
+    font-size: 0.76rem; letter-spacing: 0.02em; padding: 0.5rem 1rem; transition: filter 0.14s;
+}
+.scene-save-go:hover { filter: brightness(1.08); }
 .scene-check { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--amber); cursor: pointer; }
 .scene-list { display: flex; flex-direction: column; gap: 0.4rem; }
 .scene-row {
