@@ -281,9 +281,10 @@ local function lightList() return (MapEd.getLights and MapEd.getLights()) or {} 
 -- and light list; they default to the current session so /mapexport is unchanged,
 -- but /mapexportlive can pass the live map's objects instead. Records carry a live
 -- entity handle in .obj, so the ymap quaternion read works for either source.
-local function buildLua(recs, lg)
+local function buildLua(recs, lg, ents)
     recs = recs or placed
     lg = lg or lightList()
+    ents = ents or {}
     local out = { 'local objects = {' }
     for _, r in ipairs(recs) do
         out[#out + 1] = ("    { model = `%s`, coords = vector3(%.3f, %.3f, %.3f), rot = vector3(%.2f, %.2f, %.2f) },")
@@ -298,17 +299,27 @@ local function buildLua(recs, lg)
         end
         out[#out + 1] = '}'
     end
+    -- Scene entities (peds / vehicles) as a spawn list. model in backticks (joaat
+    -- hash literal); scenario is a ped behaviour (empty for vehicles / none).
+    if #ents > 0 then
+        out[#out + 1] = '\nlocal entities = {'
+        for _, e in ipairs(ents) do
+            out[#out + 1] = ("    { kind = '%s', model = `%s`, coords = vector3(%.3f, %.3f, %.3f), heading = %.2f, scenario = '%s' },")
+                :format(e.kind, e.model, e.x, e.y, e.z, e.heading or 0.0, e.scenario or '')
+        end
+        out[#out + 1] = '}'
+    end
     return table.concat(out, '\n')
 end
 
-local function buildJson(recs, lg)
+local function buildJson(recs, lg, ents)
     recs = recs or placed
     lg = lg or lightList()
     local objs = {}
     for _, r in ipairs(recs) do
         objs[#objs + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
     end
-    return json.encode({ objects = objs, lights = lg })
+    return json.encode({ objects = objs, lights = lg, entities = ents or {} })
 end
 
 -- CodeWalker .ymap.xml — the streamable format (import in CodeWalker RPF Explorer
@@ -431,8 +442,8 @@ end
 -- Build every export format from an arbitrary record list — used by
 -- client/live.lua's /mapexportlive to export the accumulated live map (not just
 -- the session), so the pipeline works over a map built across sessions.
-function MapEd.buildExports(recs, lg, name)
-    return buildLua(recs, lg), buildJson(recs, lg), buildYmap(name, recs), buildSollumz(name, recs)
+function MapEd.buildExports(recs, lg, name, ents)
+    return buildLua(recs, lg, ents), buildJson(recs, lg, ents), buildYmap(name, recs), buildSollumz(name, recs)
 end
 
 RegisterCommand('mapexport', function(_, args)

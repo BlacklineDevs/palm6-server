@@ -76,7 +76,7 @@ end
 local function entCount() local n = 0; for _ in pairs(ents) do n = n + 1 end; return n end
 
 local function wire(e)
-    return { id = e.id, kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z, heading = e.heading, extra = e.extra }
+    return { id = e.id, map = e.map, kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z, heading = e.heading, extra = e.extra }
 end
 local function fullBatch()
     local out = {}; for _, e in pairs(ents) do out[#out + 1] = wire(e) end; return out

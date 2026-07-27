@@ -254,10 +254,11 @@ RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
     local recs = {}
     for id, r in pairs(liveObjs) do if want[id] then recs[#recs + 1] = r end end
     if #recs == 0 then Game.Notify('live map not streamed in yet — move nearer / retry', 'error'); return end
-    local lua, js, ymap, py = MapEd.buildExports(recs, {}, mapName)
+    local ents = (Entities and Entities.exportList) and Entities.exportList(mapName) or {}
+    local lua, js, ymap, py = MapEd.buildExports(recs, {}, mapName, ents)
     Game.SetClipboard(lua)
     TriggerServerEvent('palm6_mapeditor:save', mapName, lua, js, ymap, py)
-    Game.Notify(('exporting live map "%s" — %d/%d props (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #ids), 'inform')
+    Game.Notify(('exporting live map "%s" — %d props, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #ents), 'inform')
 end)
 
 RegisterCommand('mapwipe', function(_, args)

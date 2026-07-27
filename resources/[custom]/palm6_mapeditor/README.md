@@ -40,7 +40,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | `/mattp` | teleport yourself to the selected prop |
 | `/materase` / `/materaseundo` | hide the vanilla world prop you look at / restore |
 | `/mapexport [name]` | export your **session** to Lua + JSON + CodeWalker ymap.xml + Blender/Sollumz .py |
-| `/mapexportlive <mapname>` | export the accumulated **live map** (built across sessions) to Lua/JSON/ymap.xml/.py |
+| `/mapexportlive <mapname>` | export the accumulated **live map** (built across sessions) to Lua/JSON/ymap.xml/.py — now includes **scene peds + vehicles** (as a spawn list in the .lua/.json; the ymap stays props-only) |
 | `/mapload <file>` | reload a saved export back into the editor (sessions) |
 | `/matlight [point\|spot]` | place a point/spot light at your aim |
 | `/matlightcolor <r> <g> <b>` `/matlightrange <n>` `/matlightint <n>` | tune the selected light |

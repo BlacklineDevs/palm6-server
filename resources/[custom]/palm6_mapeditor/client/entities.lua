@@ -57,7 +57,7 @@ local function spawn(rec, gen)
     if canceled[rec.id] or stopping or (gen and gen ~= syncGen) or liveEnts[rec.id] then
         Game.DeleteAnyEntity(obj); canceled[rec.id] = nil; return
     end
-    liveEnts[rec.id] = { obj = obj, kind = rec.kind, model = rec.model, x = rec.x, y = rec.y, z = rec.z, heading = rec.heading, extra = rec.extra }
+    liveEnts[rec.id] = { obj = obj, map = rec.map, kind = rec.kind, model = rec.model, x = rec.x, y = rec.y, z = rec.z, heading = rec.heading, extra = rec.extra }
 end
 
 -- ---- server -> client ------------------------------------------------------
@@ -179,6 +179,16 @@ function Entities.list()
 end
 function Entities.push()
     SendNUIMessage({ action = 'entities', ents = Entities.list() })
+end
+-- Entities on a named map, for the map export (peds/vehicles as a spawn list).
+function Entities.exportList(map)
+    local out = {}
+    for _, e in pairs(liveEnts) do
+        if e.map == map then
+            out[#out + 1] = { kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z, heading = e.heading or 0.0, scenario = e.extra or '' }
+        end
+    end
+    return out
 end
 function Entities.deleteById(id)
     id = tonumber(id)
