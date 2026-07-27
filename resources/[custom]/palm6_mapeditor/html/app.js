@@ -46,6 +46,7 @@ var kits = [];          // [{name, props, lights}, ...] blueprint kits (prefabs)
 var scene = [];         // [{id, model, x, y, z}, ...] session placed props (outliner)
 var sceneLights = [];   // [{id, kind, x, y, z, r, g, b}, ...] session lights (outliner)
 var live = [];          // [{id, model, x, y, z}, ...] committed live-map props
+var perf = { live: {}, caps: {} };  // Performance panel: live light/erase/entity counts + caps from Lua
 
 // ---- persistence (localStorage; degrades to memory-only if unavailable) -----
 function lsGet(key) {
@@ -419,6 +420,8 @@ var ICON_CUBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.
 var ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" fill="none"/><path d="M10 11v5M14 11v5" fill="none"/></svg>';
 var ICON_WORLD = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke-width="1.7"/><path d="M3.8 12h16.4M12 3.5c2.1 2.3 3.2 5.1 3.2 8.5S14.1 18.2 12 20.5C9.9 18.2 8.8 15.4 8.8 12S9.9 5.8 12 3.5Z" fill="none" stroke-width="1.7"/></svg>';
 var ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9" fill="none"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none"/></svg>';
+// Performance: a gauge/speedometer dial.
+var ICON_GAUGE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19a8.5 8.5 0 1 1 16 0" fill="none" stroke-width="1.7" stroke-linecap="round"/><path d="M12 15.5l4.2-4.8" fill="none" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.6"/></svg>';
 
 function makeSpecialRow(id, label, icon, count, active) {
     var row = document.createElement('div');
@@ -438,6 +441,7 @@ function makeSpecialRow(id, label, icon, count, active) {
         else if (id === 'recent') selectRecent();
         else if (id === 'kits') selectKits();
         else if (id === 'live') selectLive();
+        else if (id === 'perf') selectPerf();
         else selectScene();
     });
     return row;
@@ -449,6 +453,7 @@ function renderCats() {
     // Pinned pseudo-categories: Scene + Live map + Blueprint kits + Favorites + Recent.
     el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length + sceneLights.length, view.type === 'scene'));
     el.cats.appendChild(makeSpecialRow('live', 'Live map', ICON_WORLD, live.length, view.type === 'live'));
+    el.cats.appendChild(makeSpecialRow('perf', 'Performance', ICON_GAUGE, perfHealthTag(), view.type === 'perf'));
     el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
     el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
     el.cats.appendChild(makeSpecialRow('recent', 'Recent', ICON_RECENT, recentModels().length, view.type === 'recent'));
@@ -865,8 +870,172 @@ function selectLive(keepScroll) {
     el.grid.scrollTop = prev;
 }
 
+// ---- performance panel ---------------------------------------------------
+// A budget + density view over the whole map. Live prop / light / world-erase /
+// entity counts are watched against the same caps that bound what every client
+// has to stream, and prop coordinates (session + live) are binned into zones to
+// surface dense clusters that cost FPS. Everything here is derived from data the
+// NUI already holds plus one small 'perf' payload (caps + the counts it can't
+// see) — no per-frame work, no server round-trip.
+var HOTSPOT_CELL = 25;   // metres per density zone
+var HOTSPOT_MIN = 30;    // objects in one zone before it's flagged a cluster
+
+function perfBudgets() {
+    var c = perf.caps || {}, lp = perf.live || {};
+    return [
+        { label: 'Live props', used: live.length, cap: c.liveProps || 0 },
+        { label: 'Live lights', used: lp.lights || 0, cap: c.liveLights || 0 },
+        { label: 'World-erases', used: lp.hides || 0, cap: c.hides || 0 },
+        { label: 'Scene entities', used: (lp.peds || 0) + (lp.veh || 0), cap: c.entities || 0 },
+        { label: 'Session props (next commit)', used: scene.length, cap: c.commit || 0 }
+    ];
+}
+function pctOf(b) { return b.cap > 0 ? b.used / b.cap : 0; }
+function levelOf(p) { return p >= 0.9 ? 'crit' : (p >= 0.7 ? 'warn' : 'ok'); }
+function worstLevel() {
+    var w = 0;
+    perfBudgets().forEach(function (b) { var p = pctOf(b); if (p > w) w = p; });
+    return levelOf(w);
+}
+// The Performance rail row shows the total number of live-map objects.
+function perfHealthTag() {
+    var lp = perf.live || {};
+    return live.length + (lp.lights || 0) + (lp.hides || 0) + (lp.peds || 0) + (lp.veh || 0);
+}
+
+// Bin every prop (session + live) into HOTSPOT_CELL-metre zones and return the
+// densest ones over the threshold, so builders can find FPS-heavy clusters.
+function perfHotspots() {
+    var cells = {};
+    function add(o) {
+        if (!o || typeof o.x !== 'number' || typeof o.y !== 'number') return;
+        var cx = Math.floor(o.x / HOTSPOT_CELL), cy = Math.floor(o.y / HOTSPOT_CELL);
+        var k = cx + ',' + cy;
+        var cell = cells[k] || (cells[k] = { cx: cx, cy: cy, n: 0 });
+        cell.n++;
+    }
+    for (var i = 0; i < scene.length; i++) add(scene[i]);
+    for (var j = 0; j < live.length; j++) add(live[j]);
+    var out = [];
+    Object.keys(cells).forEach(function (k) {
+        var c = cells[k];
+        if (c.n >= HOTSPOT_MIN) out.push({ x: (c.cx + 0.5) * HOTSPOT_CELL, y: (c.cy + 0.5) * HOTSPOT_CELL, n: c.n });
+    });
+    out.sort(function (a, b) { return b.n - a.n; });
+    return out.slice(0, 6);
+}
+
+function perfMeter(label, used, cap) {
+    var cap0 = cap || 0;
+    var lvl = levelOf(cap0 > 0 ? used / cap0 : 0);
+    var row = document.createElement('div'); row.className = 'perf-meter';
+    var top = document.createElement('div'); top.className = 'perf-meter-top';
+    var lab = document.createElement('span'); lab.className = 'perf-meter-label'; lab.textContent = label;
+    var val = document.createElement('span'); val.className = 'perf-meter-val is-' + lvl;
+    val.textContent = used + ' / ' + cap0;
+    top.appendChild(lab); top.appendChild(val);
+    var bar = document.createElement('div'); bar.className = 'perf-bar';
+    var fill = document.createElement('div'); fill.className = 'perf-bar-fill is-' + lvl;
+    fill.style.width = Math.max(2, Math.min(100, Math.round((cap0 > 0 ? used / cap0 : 0) * 100))) + '%';
+    bar.appendChild(fill);
+    row.appendChild(top); row.appendChild(bar);
+    return row;
+}
+
+function perfTips(spots) {
+    var tips = [];
+    var budgets = perfBudgets();
+    var over = budgets.filter(function (b) { return pctOf(b) >= 0.9; });
+    var near = budgets.filter(function (b) { return pctOf(b) >= 0.7 && pctOf(b) < 0.9; });
+    over.forEach(function (b) {
+        tips.push('Near the ' + b.label + ' cap (' + b.used + '/' + b.cap + '). Wipe unused objects, or split the build across a second named map (/mapcommit <name>).');
+    });
+    if (!over.length) near.forEach(function (b) {
+        tips.push(b.label + ' is at ' + Math.round(pctOf(b) * 100) + '% of budget — keep an eye on it.');
+    });
+    if (spots.length) {
+        tips.push('Dense clusters raise draw calls and cost FPS for every player. Spread objects out, or turn a repeated group into a Blueprint kit and reuse it.');
+    }
+    if (!over.length && !near.length && !spots.length) {
+        tips.push('This map is well within budget with no dense clusters. Nice and light.');
+    }
+    tips.push('Committed objects stream to everyone. Use /mapexport to ship a finished build as a static ymap resource instead of leaving it live.');
+    return tips;
+}
+
+function onPerf(d) {
+    perf = { live: (d && d.live) || {}, caps: (d && d.caps) || {} };
+    if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh rail tag
+    if (view.type === 'perf') selectPerf();
+}
+
+function selectPerf() {
+    view = { type: 'perf' }; lastBrowse = view;
+    renderCats();
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+
+    var container = document.createElement('div'); container.className = 'perf-view';
+
+    // Overall health banner (worst budget wins).
+    var lvl = worstLevel();
+    var health = document.createElement('div'); health.className = 'perf-health is-' + lvl;
+    var hdot = document.createElement('span'); hdot.className = 'perf-health-dot';
+    var hlab = document.createElement('span');
+    hlab.textContent = 'Map performance: ' + (lvl === 'crit' ? 'near a limit' : (lvl === 'warn' ? 'getting heavy' : 'healthy'));
+    health.appendChild(hdot); health.appendChild(hlab);
+    container.appendChild(health);
+
+    // Budget meters.
+    var bh = document.createElement('div'); bh.className = 'scene-section'; bh.textContent = 'Budgets';
+    container.appendChild(bh);
+    var meters = document.createElement('div'); meters.className = 'perf-meters';
+    perfBudgets().forEach(function (b) { meters.appendChild(perfMeter(b.label, b.used, b.cap)); });
+    container.appendChild(meters);
+
+    // Session summary (lights have no per-commit cap of their own).
+    var totalLive = perfHealthTag();
+    var stat = document.createElement('div'); stat.className = 'perf-stats';
+    stat.textContent = 'Session: ' + scene.length + (scene.length === 1 ? ' prop' : ' props')
+        + ' + ' + sceneLights.length + (sceneLights.length === 1 ? ' light' : ' lights') + ' uncommitted'
+        + '  ·  live map total: ' + totalLive + (totalLive === 1 ? ' object' : ' objects');
+    container.appendChild(stat);
+
+    // Density hotspots.
+    var dh = document.createElement('div'); dh.className = 'scene-section'; dh.textContent = 'Density';
+    container.appendChild(dh);
+    var spots = perfHotspots();
+    if (!spots.length) {
+        var okd = document.createElement('div'); okd.className = 'perf-tip is-ok';
+        okd.textContent = 'No dense clusters — objects are well spaced (under ' + HOTSPOT_MIN + ' per ' + HOTSPOT_CELL + 'm zone).';
+        container.appendChild(okd);
+    } else {
+        spots.forEach(function (s) {
+            var row = document.createElement('div'); row.className = 'perf-hotspot';
+            var n = document.createElement('span'); n.className = 'perf-hotspot-n'; n.textContent = s.n;
+            var t = document.createElement('span'); t.className = 'perf-hotspot-t';
+            t.textContent = 'objects within a ' + HOTSPOT_CELL + 'm zone near ' + Math.round(s.x) + ', ' + Math.round(s.y);
+            row.appendChild(n); row.appendChild(t);
+            container.appendChild(row);
+        });
+    }
+
+    // Tips.
+    var th = document.createElement('div'); th.className = 'scene-section'; th.textContent = 'Tips';
+    container.appendChild(th);
+    perfTips(spots).forEach(function (tp) {
+        var t = document.createElement('div'); t.className = 'perf-tip'; t.textContent = tp;
+        container.appendChild(t);
+    });
+
+    el.grid.appendChild(container);
+    el.ctx.textContent = 'Performance';
+}
+
 // Restore whatever view was active before the user started typing a search.
 function restoreBrowse() {
+    if (lastBrowse.type === 'perf') { selectPerf(); return; }
     if (lastBrowse.type === 'live') { selectLive(); return; }
     if (lastBrowse.type === 'scene') { selectScene(); return; }
     if (lastBrowse.type === 'kits') { selectKits(); return; }
@@ -1380,6 +1549,7 @@ window.addEventListener('message', function (e) {
     else if (d.action === 'kits') onKits(d.kits);
     else if (d.action === 'scene') onScene(d.props, d.lights);
     else if (d.action === 'live') onLive(d.props);
+    else if (d.action === 'perf') onPerf(d);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

@@ -30,7 +30,32 @@ local function openBrowser()
     if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
     if Scene and Scene.push then Scene.push() end                 -- populate the Scene outliner
     if Live and Live.push then Live.push() end                    -- populate the Live-map outliner
+    if Perf and Perf.push then Perf.push() end                    -- populate the Performance panel
 end
+
+-- Assemble the Performance panel payload. The NUI already holds the session's
+-- props + lights (via 'scene') and the live-map props (via 'live') with coords,
+-- so it computes those counts and the density map itself; this supplies only
+-- what it can't see — the live light / world-erase / scene-entity counts and the
+-- configured budgets — so builders can watch a map against the caps that bound
+-- what every client has to stream.
+Perf = { push = function()
+    local liveProps, liveLights, liveHides = 0, 0, 0
+    if Live and Live.stats then liveProps, liveLights, liveHides = Live.stats() end
+    local peds, veh = 0, 0
+    if Entities and Entities.count then peds, veh = Entities.count() end
+    SendNUIMessage({
+        action = 'perf',
+        live = { props = liveProps, lights = liveLights, hides = liveHides, peds = peds, veh = veh },
+        caps = {
+            liveProps  = Config.LiveMaxProps  or 6000,
+            liveLights = Config.LiveMaxLights or 256,
+            hides      = Config.LiveMaxHides  or 2000,
+            entities   = Config.EntityMax     or 1500,
+            commit     = Config.LiveMaxCommit or 1000,
+        },
+    })
+end }
 
 local function closeBrowser()
     if not open then return end

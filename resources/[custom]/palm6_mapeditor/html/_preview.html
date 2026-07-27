@@ -119,6 +119,21 @@
         } catch (e) {}
         if (typeof loadPrefs === 'function') loadPrefs();
         window.postMessage({ action: 'open', groups: groups }, '*');
+        // Seed the outliners + Performance panel so those rail views show data.
+        window.postMessage({ action: 'scene', props: [
+            { id: 1, model: 'prop_barrel_02a', x: 120.4, y: -1002.2, z: 29.4 },
+            { id: 2, model: 'prop_roadcone02a', x: 121.0, y: -1003.0, z: 29.4 },
+            { id: 3, model: 'prop_off_chair_01', x: 118.2, y: -1000.1, z: 29.5 },
+        ], lights: [{ id: 9, kind: 'point', x: 119.0, y: -1001.0, z: 31.0, r: 255, g: 180, b: 120 }] }, '*');
+        (function () {
+            var liveProps = [];
+            // a dense cluster (demonstrates the density warning) + a few spread out
+            for (var i = 0; i < 38; i++) liveProps.push({ id: 100 + i, model: 'prop_barrel_02a', x: 200 + (i % 6), y: 300 + Math.floor(i / 6), z: 30 });
+            liveProps.push({ id: 200, model: 'prop_streetlight_01', x: 800, y: -50, z: 30 });
+            window.postMessage({ action: 'live', props: liveProps }, '*');
+            window.postMessage({ action: 'perf', live: { lights: 231, hides: 4, peds: 6, veh: 3 },
+                caps: { liveProps: 6000, liveLights: 256, hides: 2000, entities: 1500, commit: 1000 } }, '*');
+        })();
         // Preview helpers: press H for the controls sheet, L for a sample activity log.
         window.addEventListener('keydown', function (e) {
             if (e.key === 'l' || e.key === 'L') {

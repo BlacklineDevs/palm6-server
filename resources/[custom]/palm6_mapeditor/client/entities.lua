@@ -141,6 +141,15 @@ end, false)
 
 RegisterCommand('mapentlist', function() TriggerServerEvent('palm6_mapeditor:ent:list') end, false)
 
+-- Counts for the Performance panel: scene peds / vehicles currently streamed in.
+Entities = { count = function()
+    local peds, veh = 0, 0
+    for _, e in pairs(liveEnts) do
+        if e.kind == 'veh' then veh = veh + 1 else peds = peds + 1 end
+    end
+    return peds, veh
+end }
+
 -- Scene entities are our own client entities; delete them on stop so a resource
 -- restart never leaves orphaned peds/vehicles in the world.
 AddEventHandler('onResourceStop', function(res)

@@ -598,6 +598,53 @@ kbd { font: inherit; }
     background: var(--lc, #ffc88c); box-shadow: 0 0 9px var(--lc, #ffc88c);
 }
 
+/* ---- performance panel ---- */
+.cat.special.is-perf .ic svg { fill: none; }
+.cat.special.is-perf .ic svg circle { fill: currentColor; }
+.perf-view { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 0.5rem; }
+.perf-health {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 0.9rem;
+    background: var(--surface); border: 1px solid var(--line); clip-path: var(--cut-md);
+    font-family: var(--display); font-size: 0.82rem; font-weight: 600; color: var(--text);
+}
+.perf-health-dot { flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; }
+.perf-health.is-ok   .perf-health-dot { background: var(--green);  box-shadow: 0 0 9px var(--green); }
+.perf-health.is-warn .perf-health-dot { background: var(--amber);  box-shadow: 0 0 9px var(--amber); }
+.perf-health.is-crit .perf-health-dot { background: var(--danger); box-shadow: 0 0 9px var(--danger); }
+.perf-health.is-ok   { border-color: rgba(70, 226, 155, 0.4); }
+.perf-health.is-warn { border-color: var(--amber-line); }
+.perf-health.is-crit { border-color: var(--danger); }
+.perf-meters { display: flex; flex-direction: column; gap: 0.55rem; }
+.perf-meter { display: flex; flex-direction: column; gap: 0.28rem; }
+.perf-meter-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.perf-meter-label { font-size: 0.78rem; color: var(--muted-2); }
+.perf-meter-val { font-family: var(--mono); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.perf-meter-val.is-ok   { color: var(--muted); }
+.perf-meter-val.is-warn { color: var(--amber-2); }
+.perf-meter-val.is-crit { color: #ffc6cd; }
+.perf-bar { height: 7px; background: var(--panel-deep); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.perf-bar-fill { height: 100%; border-radius: 999px; transition: width 0.2s; }
+.perf-bar-fill.is-ok   { background: var(--green); }
+.perf-bar-fill.is-warn { background: var(--amber); }
+.perf-bar-fill.is-crit { background: var(--danger); }
+.perf-stats { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); padding: 0.1rem 0.15rem; }
+.perf-hotspot {
+    display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.75rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+}
+.perf-hotspot-n {
+    flex: 0 0 auto; min-width: 2rem; text-align: center; font-family: var(--display); font-weight: 700;
+    font-size: 0.8rem; color: var(--amber); background: var(--amber-soft); border: 1px solid var(--amber-line);
+    border-radius: 7px; padding: 0.15rem 0.4rem;
+}
+.perf-hotspot-t { font-size: 0.74rem; color: var(--muted-2); }
+.perf-tip {
+    font-size: 0.74rem; line-height: 1.5; color: var(--muted-2);
+    padding: 0.55rem 0.75rem; background: var(--panel-deep); border: 1px solid var(--line);
+    border-left: 2px solid var(--amber-line); border-radius: 7px;
+}
+.perf-tip.is-ok { border-left-color: rgba(70, 226, 155, 0.5); color: var(--muted); }
+
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar, .detail-info::-webkit-scrollbar { width: 11px; }
 .cats::-webkit-scrollbar-thumb, .grid::-webkit-scrollbar-thumb, .help-body::-webkit-scrollbar-thumb, .detail-info::-webkit-scrollbar-thumb {

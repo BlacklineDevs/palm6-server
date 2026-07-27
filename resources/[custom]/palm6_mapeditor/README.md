@@ -19,7 +19,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | Command | Does |
 |---|---|
 | `/mapedit` | toggle editor |
-| `/propui` | **visual thumbnail browser** — 5,295 props with images, category rail, search, favorites, recent, **blueprint kits** (prefabs), a **scene outliner** (jump to / delete / multi-select / save-as-kit), a **live-map outliner** (jump to / grab / delete committed props), and a click-through detail view (preview + description + Spawn) |
+| `/propui` | **visual thumbnail browser** — 5,295 props with images, category rail, search, favorites, recent, **blueprint kits** (prefabs), a **scene outliner** (jump to / delete / multi-select / save-as-kit), a **live-map outliner** (jump to / grab / delete committed props), a **performance panel** (budget meters vs the prop/light/erase/entity caps + density-cluster warnings), and a click-through detail view (preview + description + Spawn) |
 | `/maphelp` (key **H**) | **in-game controls & commands sheet** — every keybind and slash command, overlaid on the browser |
 | `/maplog` (key **L**) | **activity log** — searchable history of every action the editor reported this session |
 | `/mapcam` (key **B**) | **freecam** — detach a smooth camera: WASD fly, mouse look, Shift fast, mouse-wheel FOV zoom, Backspace exit |

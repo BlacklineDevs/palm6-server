@@ -289,6 +289,17 @@ function Live.push()
     SendNUIMessage({ action = 'live', props = list })
 end
 
+-- Counts for the Performance panel: props / lights / world-erases currently on
+-- the live (committed) map. liveObjs/liveLights/liveHides mirror the full sets
+-- the server streams, so these are accurate for every player, not just admins.
+function Live.stats()
+    local props, lights, hides = 0, 0, 0
+    for _ in pairs(liveObjs) do props = props + 1 end
+    for _ in pairs(liveLights) do lights = lights + 1 end
+    for _ in pairs(liveHides) do hides = hides + 1 end
+    return props, lights, hides
+end
+
 AddEventHandler('palm6_mapeditor:liveGoto', function(id)
     local r = liveObjs[id]
     if r then Game.TeleportPlayer(r.x, r.y, r.z); Game.Notify('jumped to ' .. tostring(r.model), 'inform') end
