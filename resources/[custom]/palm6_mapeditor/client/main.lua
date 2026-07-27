@@ -170,6 +170,23 @@ function MapEd.gotoById(id)
     Game.Notify('jumped to ' .. tostring(r.model), 'inform')
     return true
 end
+-- Batch-delete placed props by id as ONE undo group (outliner multi-select).
+function MapEd.deleteByIds(ids)
+    local want = {}
+    for _, id in ipairs(ids) do want[id] = true end
+    local removed = {}
+    for i = #placed, 1, -1 do
+        if want[placed[i].id] then
+            removed[#removed + 1] = placed[i]
+            Game.DeleteObject(placed[i].obj)
+            table.remove(placed, i)
+        end
+    end
+    if #removed > 0 then undoStack[#undoStack + 1] = { type = 'deleteBatch', recs = removed } end
+    selectLast(); highlight()
+    if #removed > 0 then Game.LogActivity(('deleted %d props'):format(#removed)) end
+    return #removed
+end
 -- Push the current scene to the NUI (on browser open + after an outliner delete).
 Scene = { push = function() SendNUIMessage({ action = 'scene', props = MapEd.sceneList() }) end }
 
@@ -213,6 +230,9 @@ local function undo()
         local o = op.rec
         spawnProp(o.model, o.x, o.y, o.z, o.rx, o.ry, o.rz, true)   -- noUndo
         Game.LogActivity('undid delete of ' .. tostring(o.model))
+    elseif op.type == 'deleteBatch' then
+        for _, o in ipairs(op.recs) do spawnProp(o.model, o.x, o.y, o.z, o.rx, o.ry, o.rz, true) end
+        Game.Notify(('restored %d props'):format(#op.recs))
     end
     selectLast(); highlight()
 end

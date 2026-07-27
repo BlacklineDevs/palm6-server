@@ -558,17 +558,34 @@ function selectKits() {
 function onScene(list) {
     scene = Array.isArray(list) ? list : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Scene count
-    if (view.type === 'scene') selectScene();
+    if (view.type === 'scene') selectScene(true);
 }
 
 function gotoScene(id) { hide(); post('sceneGoto', { id: id }); }
 
+var sceneSel = {};   // id -> true (outliner multi-select)
+function sceneSelectedIds() {
+    var out = [];
+    for (var i = 0; i < scene.length; i++) if (sceneSel[scene[i].id]) out.push(scene[i].id);
+    return out;
+}
+
 function makeSceneRow(item) {
     var row = document.createElement('div');
-    row.className = 'scene-row';
+    row.className = 'scene-row' + (sceneSel[item.id] ? ' picked' : '');
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     row.title = 'Jump to ' + item.model;
+
+    var check = document.createElement('input');
+    check.type = 'checkbox'; check.className = 'scene-check';
+    check.checked = !!sceneSel[item.id];
+    check.setAttribute('aria-label', 'Select ' + item.model);
+    check.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    check.addEventListener('change', function () {
+        if (check.checked) sceneSel[item.id] = true; else delete sceneSel[item.id];
+        selectScene(true);
+    });
 
     var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = ICON_CUBE;
     var main = document.createElement('div'); main.className = 'scene-main';
@@ -581,7 +598,7 @@ function makeSceneRow(item) {
     del.innerHTML = ICON_TRASH;
     del.addEventListener('click', function (ev) { ev.stopPropagation(); post('sceneDelete', { id: item.id }); });
 
-    row.appendChild(ic); row.appendChild(main); row.appendChild(del);
+    row.appendChild(check); row.appendChild(ic); row.appendChild(main); row.appendChild(del);
     row.addEventListener('click', function () { gotoScene(item.id); });
     row.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); gotoScene(item.id); }
@@ -590,23 +607,64 @@ function makeSceneRow(item) {
     return row;
 }
 
-function selectScene() {
+function sceneToolbar() {
+    var selIds = sceneSelectedIds();
+    var bar = document.createElement('div'); bar.className = 'scene-toolbar';
+
+    var left = document.createElement('label'); left.className = 'scene-selall';
+    var all = document.createElement('input'); all.type = 'checkbox';
+    all.checked = selIds.length > 0 && selIds.length === scene.length;
+    all.indeterminate = selIds.length > 0 && selIds.length < scene.length;
+    all.setAttribute('aria-label', 'Select all');
+    all.addEventListener('change', function () {
+        if (all.checked) { scene.forEach(function (o) { sceneSel[o.id] = true; }); } else { sceneSel = {}; }
+        selectScene(true);
+    });
+    var lab = document.createElement('span');
+    lab.textContent = selIds.length > 0 ? (selIds.length + ' selected')
+        : (scene.length + (scene.length === 1 ? ' object' : ' objects'));
+    left.appendChild(all); left.appendChild(lab);
+    bar.appendChild(left);
+
+    if (selIds.length > 0) {
+        var actions = document.createElement('div'); actions.className = 'scene-actions';
+        var clr = document.createElement('button'); clr.className = 'scene-batch-clear'; clr.type = 'button';
+        clr.textContent = 'Clear';
+        clr.addEventListener('click', function () { sceneSel = {}; selectScene(true); });
+        var del = document.createElement('button'); del.className = 'scene-batch-del'; del.type = 'button';
+        del.textContent = 'Delete ' + selIds.length;
+        del.addEventListener('click', function () { post('sceneDeleteMany', { ids: selIds }); sceneSel = {}; selectScene(true); });
+        actions.appendChild(clr); actions.appendChild(del);
+        bar.appendChild(actions);
+    }
+    return bar;
+}
+
+function selectScene(keepScroll) {
     view = { type: 'scene' }; lastBrowse = view;
     renderCats();
-    el.grid.scrollTop = 0;
+    var prev = keepScroll ? el.grid.scrollTop : 0;
     if (thumbObserver) thumbObserver.disconnect();
     el.grid.textContent = '';
     imgOk = 0; imgFail = 0; updateThumbStat();
+    // prune selection of ids no longer in the scene
+    var valid = {}; scene.forEach(function (o) { valid[o.id] = true; });
+    Object.keys(sceneSel).forEach(function (k) { if (!valid[k]) delete sceneSel[k]; });
+
     if (!scene.length) {
         el.grid.appendChild(emptyState('Nothing placed yet',
             'Spawn props to build your scene — they list here to jump to or remove.'));
         el.ctx.textContent = 'Scene';
         return;
     }
+    var container = document.createElement('div'); container.className = 'scene-view';
+    container.appendChild(sceneToolbar());
     var list = document.createElement('div'); list.className = 'scene-list';
     for (var i = 0; i < scene.length; i++) list.appendChild(makeSceneRow(scene[i]));
-    el.grid.appendChild(list);
+    container.appendChild(list);
+    el.grid.appendChild(container);
     el.ctx.textContent = scene.length + (scene.length === 1 ? ' object in scene' : ' objects in scene');
+    el.grid.scrollTop = prev;
 }
 
 // Restore whatever view was active before the user started typing a search.

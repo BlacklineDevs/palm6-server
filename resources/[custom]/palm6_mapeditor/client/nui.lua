@@ -115,6 +115,17 @@ RegisterNUICallback('sceneDelete', function(data, cb)
     cb('ok')
 end)
 
+RegisterNUICallback('sceneDeleteMany', function(data, cb)
+    local ids = type(data) == 'table' and data.ids or nil
+    if type(ids) == 'table' and MapEd and MapEd.deleteByIds then
+        local clean = {}
+        for _, id in ipairs(ids) do local n = tonumber(id); if n then clean[#clean + 1] = n end end
+        MapEd.deleteByIds(clean)
+        if Scene and Scene.push then Scene.push() end
+    end
+    cb('ok')
+end)
+
 RegisterNUICallback('sceneGoto', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id and MapEd and MapEd.gotoById then MapEd.gotoById(id) end

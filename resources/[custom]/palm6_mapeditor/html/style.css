@@ -494,7 +494,26 @@ kbd { font: inherit; }
 
 /* ---- scene outliner (list, not cards) ---- */
 .cat.special.is-scene .ic svg { fill: none; }
-.scene-list { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 0.4rem; }
+.scene-view { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 0.5rem; }
+.scene-toolbar {
+    position: sticky; top: -1.15rem; z-index: 1;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: 0.55rem 0.15rem; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.scene-selall { display: flex; align-items: center; gap: 0.55rem; font-size: 0.76rem; color: var(--muted); cursor: pointer; }
+.scene-actions { display: flex; align-items: center; gap: 0.5rem; }
+.scene-batch-clear {
+    background: none; border: 1px solid var(--line-2); color: var(--muted); border-radius: 7px;
+    padding: 0.32rem 0.7rem; font-size: 0.72rem; cursor: pointer; font-family: var(--ui); transition: color 0.12s;
+}
+.scene-batch-clear:hover { color: var(--text); }
+.scene-batch-del {
+    background: rgba(255,107,107,0.14); border: 1px solid var(--danger); color: #ffc6cd; border-radius: 7px;
+    padding: 0.32rem 0.8rem; font-size: 0.72rem; font-weight: 600; cursor: pointer; font-family: var(--ui); transition: all 0.12s;
+}
+.scene-batch-del:hover { background: rgba(255,107,107,0.24); color: #fff; }
+.scene-check { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--amber); cursor: pointer; }
+.scene-list { display: flex; flex-direction: column; gap: 0.4rem; }
 .scene-row {
     display: flex; align-items: center; gap: 0.7rem; padding: 0.55rem 0.75rem;
     background: var(--surface); border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
@@ -502,6 +521,7 @@ kbd { font: inherit; }
 }
 .scene-row:hover { border-color: var(--amber-line); background: var(--surface-2); }
 .scene-row:focus-visible { outline: none; border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); }
+.scene-row.picked { border-color: var(--amber-line); background: var(--amber-soft); }
 .scene-ic {
     flex: 0 0 auto; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
     border-radius: 7px; background: var(--panel-deep); border: 1px solid var(--line);
