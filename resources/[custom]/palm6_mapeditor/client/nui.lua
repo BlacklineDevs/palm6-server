@@ -29,6 +29,7 @@ local function openBrowser()
     SendNUIMessage({ action = 'open', groups = Config.PropGroups or {} })
     if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
     if Scene and Scene.push then Scene.push() end                 -- populate the Scene outliner
+    if Live and Live.push then Live.push() end                    -- populate the Live-map outliner
 end
 
 local function closeBrowser()
@@ -142,6 +143,27 @@ end)
 RegisterNUICallback('sceneGoto', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id and MapEd and MapEd.gotoById then MapEd.gotoById(id) end
+    closeBrowser()
+    cb('ok')
+end)
+
+-- Live-map outliner actions (client/live.lua does the work; reuses audited
+-- by-id server events). Delete stays open + refreshes via the live:remove
+-- broadcast; grab and goto close so the player sees the result in-world.
+RegisterNUICallback('liveDelete', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id then TriggerEvent('palm6_mapeditor:liveDelete', id) end
+    cb('ok')
+end)
+RegisterNUICallback('liveGrab', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id then TriggerEvent('palm6_mapeditor:liveGrab', id) end
+    closeBrowser()
+    cb('ok')
+end)
+RegisterNUICallback('liveGoto', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id then TriggerEvent('palm6_mapeditor:liveGoto', id) end
     closeBrowser()
     cb('ok')
 end)

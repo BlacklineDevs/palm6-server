@@ -101,11 +101,12 @@ RegisterNetEvent('palm6_mapeditor:live:addBatch', function(list, full)
     end)
 end)
 
-RegisterNetEvent('palm6_mapeditor:live:remove', function(id) despawn(tonumber(id)) end)
+RegisterNetEvent('palm6_mapeditor:live:remove', function(id) despawn(tonumber(id)); if Live then Live.push() end end)
 
 RegisterNetEvent('palm6_mapeditor:live:removeBatch', function(ids)
     if type(ids) ~= 'table' then return end
     for _, id in ipairs(ids) do despawn(tonumber(id)) end
+    if Live then Live.push() end
 end)
 
 -- ---- world-erase streaming -------------------------------------------------
@@ -274,6 +275,30 @@ RegisterCommand('maplivegrab', function()
     end
     Game.Notify('that is not a live prop', 'error')
 end, false)
+
+-- ---- Live-map outliner (NUI) ----------------------------------------------
+-- liveObjs already holds the FULL committed set (the sync streams every live
+-- prop), so the outliner is built client-side — no server enumeration needed.
+-- Actions reuse the audited by-id server events (removeOne / grabProp).
+Live = {}
+function Live.push()
+    local list = {}
+    for id, r in pairs(liveObjs) do
+        list[#list + 1] = { id = id, model = r.model, x = r.x, y = r.y, z = r.z }
+    end
+    SendNUIMessage({ action = 'live', props = list })
+end
+
+AddEventHandler('palm6_mapeditor:liveGoto', function(id)
+    local r = liveObjs[id]
+    if r then Game.TeleportPlayer(r.x, r.y, r.z); Game.Notify('jumped to ' .. tostring(r.model), 'inform') end
+end)
+AddEventHandler('palm6_mapeditor:liveGrab', function(id)
+    if liveObjs[id] then TriggerServerEvent('palm6_mapeditor:live:grabProp', id) end
+end)
+AddEventHandler('palm6_mapeditor:liveDelete', function(id)
+    if liveObjs[id] then TriggerServerEvent('palm6_mapeditor:live:removeOne', id) end
+end)
 
 -- The server confirmed the grab (already despawned the live copy for everyone via
 -- live:remove); spawn it into the personal session, selected, ready to edit.

@@ -44,6 +44,7 @@ var favs = {};          // model -> true
 var recent = [];        // [model, ...] most recent first
 var kits = [];          // [{name, props, lights}, ...] blueprint kits (prefabs) from Lua
 var scene = [];         // [{id, model, x, y, z}, ...] session placed props (outliner)
+var live = [];          // [{id, model, x, y, z}, ...] committed live-map props
 
 // ---- persistence (localStorage; degrades to memory-only if unavailable) -----
 function lsGet(key) {
@@ -414,6 +415,8 @@ var ICON_KIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H
 var ICON_SCENE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5Z" fill="none" stroke-width="1.7"/><path d="M3 12l9 5 9-5M3 16l9 5 9-5" fill="none" stroke-width="1.7"/></svg>';
 var ICON_CUBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3Z" fill="none"/><path d="M4.5 7.7l7.5 4.2 7.5-4.2M12 12v8.5" fill="none"/></svg>';
 var ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" fill="none"/><path d="M10 11v5M14 11v5" fill="none"/></svg>';
+var ICON_WORLD = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke-width="1.7"/><path d="M3.8 12h16.4M12 3.5c2.1 2.3 3.2 5.1 3.2 8.5S14.1 18.2 12 20.5C9.9 18.2 8.8 15.4 8.8 12S9.9 5.8 12 3.5Z" fill="none" stroke-width="1.7"/></svg>';
+var ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9" fill="none"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none"/></svg>';
 
 function makeSpecialRow(id, label, icon, count, active) {
     var row = document.createElement('div');
@@ -432,6 +435,7 @@ function makeSpecialRow(id, label, icon, count, active) {
         if (id === 'fav') selectFav();
         else if (id === 'recent') selectRecent();
         else if (id === 'kits') selectKits();
+        else if (id === 'live') selectLive();
         else selectScene();
     });
     return row;
@@ -440,8 +444,9 @@ function makeSpecialRow(id, label, icon, count, active) {
 function renderCats() {
     el.cats.textContent = '';
 
-    // Pinned pseudo-categories: Scene + Blueprint kits + Favorites + Recent, at top.
+    // Pinned pseudo-categories: Scene + Live map + Blueprint kits + Favorites + Recent.
     el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length, view.type === 'scene'));
+    el.cats.appendChild(makeSpecialRow('live', 'Live map', ICON_WORLD, live.length, view.type === 'live'));
     el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
     el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
     el.cats.appendChild(makeSpecialRow('recent', 'Recent', ICON_RECENT, recentModels().length, view.type === 'recent'));
@@ -707,8 +712,72 @@ function selectScene(keepScroll) {
     el.grid.scrollTop = prev;
 }
 
+// ---- live-map outliner ---------------------------------------------------
+function onLive(list) {
+    live = Array.isArray(list) ? list : [];
+    if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Live count
+    if (view.type === 'live') selectLive();
+}
+
+function makeLiveRow(item) {
+    var row = document.createElement('div');
+    row.className = 'scene-row';
+    row.tabIndex = 0; row.setAttribute('role', 'button'); row.title = 'Jump to ' + item.model;
+
+    var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = ICON_CUBE;
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = prettify(item.model);
+    var co = document.createElement('div'); co.className = 'scene-coords';
+    co.textContent = item.model + '  ·  ' + item.x.toFixed(1) + ', ' + item.y.toFixed(1) + ', ' + item.z.toFixed(1);
+    main.appendChild(nm); main.appendChild(co);
+
+    var grab = document.createElement('button');
+    grab.className = 'scene-grab'; grab.title = 'Grab to edit'; grab.setAttribute('aria-label', 'Grab to edit');
+    grab.innerHTML = ICON_EDIT;
+    grab.addEventListener('click', function (ev) { ev.stopPropagation(); hide(); post('liveGrab', { id: item.id }); });
+    var del = document.createElement('button');
+    del.className = 'scene-del'; del.title = 'Delete everywhere'; del.setAttribute('aria-label', 'Delete everywhere');
+    del.innerHTML = ICON_TRASH;
+    del.addEventListener('click', function (ev) { ev.stopPropagation(); post('liveDelete', { id: item.id }); });
+
+    row.appendChild(ic); row.appendChild(main); row.appendChild(grab); row.appendChild(del);
+    row.addEventListener('click', function () { hide(); post('liveGoto', { id: item.id }); });
+    row.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); hide(); post('liveGoto', { id: item.id }); }
+    });
+    return row;
+}
+
+function selectLive() {
+    view = { type: 'live' }; lastBrowse = view;
+    renderCats();
+    el.grid.scrollTop = 0;
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+    if (!live.length) {
+        el.grid.appendChild(emptyState('Live map is empty',
+            'Commit props with /mapcommit to publish them to the shared map — they list here to jump to, grab, or delete.'));
+        el.ctx.textContent = 'Live map';
+        return;
+    }
+    var container = document.createElement('div'); container.className = 'scene-view';
+    var list = document.createElement('div'); list.className = 'scene-list';
+    var cap = Math.min(live.length, 500);
+    for (var i = 0; i < cap; i++) list.appendChild(makeLiveRow(live[i]));
+    container.appendChild(list);
+    if (live.length > cap) {
+        var more = document.createElement('div'); more.className = 'empty';
+        more.textContent = '+ ' + (live.length - cap) + ' more live props (showing first ' + cap + ')';
+        container.appendChild(more);
+    }
+    el.grid.appendChild(container);
+    el.ctx.textContent = live.length + (live.length === 1 ? ' live prop' : ' live props');
+}
+
 // Restore whatever view was active before the user started typing a search.
 function restoreBrowse() {
+    if (lastBrowse.type === 'live') { selectLive(); return; }
     if (lastBrowse.type === 'scene') { selectScene(); return; }
     if (lastBrowse.type === 'kits') { selectKits(); return; }
     if (lastBrowse.type === 'fav') { selectFav(); return; }
@@ -1181,6 +1250,7 @@ window.addEventListener('message', function (e) {
     else if (d.action === 'recent') { if (typeof d.model === 'string') pushRecent(d.model); }
     else if (d.action === 'kits') onKits(d.kits);
     else if (d.action === 'scene') onScene(d.props);
+    else if (d.action === 'live') onLive(d.props);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

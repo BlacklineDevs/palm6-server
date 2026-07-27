@@ -560,6 +560,13 @@ kbd { font: inherit; }
 .scene-del svg { width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .scene-del:hover { border-color: var(--danger); background: rgba(255, 107, 107, 0.12); }
 .scene-del:hover svg { stroke: var(--danger); }
+.scene-grab {
+    flex: 0 0 auto; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line-2); background: var(--panel); border-radius: 7px; cursor: pointer; transition: all 0.12s;
+}
+.scene-grab svg { width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.scene-grab:hover { border-color: var(--amber-line); background: var(--amber-soft); }
+.scene-grab:hover svg { stroke: var(--amber); }
 
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar, .detail-info::-webkit-scrollbar { width: 11px; }
