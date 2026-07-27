@@ -188,7 +188,13 @@ function MapEd.deleteByIds(ids)
     return #removed
 end
 -- Push the current scene to the NUI (on browser open + after an outliner delete).
-Scene = { push = function() SendNUIMessage({ action = 'scene', props = MapEd.sceneList() }) end }
+Scene = { push = function()
+    SendNUIMessage({
+        action = 'scene',
+        props = MapEd.sceneList(),
+        lights = (MapEd.lightList and MapEd.lightList()) or {},
+    })
+end }
 
 local function applyTransform(r)
     Game.SetObjectTransform(r.obj, r.x, r.y, r.z, r.rx, r.ry, r.rz)

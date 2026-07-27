@@ -140,6 +140,22 @@ RegisterNUICallback('sceneDeleteMany', function(data, cb)
     cb('ok')
 end)
 
+RegisterNUICallback('sceneLightDelete', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and MapEd and MapEd.deleteLightById then
+        MapEd.deleteLightById(id)
+        if Scene and Scene.push then Scene.push() end
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('sceneLightGoto', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and MapEd and MapEd.gotoLightById then MapEd.gotoLightById(id) end
+    closeBrowser()
+    cb('ok')
+end)
+
 RegisterNUICallback('sceneGoto', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id and MapEd and MapEd.gotoById then MapEd.gotoById(id) end

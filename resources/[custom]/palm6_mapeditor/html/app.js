@@ -44,6 +44,7 @@ var favs = {};          // model -> true
 var recent = [];        // [model, ...] most recent first
 var kits = [];          // [{name, props, lights}, ...] blueprint kits (prefabs) from Lua
 var scene = [];         // [{id, model, x, y, z}, ...] session placed props (outliner)
+var sceneLights = [];   // [{id, kind, x, y, z, r, g, b}, ...] session lights (outliner)
 var live = [];          // [{id, model, x, y, z}, ...] committed live-map props
 
 // ---- persistence (localStorage; degrades to memory-only if unavailable) -----
@@ -445,7 +446,7 @@ function renderCats() {
     el.cats.textContent = '';
 
     // Pinned pseudo-categories: Scene + Live map + Blueprint kits + Favorites + Recent.
-    el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length, view.type === 'scene'));
+    el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length + sceneLights.length, view.type === 'scene'));
     el.cats.appendChild(makeSpecialRow('live', 'Live map', ICON_WORLD, live.length, view.type === 'live'));
     el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
     el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
@@ -560,10 +561,34 @@ function selectKits() {
 }
 
 // ---- scene outliner ------------------------------------------------------
-function onScene(list) {
+function onScene(list, lights) {
     scene = Array.isArray(list) ? list : [];
+    sceneLights = Array.isArray(lights) ? lights : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Scene count
     if (view.type === 'scene') selectScene(true);
+}
+
+function makeLightRow(item) {
+    var row = document.createElement('div');
+    row.className = 'scene-row'; row.tabIndex = 0; row.setAttribute('role', 'button'); row.title = 'Jump to light';
+    var sw = document.createElement('span'); sw.className = 'scene-ic light-swatch';
+    var dot = document.createElement('span'); dot.className = 'light-dot';
+    dot.style.setProperty('--lc', 'rgb(' + (item.r || 255) + ',' + (item.g || 200) + ',' + (item.b || 140) + ')');
+    sw.appendChild(dot);
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = (item.kind === 'spot' ? 'Spot light' : 'Point light');
+    var co = document.createElement('div'); co.className = 'scene-coords';
+    co.textContent = item.x.toFixed(1) + ', ' + item.y.toFixed(1) + ', ' + item.z.toFixed(1);
+    main.appendChild(nm); main.appendChild(co);
+    var del = document.createElement('button'); del.className = 'scene-del'; del.title = 'Delete light'; del.setAttribute('aria-label', 'Delete light');
+    del.innerHTML = ICON_TRASH;
+    del.addEventListener('click', function (ev) { ev.stopPropagation(); post('sceneLightDelete', { id: item.id }); });
+    row.appendChild(sw); row.appendChild(main); row.appendChild(del);
+    row.addEventListener('click', function () { hide(); post('sceneLightGoto', { id: item.id }); });
+    row.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); hide(); post('sceneLightGoto', { id: item.id }); }
+    });
+    return row;
 }
 
 function gotoScene(id) { hide(); post('sceneGoto', { id: id }); }
@@ -694,21 +719,33 @@ function selectScene(keepScroll) {
     var valid = {}; scene.forEach(function (o) { valid[o.id] = true; });
     Object.keys(sceneSel).forEach(function (k) { if (!valid[k]) delete sceneSel[k]; });
 
-    if (!scene.length) {
+    if (!scene.length && !sceneLights.length) {
         el.grid.appendChild(emptyState('Nothing placed yet',
-            'Spawn props to build your scene — they list here to jump to or remove.'));
+            'Spawn props or place lights to build your scene — they list here to jump to or remove.'));
         el.ctx.textContent = 'Scene';
         return;
     }
     if (!sceneSelectedIds().length) sceneSaving = false;   // no selection -> no naming bar
     var container = document.createElement('div'); container.className = 'scene-view';
-    container.appendChild(sceneToolbar());
-    if (sceneSaving) container.appendChild(sceneSaveBar());
-    var list = document.createElement('div'); list.className = 'scene-list';
-    for (var i = 0; i < scene.length; i++) list.appendChild(makeSceneRow(scene[i]));
-    container.appendChild(list);
+
+    if (scene.length) {
+        container.appendChild(sceneToolbar());
+        if (sceneSaving) container.appendChild(sceneSaveBar());
+        var list = document.createElement('div'); list.className = 'scene-list';
+        for (var i = 0; i < scene.length; i++) list.appendChild(makeSceneRow(scene[i]));
+        container.appendChild(list);
+    }
+    if (sceneLights.length) {
+        var head = document.createElement('div'); head.className = 'scene-section';
+        head.textContent = sceneLights.length + (sceneLights.length === 1 ? ' light' : ' lights');
+        container.appendChild(head);
+        var llist = document.createElement('div'); llist.className = 'scene-list';
+        for (var j = 0; j < sceneLights.length; j++) llist.appendChild(makeLightRow(sceneLights[j]));
+        container.appendChild(llist);
+    }
     el.grid.appendChild(container);
-    el.ctx.textContent = scene.length + (scene.length === 1 ? ' object in scene' : ' objects in scene');
+    var total = scene.length + sceneLights.length;
+    el.ctx.textContent = total + (total === 1 ? ' object in scene' : ' objects in scene');
     el.grid.scrollTop = prev;
 }
 
@@ -1249,7 +1286,7 @@ window.addEventListener('message', function (e) {
     // dedupes, so the browser-click path double-firing this is harmless.
     else if (d.action === 'recent') { if (typeof d.model === 'string') pushRecent(d.model); }
     else if (d.action === 'kits') onKits(d.kits);
-    else if (d.action === 'scene') onScene(d.props);
+    else if (d.action === 'scene') onScene(d.props, d.lights);
     else if (d.action === 'live') onLive(d.props);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);

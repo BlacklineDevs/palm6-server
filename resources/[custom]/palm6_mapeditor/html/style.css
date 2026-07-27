@@ -567,6 +567,14 @@ kbd { font: inherit; }
 .scene-grab svg { width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .scene-grab:hover { border-color: var(--amber-line); background: var(--amber-soft); }
 .scene-grab:hover svg { stroke: var(--amber); }
+.scene-section {
+    font-family: var(--display); font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); padding: 0.75rem 0.2rem 0.15rem;
+}
+.light-swatch .light-dot {
+    width: 13px; height: 13px; border-radius: 50%;
+    background: var(--lc, #ffc88c); box-shadow: 0 0 9px var(--lc, #ffc88c);
+}
 
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar, .detail-info::-webkit-scrollbar { width: 11px; }
