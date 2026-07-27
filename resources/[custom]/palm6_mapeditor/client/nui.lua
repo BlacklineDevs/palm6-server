@@ -270,6 +270,13 @@ RegisterNUICallback('entGoto', function(data, cb)
     closeBrowser()
     cb('ok')
 end)
+-- Grab an entity to move it: closes the browser so the carry preview is visible.
+RegisterNUICallback('entGrab', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and Entities and Entities.grabById then Entities.grabById(id) end
+    closeBrowser()
+    cb('ok')
+end)
 
 RegisterNUICallback('close', function(_, cb)
     closeBrowser()

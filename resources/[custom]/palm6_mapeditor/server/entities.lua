@@ -25,6 +25,8 @@
 
 local EREADY = false
 local ents = {}          -- [id] = { id, map, kind, model, x, y, z, heading, extra }
+local grabbedPending = {} -- [src] = { {map,kind,model,x,y,z,heading,extra}, ... } carried entities
+                          -- awaiting re-place; restored if the grabber disconnects mid-carry.
 
 local function isAllowed(src) return src == 0 or IsPlayerAceAllowed(src, Config.Ace) end
 
@@ -170,6 +172,60 @@ RegisterNetEvent('palm6_mapeditor:ent:remove', function(id)
     if dberr then enotify(src, 'DB delete failed', 'error'); return end
     TriggerClientEvent('palm6_mapeditor:ent:remove', -1, id)
     enotify(src, 'removed scene entity', 'success')
+end)
+
+-- ---- grab (move) one entity ------------------------------------------------
+-- Remove the entity from the world (delete row + despawn for everyone) and hand
+-- its data back to the grabber, who carries it to a new spot and re-places it
+-- via ent:place. Mirrors live.lua's prop grab: a per-player backup restores the
+-- entity if the grabber disconnects mid-carry, so a move can never lose it.
+RegisterNetEvent('palm6_mapeditor:ent:grab', function(id)
+    local src = source
+    if not isAllowed(src) then enotify(src, 'not authorized (needs admin)', 'error'); return end
+    id = tonumber(id)
+    if not id or not ents[id] then enotify(src, 'no scene entity with that id', 'error'); return end
+    local grabbed, dberr = nil, false
+    local acquired = withWriteLock(function()
+        local e = ents[id]
+        if not e then return end
+        if not pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_entities WHERE id = ?', { id }) end) then dberr = true; return end
+        grabbed = { map = e.map, kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z, heading = e.heading, extra = e.extra }
+        ents[id] = nil
+    end)
+    if not acquired then enotify(src, 'editor busy — try again', 'error'); return end
+    if dberr then enotify(src, 'DB error', 'error'); return end
+    if not grabbed then enotify(src, 'entity no longer exists', 'error'); return end
+    grabbedPending[src] = grabbedPending[src] or {}
+    grabbedPending[src][#grabbedPending[src] + 1] = grabbed
+    TriggerClientEvent('palm6_mapeditor:ent:remove', -1, id)          -- despawn everywhere
+    TriggerClientEvent('palm6_mapeditor:ent:grabbed', src, grabbed)   -- into the grabber's carry
+    enotify(src, 'grabbed — move it, [Enter] to drop / [Backspace] to cancel', 'success')
+end)
+
+-- The client finished the carry (dropped or cancelled — either way it re-placed
+-- the entity via ent:place), so drop the disconnect-restore backup.
+RegisterNetEvent('palm6_mapeditor:ent:grabResolved', function()
+    grabbedPending[source] = nil
+end)
+
+-- Restore any entities a player was carrying if they disconnect before dropping,
+-- so a grab is non-destructive. Cleared by ent:grabResolved on a normal finish.
+AddEventHandler('playerDropped', function()
+    local src = source
+    local pend = grabbedPending[src]; grabbedPending[src] = nil
+    if not pend or #pend == 0 then return end
+    withWriteLock(function()
+        for _, e in ipairs(pend) do
+            local id
+            if pcall(function()
+                id = MySQL.insert.await('INSERT INTO palm6_mapeditor_entities (map, kind, model, x, y, z, heading, extra, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    { e.map, e.kind, e.model, e.x, e.y, e.z, e.heading, e.extra, 'grab-restore' })
+            end) and id then
+                ents[id] = { id = id, map = e.map, kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z, heading = e.heading, extra = e.extra }
+                TriggerClientEvent('palm6_mapeditor:ent:add', -1, wire(ents[id]))
+            end
+        end
+    end)
 end)
 
 -- ---- wipe a map's entities -------------------------------------------------

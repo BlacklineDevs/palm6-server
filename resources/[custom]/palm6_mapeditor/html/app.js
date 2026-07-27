@@ -1113,11 +1113,15 @@ function makeEntRow(item) {
     co.textContent = (isVeh ? 'Vehicle' : 'Ped') + '  ·  ' + item.model + '  ·  '
         + item.x.toFixed(1) + ', ' + item.y.toFixed(1) + ', ' + item.z.toFixed(1);
     main.appendChild(nm); main.appendChild(co);
+    var grab = document.createElement('button');
+    grab.className = 'scene-grab'; grab.title = 'Move (grab to reposition)'; grab.setAttribute('aria-label', 'Move entity');
+    grab.innerHTML = ICON_EDIT;
+    grab.addEventListener('click', function (ev) { ev.stopPropagation(); hide(); post('entGrab', { id: item.id }); });
     var del = document.createElement('button');
     del.className = 'scene-del'; del.title = 'Delete everywhere'; del.setAttribute('aria-label', 'Delete entity');
     del.innerHTML = ICON_TRASH;
     del.addEventListener('click', function (ev) { ev.stopPropagation(); post('entDelete', { id: item.id }); });
-    row.appendChild(check); row.appendChild(ic); row.appendChild(main); row.appendChild(del);
+    row.appendChild(check); row.appendChild(ic); row.appendChild(main); row.appendChild(grab); row.appendChild(del);
     row.addEventListener('click', function () { hide(); post('entGoto', { id: item.id }); });
     row.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); hide(); post('entGoto', { id: item.id }); }

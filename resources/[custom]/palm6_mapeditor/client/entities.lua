@@ -198,6 +198,61 @@ function Entities.gotoById(id)
     Game.TeleportPlayer(e.x, e.y, e.z)
     Game.Notify('jumped to ' .. tostring(e.model), 'inform')
 end
+function Entities.grabById(id)
+    id = tonumber(id)
+    if id and liveEnts[id] then TriggerServerEvent('palm6_mapeditor:ent:grab', id) end
+end
+
+-- Carry-to-move a grabbed entity. The server already removed the original and
+-- sent us its data; we spawn a LOCAL (non-networked) preview that tracks the
+-- camera aim + player heading each frame, then re-place it via ent:place on
+-- Enter (drop at new spot) or Backspace (restore at the original spot). Reuses
+-- the mass-fill preview's control scheme; stands the editor loop down while up.
+local carrying = false
+RegisterNetEvent('palm6_mapeditor:ent:grabbed', function(rec)
+    if carrying then return end
+    if type(rec) ~= 'table' or (rec.kind ~= 'ped' and rec.kind ~= 'veh') or type(rec.model) ~= 'string' then return end
+    carrying = true
+    if MapEd and MapEd.setPreview then MapEd.setPreview(true) end   -- editor loop stands down
+    CreateThread(function()
+        local x, y, z = Game.CameraAimPoint(40.0)
+        if not x then x, y, z = Game.PlayerPos() end
+        local ent = (rec.kind == 'veh') and Game.SpawnVehicle(rec.model, x, y, z, rec.heading or 0.0)
+                    or Game.SpawnPed(rec.model, x, y, z, rec.heading or 0.0, rec.extra)
+        local resolved = false
+        while carrying do
+            if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then break end   -- editor off -> restore below
+            local ax, ay, az = Game.CameraAimPoint(40.0)
+            if ax then x, y, z = ax, ay, az end
+            local h = Game.PlayerHeading()
+            if ent then Game.SetObjectTransform(ent, x, y, z, 0.0, 0.0, h) end
+            Game.DrawRect2D(0.5, 0.90, 0.46, 0.065, 0, 0, 0, 170)
+            Game.DrawText2D(('~w~Moving: ~b~%s'):format(rec.model), 0.5, 0.877, 0.42, 235, 235, 235, true)
+            Game.DrawText2D('~g~[Enter]~w~ drop     ~r~[Backspace]~w~ cancel', 0.5, 0.905, 0.36, 200, 210, 225, true)
+            DisableControlAction(0, 201, true)   -- accept (Enter)
+            DisableControlAction(0, 202, true)   -- Esc (don't let it exit the editor)
+            DisableControlAction(0, 177, true)   -- Backspace
+            if IsDisabledControlJustPressed(0, 201) then
+                TriggerServerEvent('palm6_mapeditor:ent:place', rec.kind, rec.model, x, y, z, h, rec.extra or '', rec.map)
+                Game.Notify('moved ' .. tostring(rec.model), 'success')
+                resolved = true; break
+            elseif IsDisabledControlJustPressed(0, 202) or IsDisabledControlJustPressed(0, 177) then
+                TriggerServerEvent('palm6_mapeditor:ent:place', rec.kind, rec.model, rec.x, rec.y, rec.z, rec.heading, rec.extra or '', rec.map)
+                Game.Notify('move cancelled', 'inform')
+                resolved = true; break
+            end
+            Wait(0)
+        end
+        if ent then Game.DeleteAnyEntity(ent) end
+        -- Editor toggled off mid-carry (loop broke without a key): restore original.
+        if not resolved then
+            TriggerServerEvent('palm6_mapeditor:ent:place', rec.kind, rec.model, rec.x, rec.y, rec.z, rec.heading, rec.extra or '', rec.map)
+        end
+        TriggerServerEvent('palm6_mapeditor:ent:grabResolved')
+        if MapEd and MapEd.setPreview then MapEd.setPreview(false) end
+        carrying = false
+    end)
+end)
 
 -- Scene entities are our own client entities; delete them on stop so a resource
 -- restart never leaves orphaned peds/vehicles in the world.
