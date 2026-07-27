@@ -191,6 +191,23 @@ RegisterNetEvent('palm6_mapeditor:ent:wipeMap', function(map)
     enotify(src, ('wiped %d scene entit(ies) from "%s"'):format(#ids, map), 'success')
 end)
 
+-- ---- rename a map's entities (paired with live.lua's map rename) -----------
+-- Silent (no notify): live.lua's renameMap owns the user-facing message; this is
+-- the entity half of the same client action, keeping the entity table's map tags
+-- consistent. Client liveEnts don't carry a map field, so no broadcast is needed.
+RegisterNetEvent('palm6_mapeditor:ent:renameMap', function(oldName, newName)
+    local src = source
+    if not isAllowed(src) then return end
+    if not EREADY then return end
+    oldName = cleanMap(oldName); newName = cleanMap(newName)
+    if oldName == newName then return end
+    withWriteLock(function()
+        if pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_entities SET map = ? WHERE map = ?', { newName, oldName }) end) then
+            for _, e in pairs(ents) do if e.map == oldName then e.map = newName end end
+        end
+    end)
+end)
+
 -- ---- list ------------------------------------------------------------------
 RegisterNetEvent('palm6_mapeditor:ent:list', function()
     local src = source

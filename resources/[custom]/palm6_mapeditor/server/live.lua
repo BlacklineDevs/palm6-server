@@ -504,6 +504,44 @@ RegisterNetEvent('palm6_mapeditor:live:wipeMap', function(map)
 end)
 
 -- ---------------------------------------------------------------------------
+-- Rename a whole map: move every prop + light row from one map name to another
+-- (UPDATE, not a re-insert, so ids and created_at are preserved). Rejects if the
+-- target name already has props/lights (renaming is not merging — a merge could
+-- silently blow past the per-map cap). Updates the in-memory mirror in place and
+-- tells every client to relabel its liveObjs, so nothing respawns. Entities live
+-- in their own table/resource half and are renamed by server/entities.lua on the
+-- same client action.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:renameMap', function(oldName, newName)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    oldName = cleanMap(oldName); newName = cleanMap(newName)
+    if oldName == newName then notify(src, 'new name is the same as the old one', 'error'); return end
+    local movedP, movedL, dberr, taken = 0, 0, false, false
+    local acquired = withWriteLock(function()
+        -- Existence check INSIDE the lock so a concurrent commit can't slip a row
+        -- into the target name between the check and the update.
+        for _, r in pairs(live) do if r.map == newName then taken = true; return end end
+        for _, l in pairs(lights) do if l.map == newName then taken = true; return end end
+        local ok1 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_props SET map = ? WHERE map = ?', { newName, oldName }) end)
+        if ok1 then for _, r in pairs(live) do if r.map == oldName then r.map = newName; movedP = movedP + 1 end end end
+        local ok2 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_lights SET map = ? WHERE map = ?', { newName, oldName }) end)
+        if ok2 then for _, l in pairs(lights) do if l.map == oldName then l.map = newName; movedL = movedL + 1 end end end
+        dberr = not (ok1 and ok2)
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if taken then notify(src, ('map "%s" already exists — pick a name not in use'):format(newName), 'error'); return end
+    -- Broadcast the relabel even on 0 props (lights-only maps, or the caller just
+    -- wants the client mirror consistent). Clients update liveObjs[].map in place.
+    TriggerClientEvent('palm6_mapeditor:live:mapRenamed', -1, oldName, newName)
+    if dberr then notify(src, ('partial rename of "%s" — a DB update failed'):format(oldName), 'error'); return end
+    if movedP == 0 and movedL == 0 then notify(src, ('no live props or lights on map "%s"'):format(oldName), 'inform'); return end
+    notify(src, ('renamed map "%s" -> "%s" (%d prop(s), %d light(s))'):format(oldName, newName, movedP, movedL), 'success')
+    print(('[palm6_mapeditor] %s renamed map "%s" -> "%s"'):format(GetPlayerName(src) or src, oldName, newName))
+end)
+
+-- ---------------------------------------------------------------------------
 -- Export a live map: hand the requesting admin the prop ids for that map. The
 -- client filters its own liveObjs (which hold the real spawned entities, so the
 -- ymap quaternion export is accurate) and writes the files. This is what lets a

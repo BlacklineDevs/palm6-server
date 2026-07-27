@@ -222,6 +222,16 @@ RegisterNUICallback('liveExport', function(data, cb)
     if type(map) == 'string' and Live and Live.exportMap then Live.exportMap(map) end
     cb('ok')
 end)
+-- Rename a named map (props + lights + entities). Stays open; the mapRenamed
+-- broadcast re-pushes the outliner with the new name.
+RegisterNUICallback('liveRename', function(data, cb)
+    local oldName = type(data) == 'table' and data.old or nil
+    local newName = type(data) == 'table' and data.new or nil
+    if type(oldName) == 'string' and type(newName) == 'string' and Live and Live.renameMap then
+        Live.renameMap(oldName, newName)
+    end
+    cb('ok')
+end)
 
 -- Entities outliner (peds / vehicles). Delete reuses the audited ent:remove
 -- server event and stays open (the ent:remove broadcast re-pushes the list);

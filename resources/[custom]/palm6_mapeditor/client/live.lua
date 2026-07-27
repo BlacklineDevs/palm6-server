@@ -133,6 +133,14 @@ RegisterNetEvent('palm6_mapeditor:live:hideBatch', function(list, full)
 end)
 RegisterNetEvent('palm6_mapeditor:live:unhide', function(id) unHide(tonumber(id)) end)
 
+-- Server renamed a map: relabel the streamed props in place (no respawn) so the
+-- outliner map-picker reflects the new name, then re-push the outliner.
+RegisterNetEvent('palm6_mapeditor:live:mapRenamed', function(oldName, newName)
+    if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
+    for _, r in pairs(liveObjs) do if r.map == oldName then r.map = newName end end
+    if Live and Live.push then Live.push() end
+end)
+
 -- ---- live lights -----------------------------------------------------------
 -- Lights aren't entities; they're redrawn every frame. Unlike lights.lua (the
 -- admin's session lights, drawn only while editing), these are streamed and
@@ -294,6 +302,14 @@ end
 function Live.exportMap(name)
     if type(name) ~= 'string' or name == '' then return end
     TriggerServerEvent('palm6_mapeditor:live:exportRequest', name)
+end
+
+-- Rename a live map (props + lights via live.lua, entities via entities.lua).
+function Live.renameMap(oldName, newName)
+    if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
+    if oldName == '' or newName == '' or oldName == newName then return end
+    TriggerServerEvent('palm6_mapeditor:live:renameMap', oldName, newName)
+    TriggerServerEvent('palm6_mapeditor:ent:renameMap', oldName, newName)
 end
 
 -- Counts for the Performance panel: props / lights / world-erases currently on

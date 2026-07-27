@@ -766,6 +766,10 @@ function selectScene(keepScroll) {
 // ---- live-map outliner ---------------------------------------------------
 var liveSel = {};             // id -> true (live multi-select)
 var liveMapFilter = 'all';    // named-map filter for the outliner ('all' = every map)
+var liveRenaming = false;     // rename input bar open
+var liveRenameName = '';
+var liveRenameTarget = '';    // the map currently being renamed
+function sanitizeMapName(s) { return (s || '').trim().replace(/[^\w-]/g, '').slice(0, 48); }
 function mapOf(o) { return o.map || 'default'; }
 // Distinct named maps in the live set, with per-map prop counts (sorted).
 function liveMaps() {
@@ -802,7 +806,7 @@ function liveMapChips() {
         var t = document.createElement('span'); t.textContent = label;
         var n = document.createElement('span'); n.className = 'map-chip-n'; n.textContent = count;
         c.appendChild(t); c.appendChild(n);
-        c.addEventListener('click', function () { liveMapFilter = name; liveSel = {}; selectLive(); });
+        c.addEventListener('click', function () { liveMapFilter = name; liveSel = {}; liveRenaming = false; selectLive(); });
         return c;
     }
     bar.appendChild(chip('all', 'All maps', live.length));
@@ -882,20 +886,58 @@ function liveToolbar(shown) {
         actions.appendChild(clr); actions.appendChild(del);
         bar.appendChild(actions);
     } else {
-        // No selection: offer a one-click export of the viewed map (.lua/.json/.ymap.xml/.py).
+        // No selection: offer rename + one-click export of the target map (the
+        // filtered map, or the sole map when unfiltered). Both need a single map.
         var target = liveExportTarget();
         if (target) {
-            var expWrap = document.createElement('div'); expWrap.className = 'scene-actions';
+            var actWrap = document.createElement('div'); actWrap.className = 'scene-actions';
+            var rn = document.createElement('button'); rn.className = 'scene-batch-clear'; rn.type = 'button';
+            rn.textContent = 'Rename';
+            rn.title = 'Rename map “' + target + '”';
+            rn.addEventListener('click', function () { liveRenaming = true; liveRenameTarget = target; liveRenameName = ''; selectLive(true); });
+            actWrap.appendChild(rn);
             var exp = document.createElement('button'); exp.className = 'scene-batch-save'; exp.type = 'button';
             exp.textContent = 'Export “' + target + '”';
             exp.title = 'Write map “' + target + '” to .lua / .json / .ymap.xml / .py on the server (Lua copied to clipboard)';
             exp.addEventListener('click', function () { post('liveExport', { map: target }); });
-            expWrap.appendChild(exp);
-            bar.appendChild(expWrap);
+            actWrap.appendChild(exp);
+            bar.appendChild(actWrap);
         }
     }
     return bar;
 }
+
+function liveRenameBar() {
+    var bar = document.createElement('div'); bar.className = 'scene-savebar';
+    var input = document.createElement('input');
+    input.type = 'text'; input.className = 'scene-name-input'; input.maxLength = 48;
+    input.placeholder = 'Rename “' + liveRenameTarget + '” to…';
+    input.value = liveRenameName || '';
+    input.addEventListener('input', function () { liveRenameName = input.value; });
+    input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); doLiveRename(); }
+        else if (ev.key === 'Escape') { ev.stopPropagation(); cancelLiveRename(); }
+    });
+    var cancel = document.createElement('button'); cancel.className = 'scene-batch-clear'; cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', cancelLiveRename);
+    var go = document.createElement('button'); go.className = 'scene-save-go'; go.type = 'button';
+    go.textContent = 'Rename';
+    go.addEventListener('click', doLiveRename);
+    bar.appendChild(input); bar.appendChild(cancel); bar.appendChild(go);
+    setTimeout(function () { input.focus(); }, 0);
+    return bar;
+}
+function doLiveRename() {
+    var nn = sanitizeMapName(liveRenameName);
+    if (!nn || nn === liveRenameTarget) return;                              // no-op names
+    if (liveMaps().some(function (m) { return m.name === nn; })) return;      // collision (server rejects too)
+    post('liveRename', { old: liveRenameTarget, new: nn });
+    liveRenaming = false; liveRenameName = ''; liveRenameTarget = '';
+    liveMapFilter = 'all';   // the mapRenamed broadcast will relabel + re-push; show all so nothing looks blank
+    selectLive(true);
+}
+function cancelLiveRename() { liveRenaming = false; liveRenameName = ''; liveRenameTarget = ''; selectLive(true); }
 
 function selectLive(keepScroll) {
     view = { type: 'live' }; lastBrowse = view;
@@ -917,6 +959,8 @@ function selectLive(keepScroll) {
     var maps = liveMaps();
     // If the filtered map was wiped away, fall back to all so the view is never blank.
     if (liveMapFilter !== 'all' && !maps.some(function (m) { return m.name === liveMapFilter; })) liveMapFilter = 'all';
+    // Cancel an open rename if its target map is gone (renamed/wiped elsewhere).
+    if (liveRenaming && !maps.some(function (m) { return m.name === liveRenameTarget; })) { liveRenaming = false; liveRenameTarget = ''; }
 
     var container = document.createElement('div'); container.className = 'scene-view';
     if (maps.length > 1) container.appendChild(liveMapChips());   // picker only when there's more than one map
@@ -925,6 +969,7 @@ function selectLive(keepScroll) {
     var cap = Math.min(filtered.length, 500);
     var shown = filtered.slice(0, cap);
     container.appendChild(liveToolbar(shown));
+    if (liveRenaming && liveRenameTarget) container.appendChild(liveRenameBar());
     var list = document.createElement('div'); list.className = 'scene-list';
     for (var i = 0; i < cap; i++) list.appendChild(makeLiveRow(shown[i]));
     container.appendChild(list);
