@@ -133,6 +133,11 @@ RegisterNetEvent('palm6_mapeditor:live:hideBatch', function(list, full)
 end)
 RegisterNetEvent('palm6_mapeditor:live:unhide', function(id) unHide(tonumber(id)) end)
 
+-- Server sent this map's revision list -> hand it to the NUI revisions view.
+RegisterNetEvent('palm6_mapeditor:live:revs', function(map, list)
+    SendNUIMessage({ action = 'revs', map = map, revs = list or {} })
+end)
+
 -- Server renamed a map: relabel the streamed props in place (no respawn) so the
 -- outliner map-picker reflects the new name, then re-push the outliner.
 RegisterNetEvent('palm6_mapeditor:live:mapRenamed', function(oldName, newName)
@@ -303,6 +308,16 @@ function Live.exportMap(name)
     if type(name) ~= 'string' or name == '' then return end
     TriggerServerEvent('palm6_mapeditor:live:exportRequest', name)
 end
+
+-- Revisions / snapshots (server owns the palm6_mapeditor_revisions table).
+function Live.snapshot(map, label)
+    if type(map) == 'string' and map ~= '' then TriggerServerEvent('palm6_mapeditor:live:snapshot', map, label or '') end
+end
+function Live.revList(map)
+    if type(map) == 'string' and map ~= '' then TriggerServerEvent('palm6_mapeditor:live:revList', map) end
+end
+function Live.revRestore(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revRestore', n) end end
+function Live.revDelete(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revDelete', n) end end
 
 -- Rename a live map (props + lights via live.lua, entities via entities.lua).
 function Live.renameMap(oldName, newName)

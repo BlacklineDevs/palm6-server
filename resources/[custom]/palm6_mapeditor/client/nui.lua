@@ -240,6 +240,29 @@ RegisterNUICallback('liveExport', function(data, cb)
     if type(map) == 'string' and Live and Live.exportMap then Live.exportMap(map) end
     cb('ok')
 end)
+-- Revisions / snapshots. All stay open; the server pushes a fresh revs list back.
+RegisterNUICallback('liveSnapshot', function(data, cb)
+    local map = type(data) == 'table' and data.map or nil
+    local label = type(data) == 'table' and data.label or ''
+    if type(map) == 'string' and Live and Live.snapshot then Live.snapshot(map, label) end
+    cb('ok')
+end)
+RegisterNUICallback('liveRevList', function(data, cb)
+    local map = type(data) == 'table' and data.map or nil
+    if type(map) == 'string' and Live and Live.revList then Live.revList(map) end
+    cb('ok')
+end)
+RegisterNUICallback('liveRevRestore', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and Live and Live.revRestore then Live.revRestore(id) end
+    cb('ok')
+end)
+RegisterNUICallback('liveRevDelete', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and Live and Live.revDelete then Live.revDelete(id) end
+    cb('ok')
+end)
+
 -- Rename a named map (props + lights + entities). Stays open; the mapRenamed
 -- broadcast re-pushes the outliner with the new name.
 RegisterNUICallback('liveRename', function(data, cb)

@@ -953,6 +953,15 @@ function liveToolbar(shown) {
             rn.title = 'Rename map “' + target + '”';
             rn.addEventListener('click', function () { liveRenaming = true; liveRenameTarget = target; liveRenameName = ''; selectLive(true); });
             actWrap.appendChild(rn);
+            var snaps = document.createElement('button'); snaps.className = 'scene-batch-clear'; snaps.type = 'button';
+            snaps.textContent = 'Snapshots';
+            snaps.title = 'Snapshot / roll back map “' + target + '”';
+            snaps.addEventListener('click', function () {
+                liveRevsTarget = target; liveRevs = []; revConfirmId = null;
+                post('liveRevList', { map: target });
+                selectRevs();
+            });
+            actWrap.appendChild(snaps);
             var exp = document.createElement('button'); exp.className = 'scene-batch-save'; exp.type = 'button';
             exp.textContent = 'Export “' + target + '”';
             exp.title = 'Write map “' + target + '” to .lua / .json / .ymap.xml / .py on the server (Lua copied to clipboard)';
@@ -1040,6 +1049,90 @@ function selectLive(keepScroll) {
     if (liveMapFilter !== 'all') ctxLabel += ' · map “' + liveMapFilter + '”';
     el.ctx.textContent = ctxLabel;
     el.grid.scrollTop = prev;
+}
+
+// ---- live-map revisions (snapshots / rollback) ---------------------------
+var liveRevsTarget = '';   // the map whose snapshots we're viewing
+var liveRevs = [];         // [{id, rev, label, props, lights, created_by, ts}]
+var revConfirmId = null;   // snapshot id armed for a two-click restore confirm
+
+function onRevs(map, list) {
+    liveRevs = Array.isArray(list) ? list : [];
+    if (typeof map === 'string' && map) liveRevsTarget = map;
+    if (view.type === 'revs') selectRevs();
+}
+
+function revRelTime(ts) {
+    if (!ts) return '';
+    var d = Math.floor(Date.now() / 1000) - ts;
+    if (d < 0) d = 0;
+    if (d < 60) return 'just now';
+    if (d < 3600) return Math.floor(d / 60) + 'm ago';
+    if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+    return Math.floor(d / 86400) + 'd ago';
+}
+
+function makeRevRow(r) {
+    var row = document.createElement('div'); row.className = 'scene-row';
+    var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = ICON_RECENT;
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name';
+    nm.textContent = '#' + r.rev + (r.label ? '  ·  ' + r.label : '');
+    var co = document.createElement('div'); co.className = 'scene-coords';
+    co.textContent = (r.props || 0) + ' props · ' + (r.lights || 0) + ' lights · ' + revRelTime(r.ts) + (r.created_by ? ' · ' + r.created_by : '');
+    main.appendChild(nm); main.appendChild(co);
+    var armed = revConfirmId === r.id;
+    var restore = document.createElement('button');
+    restore.className = armed ? 'scene-batch-del' : 'scene-batch-save'; restore.type = 'button';
+    restore.textContent = armed ? 'Confirm restore' : 'Restore';
+    restore.title = 'Replace the live map with this snapshot (current state is auto-saved first)';
+    restore.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        if (armed) { post('liveRevRestore', { id: r.id }); revConfirmId = null; selectLive(); }
+        else { revConfirmId = r.id; selectRevs(); }
+    });
+    var del = document.createElement('button'); del.className = 'scene-del'; del.title = 'Delete snapshot';
+    del.setAttribute('aria-label', 'Delete snapshot'); del.innerHTML = ICON_TRASH;
+    del.addEventListener('click', function (ev) { ev.stopPropagation(); post('liveRevDelete', { id: r.id }); });
+    row.appendChild(ic); row.appendChild(main); row.appendChild(restore); row.appendChild(del);
+    return row;
+}
+
+function selectRevs() {
+    view = { type: 'revs' };
+    renderCats();
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+
+    var container = document.createElement('div'); container.className = 'scene-view';
+    var bar = document.createElement('div'); bar.className = 'scene-toolbar';
+    var left = document.createElement('div'); left.className = 'scene-selall';
+    var back = document.createElement('button'); back.className = 'scene-batch-clear'; back.type = 'button';
+    back.textContent = '← Back';
+    back.addEventListener('click', function () { revConfirmId = null; selectLive(); });
+    var lab = document.createElement('span'); lab.textContent = 'Snapshots · ' + liveRevsTarget;
+    left.appendChild(back); left.appendChild(lab);
+    bar.appendChild(left);
+    var actions = document.createElement('div'); actions.className = 'scene-actions';
+    var snap = document.createElement('button'); snap.className = 'scene-batch-save'; snap.type = 'button';
+    snap.textContent = 'Snapshot now';
+    snap.title = 'Save the current state of “' + liveRevsTarget + '” as a new snapshot';
+    snap.addEventListener('click', function () { post('liveSnapshot', { map: liveRevsTarget }); });
+    actions.appendChild(snap);
+    bar.appendChild(actions);
+    container.appendChild(bar);
+
+    if (!liveRevs.length) {
+        container.appendChild(emptyState('No snapshots yet',
+            'Snapshot “' + liveRevsTarget + '” to checkpoint it, then roll back to any snapshot anytime.'));
+    } else {
+        var list = document.createElement('div'); list.className = 'scene-list';
+        liveRevs.forEach(function (r) { list.appendChild(makeRevRow(r)); });
+        container.appendChild(list);
+    }
+    el.grid.appendChild(container);
+    el.ctx.textContent = liveRevs.length + (liveRevs.length === 1 ? ' snapshot · ' : ' snapshots · ') + liveRevsTarget;
 }
 
 // ---- entities outliner (scene peds / vehicles) ---------------------------
@@ -1911,6 +2004,7 @@ window.addEventListener('message', function (e) {
     else if (d.action === 'scene') onScene(d.props, d.lights);
     else if (d.action === 'live') onLive(d.props);
     else if (d.action === 'entities') onEnts(d.ents);
+    else if (d.action === 'revs') onRevs(d.map, d.revs);
     else if (d.action === 'perf') onPerf(d);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);

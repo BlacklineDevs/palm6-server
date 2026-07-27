@@ -239,6 +239,21 @@ CreateThread(function()
         for _, row in ipairs(hrows) do
             hides[row.id] = { id = row.id, x = row.x + 0.0, y = row.y + 0.0, z = row.z + 0.0, radius = row.radius + 0.0, model = math.floor(row.model) }
         end
+        MySQL.query.await([[
+            CREATE TABLE IF NOT EXISTS `palm6_mapeditor_revisions` (
+                `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `map`        VARCHAR(64)  NOT NULL,
+                `rev`        INT UNSIGNED NOT NULL,
+                `label`      VARCHAR(96)  DEFAULT NULL,
+                `props`      INT UNSIGNED NOT NULL DEFAULT 0,
+                `lights`     INT UNSIGNED NOT NULL DEFAULT 0,
+                `data`       LONGTEXT     NOT NULL,
+                `created_by` VARCHAR(96)  DEFAULT NULL,
+                `created_at` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_map` (`map`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]])
         local lrows = MySQL.query.await('SELECT id, map, x, y, z, r, g, b, `range`, intensity, kind FROM palm6_mapeditor_lights') or {}
         for _, row in ipairs(lrows) do
             lights[row.id] = { id = row.id, map = row.map, x = row.x + 0.0, y = row.y + 0.0, z = row.z + 0.0,
@@ -539,6 +554,159 @@ RegisterNetEvent('palm6_mapeditor:live:renameMap', function(oldName, newName)
     if movedP == 0 and movedL == 0 then notify(src, ('no live props or lights on map "%s"'):format(oldName), 'inform'); return end
     notify(src, ('renamed map "%s" -> "%s" (%d prop(s), %d light(s))'):format(oldName, newName, movedP, movedL), 'success')
     print(('[palm6_mapeditor] %s renamed map "%s" -> "%s"'):format(GetPlayerName(src) or src, oldName, newName))
+end)
+
+-- ===========================================================================
+-- REVISIONS / SNAPSHOTS
+-- A snapshot serialises a map's current props + lights to a versioned row in
+-- palm6_mapeditor_revisions. Restoring replaces the map's live props + lights
+-- with the snapshotted set (delete current, re-insert snapshot) — so a build can
+-- be checkpointed and rolled back. Restore auto-snapshots the current state first
+-- (labelled "before restore #N") so a rollback is itself never destructive.
+-- ===========================================================================
+local function label_clean(s)
+    return (tostring(s or '')):gsub('[^%w %%%-_]', ''):sub(1, 96)
+end
+
+-- Gather a map's props + lights into the snapshot shape (call under the lock so
+-- the read is consistent with concurrent writers).
+local function gatherSnapshot(map)
+    local props, lts = {}, {}
+    for _, r in pairs(live) do
+        if r.map == map then props[#props + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz } end
+    end
+    for _, l in pairs(lights) do
+        if l.map == map then lts[#lts + 1] = { x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind } end
+    end
+    return props, lts
+end
+
+-- Write a revision row for `map` from the given prop/light snapshot. Returns the
+-- new rev number, or nil. Caller holds the write-lock.
+local function writeRevision(map, label, props, lts, who)
+    local nextRev = 1
+    local rows = MySQL.query.await('SELECT COALESCE(MAX(rev), 0) + 1 AS n FROM palm6_mapeditor_revisions WHERE map = ?', { map })
+    if rows and rows[1] and rows[1].n then nextRev = math.floor(rows[1].n) end
+    local blob = json.encode({ props = props, lights = lts })
+    local id
+    local ok = pcall(function()
+        id = MySQL.insert.await(
+            'INSERT INTO palm6_mapeditor_revisions (map, rev, label, props, lights, data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            { map, nextRev, label, #props, #lts, blob, who })
+    end)
+    if ok and id then return nextRev end
+    return nil
+end
+
+RegisterNetEvent('palm6_mapeditor:live:snapshot', function(map, label)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    map = cleanMap(map); label = label_clean(label)
+    local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
+    local rev, np, nl = nil, 0, 0
+    local acquired = withWriteLock(function()
+        local props, lts = gatherSnapshot(map)
+        np, nl = #props, #lts
+        if np == 0 and nl == 0 then return end
+        rev = writeRevision(map, label, props, lts, who)
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if np == 0 and nl == 0 then notify(src, ('map "%s" is empty — nothing to snapshot'):format(map), 'inform'); return end
+    if not rev then notify(src, 'snapshot failed (DB write)', 'error'); return end
+    notify(src, ('snapshot #%d of "%s" saved (%d props, %d lights)'):format(rev, map, np, nl), 'success')
+    -- Refresh the requester's revision list if they're viewing it.
+    local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC', { map }) or {}
+    TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
+end)
+
+RegisterNetEvent('palm6_mapeditor:live:revList', function(map)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    map = cleanMap(map)
+    local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC', { map }) or {}
+    TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
+end)
+
+RegisterNetEvent('palm6_mapeditor:live:revDelete', function(revId)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    revId = tonumber(revId)
+    if not revId then return end
+    local rows = MySQL.query.await('SELECT map FROM palm6_mapeditor_revisions WHERE id = ?', { revId })
+    local map = rows and rows[1] and rows[1].map
+    pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_revisions WHERE id = ?', { revId }) end)
+    notify(src, 'deleted snapshot', 'success')
+    if map then
+        local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC', { map }) or {}
+        TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
+    end
+end)
+
+-- Restore a revision: replace the map's live props + lights with the snapshot.
+-- Auto-snapshots the current state first (so the rollback is undoable), then
+-- deletes the current rows and re-inserts the snapshot set (new ids). Bounded by
+-- the same caps as a commit. Broadcasts the removals + additions to all clients.
+RegisterNetEvent('palm6_mapeditor:live:revRestore', function(revId)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    revId = tonumber(revId)
+    if not revId then return end
+    local rows = MySQL.query.await('SELECT map, rev, data FROM palm6_mapeditor_revisions WHERE id = ?', { revId })
+    if not rows or not rows[1] then notify(src, 'no such snapshot', 'error'); return end
+    local map = cleanMap(rows[1].map)
+    local srcRev = math.floor(tonumber(rows[1].rev) or 0)
+    local snap = json.decode(rows[1].data or '{}') or {}
+    local snapProps = type(snap.props) == 'table' and snap.props or {}
+    local snapLights = type(snap.lights) == 'table' and snap.lights or {}
+    local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
+
+    local removedP, removedL, addedP, addedL, dberr = {}, {}, {}, {}, false
+    local acquired = withWriteLock(function()
+        -- 1) auto-snapshot the CURRENT state so a restore can itself be undone.
+        local curP, curL = gatherSnapshot(map)
+        if #curP > 0 or #curL > 0 then writeRevision(map, ('before restore #%d'):format(srcRev), curP, curL, who) end
+        -- 2) delete current props + lights for this map (memory reconciled per delete).
+        local okp = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end)
+        if okp then for id, r in pairs(live) do if r.map == map then removedP[#removedP + 1] = id; live[id] = nil end end end
+        local okl = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_lights WHERE map = ?', { map }) end)
+        if okl then for id, l in pairs(lights) do if l.map == map then removedL[#removedL + 1] = id; lights[id] = nil end end end
+        dberr = not (okp and okl)
+        -- 3) re-insert the snapshot props + lights (new ids), bounded by the caps.
+        for i = 1, #snapProps do
+            if #addedP >= Config.LiveMaxProps then break end
+            local p = cleanPlacement(snapProps[i])
+            if p then
+                local id
+                if pcall(function()
+                    id = MySQL.insert.await('INSERT INTO palm6_mapeditor_props (map, model, x, y, z, rx, ry, rz, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        { map, p.model, p.x, p.y, p.z, p.rx, p.ry, p.rz, who }) end) and id then
+                    p.id, p.map = id, map; live[id] = p; addedP[#addedP + 1] = wire(p)
+                end
+            end
+        end
+        for i = 1, #snapLights do
+            if #addedL >= Config.LiveMaxLights then break end
+            local l = cleanLight(snapLights[i])
+            if l then
+                local id
+                if pcall(function()
+                    id = MySQL.insert.await('INSERT INTO palm6_mapeditor_lights (map, x, y, z, r, g, b, `range`, intensity, kind, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        { map, l.x, l.y, l.z, l.r, l.g, l.b, l.range, l.intensity, l.kind, who }) end) and id then
+                    l.id, l.map = id, map; lights[id] = l; addedL[#addedL + 1] = wireLight(l)
+                end
+            end
+        end
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if #removedP > 0 then TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, removedP) end
+    if #removedL > 0 then TriggerClientEvent('palm6_mapeditor:live:lightRemoveBatch', -1, removedL) end
+    if #addedP > 0 then TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, addedP, false) end
+    if #addedL > 0 then TriggerClientEvent('palm6_mapeditor:live:lightBatch', -1, addedL, false) end
+    if dberr then notify(src, ('partial restore of "%s" — a DB step failed'):format(map), 'error'); return end
+    notify(src, ('restored "%s" to snapshot #%d (%d props, %d lights)'):format(map, srcRev, #addedP, #addedL), 'success')
+    print(('[palm6_mapeditor] %s restored map "%s" to snapshot #%d'):format(who, map, srcRev))
 end)
 
 -- ---------------------------------------------------------------------------
