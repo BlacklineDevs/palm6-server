@@ -214,6 +214,14 @@ RegisterNUICallback('liveGoto', function(data, cb)
     closeBrowser()
     cb('ok')
 end)
+-- Export the picked named map to files (server writes .lua/.json/.ymap.xml/.py).
+-- Stays open — the result is files on the server + Lua on the clipboard, nothing
+-- to see in-world.
+RegisterNUICallback('liveExport', function(data, cb)
+    local map = type(data) == 'table' and data.map or nil
+    if type(map) == 'string' and Live and Live.exportMap then Live.exportMap(map) end
+    cb('ok')
+end)
 
 -- Entities outliner (peds / vehicles). Delete reuses the audited ent:remove
 -- server event and stays open (the ent:remove broadcast re-pushes the list);

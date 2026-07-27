@@ -289,6 +289,13 @@ function Live.push()
     SendNUIMessage({ action = 'live', props = list })
 end
 
+-- Export a named live map to files from the NUI (same path as /mapexportlive):
+-- ask the server for the map's prop ids, then live:exportIds builds + saves.
+function Live.exportMap(name)
+    if type(name) ~= 'string' or name == '' then return end
+    TriggerServerEvent('palm6_mapeditor:live:exportRequest', name)
+end
+
 -- Counts for the Performance panel: props / lights / world-erases currently on
 -- the live (committed) map. liveObjs/liveLights/liveHides mirror the full sets
 -- the server streams, so these are accurate for every player, not just admins.

@@ -777,6 +777,13 @@ function liveFiltered() {
     if (liveMapFilter === 'all') return live;
     return live.filter(function (o) { return mapOf(o) === liveMapFilter; });
 }
+// Which single map an "Export" click would target: the filtered map, or the only
+// map when unfiltered. null when "All maps" spans several (ambiguous — pick one).
+function liveExportTarget() {
+    if (liveMapFilter !== 'all') return liveMapFilter;
+    var maps = liveMaps();
+    return maps.length === 1 ? maps[0].name : null;
+}
 // Selection is scoped to the visible (filtered) map so "Delete N" / select-all
 // never touch props hidden by the current filter.
 function liveSelectedIds() {
@@ -874,6 +881,18 @@ function liveToolbar(shown) {
         del.addEventListener('click', function () { post('liveDeleteMany', { ids: selIds }); liveSel = {}; selectLive(true); });
         actions.appendChild(clr); actions.appendChild(del);
         bar.appendChild(actions);
+    } else {
+        // No selection: offer a one-click export of the viewed map (.lua/.json/.ymap.xml/.py).
+        var target = liveExportTarget();
+        if (target) {
+            var expWrap = document.createElement('div'); expWrap.className = 'scene-actions';
+            var exp = document.createElement('button'); exp.className = 'scene-batch-save'; exp.type = 'button';
+            exp.textContent = 'Export “' + target + '”';
+            exp.title = 'Write map “' + target + '” to .lua / .json / .ymap.xml / .py on the server (Lua copied to clipboard)';
+            exp.addEventListener('click', function () { post('liveExport', { map: target }); });
+            expWrap.appendChild(exp);
+            bar.appendChild(expWrap);
+        }
     }
     return bar;
 }
