@@ -68,7 +68,7 @@ local function spawn(rec, gen)
         Game.DeleteObject(obj); canceled[rec.id] = nil; return
     end
     Game.SetObjectTransform(obj, rec.x, rec.y, rec.z, rec.rx or 0.0, rec.ry or 0.0, rec.rz or 0.0)
-    liveObjs[rec.id] = { obj = obj, model = rec.model, x = rec.x, y = rec.y, z = rec.z, rx = rec.rx, ry = rec.ry, rz = rec.rz }
+    liveObjs[rec.id] = { obj = obj, model = rec.model, map = rec.map, x = rec.x, y = rec.y, z = rec.z, rx = rec.rx, ry = rec.ry, rz = rec.rz }
 end
 
 -- ---- server -> client ------------------------------------------------------
@@ -284,7 +284,7 @@ Live = {}
 function Live.push()
     local list = {}
     for id, r in pairs(liveObjs) do
-        list[#list + 1] = { id = id, model = r.model, x = r.x, y = r.y, z = r.z }
+        list[#list + 1] = { id = id, model = r.model, map = r.map, x = r.x, y = r.y, z = r.z }
     end
     SendNUIMessage({ action = 'live', props = list })
 end

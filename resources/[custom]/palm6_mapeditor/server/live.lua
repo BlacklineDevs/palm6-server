@@ -104,9 +104,11 @@ local function mapCount(map)
     return n
 end
 
--- Strip the row down to exactly the fields the client spawner needs.
+-- Strip the row down to exactly the fields the client spawner needs. `map` is
+-- included so the client can group/filter the live-map outliner by named map
+-- (additive; older clients ignore the extra field).
 local function wire(r)
-    return { id = r.id, model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
+    return { id = r.id, model = r.model, map = r.map, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz }
 end
 
 local function wireHide(h)

@@ -598,6 +598,25 @@ kbd { font: inherit; }
     background: var(--lc, #ffc88c); box-shadow: 0 0 9px var(--lc, #ffc88c);
 }
 
+/* ---- live-map map picker ---- */
+.map-chips {
+    display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.15rem 0.15rem 0.35rem;
+    border-bottom: 1px solid var(--line); margin-bottom: 0.15rem;
+}
+.map-chip {
+    display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--line-2); color: var(--muted-2);
+    clip-path: var(--cut-sm); padding: 0.3rem 0.6rem; font-family: var(--ui); font-size: 0.72rem;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.map-chip:hover { color: var(--text); border-color: var(--amber-line); }
+.map-chip.active { color: var(--amber); border-color: var(--amber-line); background: var(--amber-soft); }
+.map-chip-n {
+    font-family: var(--mono); font-size: 0.62rem; font-variant-numeric: tabular-nums;
+    color: var(--muted); background: var(--panel-deep); border-radius: 999px; padding: 0.02rem 0.4rem;
+}
+.map-chip.active .map-chip-n { color: var(--amber-2); }
+
 /* ---- entities outliner ---- */
 .cat.special.is-ents .ic svg { fill: none; }
 

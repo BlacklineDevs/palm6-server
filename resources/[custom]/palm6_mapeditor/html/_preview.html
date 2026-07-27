@@ -127,9 +127,11 @@
         ], lights: [{ id: 9, kind: 'point', x: 119.0, y: -1001.0, z: 31.0, r: 255, g: 180, b: 120 }] }, '*');
         (function () {
             var liveProps = [];
-            // a dense cluster (demonstrates the density warning) + a few spread out
-            for (var i = 0; i < 38; i++) liveProps.push({ id: 100 + i, model: 'prop_barrel_02a', x: 200 + (i % 6), y: 300 + Math.floor(i / 6), z: 30 });
-            liveProps.push({ id: 200, model: 'prop_streetlight_01', x: 800, y: -50, z: 30 });
+            // a dense cluster (demonstrates the density warning) + a few spread out;
+            // split across two named maps so the map-picker chips show.
+            for (var i = 0; i < 38; i++) liveProps.push({ id: 100 + i, model: 'prop_barrel_02a', map: 'downtown', x: 200 + (i % 6), y: 300 + Math.floor(i / 6), z: 30 });
+            liveProps.push({ id: 200, model: 'prop_streetlight_01', map: 'airport', x: 800, y: -50, z: 30 });
+            liveProps.push({ id: 201, model: 'prop_bench_01a', map: 'airport', x: 810, y: -40, z: 30 });
             window.postMessage({ action: 'live', props: liveProps }, '*');
             window.postMessage({ action: 'entities', ents: [
                 { id: 1, kind: 'ped', model: 's_m_y_cop_01', x: 210.0, y: 305.0, z: 30 },

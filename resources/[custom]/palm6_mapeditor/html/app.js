@@ -763,11 +763,43 @@ function selectScene(keepScroll) {
 }
 
 // ---- live-map outliner ---------------------------------------------------
-var liveSel = {};   // id -> true (live multi-select)
+var liveSel = {};             // id -> true (live multi-select)
+var liveMapFilter = 'all';    // named-map filter for the outliner ('all' = every map)
+function mapOf(o) { return o.map || 'default'; }
+// Distinct named maps in the live set, with per-map prop counts (sorted).
+function liveMaps() {
+    var counts = {};
+    for (var i = 0; i < live.length; i++) { var m = mapOf(live[i]); counts[m] = (counts[m] || 0) + 1; }
+    return Object.keys(counts).sort().map(function (m) { return { name: m, count: counts[m] }; });
+}
+function liveFiltered() {
+    if (liveMapFilter === 'all') return live;
+    return live.filter(function (o) { return mapOf(o) === liveMapFilter; });
+}
+// Selection is scoped to the visible (filtered) map so "Delete N" / select-all
+// never touch props hidden by the current filter.
 function liveSelectedIds() {
+    var f = liveFiltered();
     var out = [];
-    for (var i = 0; i < live.length; i++) if (liveSel[live[i].id]) out.push(live[i].id);
+    for (var i = 0; i < f.length; i++) if (liveSel[f[i].id]) out.push(f[i].id);
     return out;
+}
+// A map-picker chip bar shown above the live outliner when more than one named
+// map exists. Switching maps clears the selection (it was scoped to the old map).
+function liveMapChips() {
+    var bar = document.createElement('div'); bar.className = 'map-chips';
+    function chip(name, label, count) {
+        var c = document.createElement('button'); c.type = 'button';
+        c.className = 'map-chip' + (liveMapFilter === name ? ' active' : '');
+        var t = document.createElement('span'); t.textContent = label;
+        var n = document.createElement('span'); n.className = 'map-chip-n'; n.textContent = count;
+        c.appendChild(t); c.appendChild(n);
+        c.addEventListener('click', function () { liveMapFilter = name; liveSel = {}; selectLive(); });
+        return c;
+    }
+    bar.appendChild(chip('all', 'All maps', live.length));
+    liveMaps().forEach(function (m) { bar.appendChild(chip(m.name, m.name, m.count)); });
+    return bar;
 }
 function onLive(list) {
     live = Array.isArray(list) ? list : [];
@@ -827,7 +859,7 @@ function liveToolbar(shown) {
     });
     var lab = document.createElement('span');
     lab.textContent = selIds.length > 0 ? (selIds.length + ' selected')
-        : (live.length + (live.length === 1 ? ' live prop' : ' live props'));
+        : (shown.length + (shown.length === 1 ? ' live prop' : ' live props'));
     left.appendChild(all); left.appendChild(lab);
     bar.appendChild(left);
     if (selIds.length > 0) {
@@ -855,25 +887,35 @@ function selectLive(keepScroll) {
     Object.keys(liveSel).forEach(function (k) { if (!valid[k]) delete liveSel[k]; });
 
     if (!live.length) {
+        liveMapFilter = 'all';
         el.grid.appendChild(emptyState('Live map is empty',
             'Commit props with /mapcommit to publish them to the shared map — they list here to jump to, grab, or delete.'));
         el.ctx.textContent = 'Live map';
         return;
     }
+    var maps = liveMaps();
+    // If the filtered map was wiped away, fall back to all so the view is never blank.
+    if (liveMapFilter !== 'all' && !maps.some(function (m) { return m.name === liveMapFilter; })) liveMapFilter = 'all';
+
     var container = document.createElement('div'); container.className = 'scene-view';
-    var cap = Math.min(live.length, 500);
-    var shown = live.slice(0, cap);
+    if (maps.length > 1) container.appendChild(liveMapChips());   // picker only when there's more than one map
+
+    var filtered = liveFiltered();
+    var cap = Math.min(filtered.length, 500);
+    var shown = filtered.slice(0, cap);
     container.appendChild(liveToolbar(shown));
     var list = document.createElement('div'); list.className = 'scene-list';
     for (var i = 0; i < cap; i++) list.appendChild(makeLiveRow(shown[i]));
     container.appendChild(list);
-    if (live.length > cap) {
+    if (filtered.length > cap) {
         var more = document.createElement('div'); more.className = 'empty';
-        more.textContent = '+ ' + (live.length - cap) + ' more live props (showing first ' + cap + ')';
+        more.textContent = '+ ' + (filtered.length - cap) + ' more live props (showing first ' + cap + ')';
         container.appendChild(more);
     }
     el.grid.appendChild(container);
-    el.ctx.textContent = live.length + (live.length === 1 ? ' live prop' : ' live props');
+    var ctxLabel = filtered.length + (filtered.length === 1 ? ' live prop' : ' live props');
+    if (liveMapFilter !== 'all') ctxLabel += ' · map “' + liveMapFilter + '”';
+    el.ctx.textContent = ctxLabel;
     el.grid.scrollTop = prev;
 }
 
