@@ -328,6 +328,14 @@ function Live.renameMap(oldName, newName)
     TriggerServerEvent('palm6_mapeditor:ent:renameMap', oldName, newName)
 end
 
+-- Merge one live map into another (relabels props/lights/entities from -> into).
+function Live.mergeMap(fromName, intoName)
+    if type(fromName) ~= 'string' or type(intoName) ~= 'string' then return end
+    if fromName == '' or intoName == '' or fromName == intoName then return end
+    TriggerServerEvent('palm6_mapeditor:live:mergeMap', fromName, intoName)
+    TriggerServerEvent('palm6_mapeditor:ent:renameMap', fromName, intoName)   -- entity UPDATE allows any target
+end
+
 -- Counts for the Performance panel: props / lights / world-erases currently on
 -- the live (committed) map. liveObjs/liveLights/liveHides mirror the full sets
 -- the server streams, so these are accurate for every player, not just admins.

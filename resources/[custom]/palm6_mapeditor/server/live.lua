@@ -556,6 +556,35 @@ RegisterNetEvent('palm6_mapeditor:live:renameMap', function(oldName, newName)
     print(('[palm6_mapeditor] %s renamed map "%s" -> "%s"'):format(GetPlayerName(src) or src, oldName, newName))
 end)
 
+-- ---------------------------------------------------------------------------
+-- Merge one map into another: relabel every prop + light row from `fromName` to
+-- `intoName` (which is EXPECTED to already exist — that's the difference from a
+-- rename). No new rows, so the per-map cap isn't "exceeded" by this — it just
+-- consolidates two named builds into one. Clients relabel in place via the same
+-- mapRenamed broadcast (nothing respawns); entities merge via entities.lua.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:mergeMap', function(fromName, intoName)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    fromName = cleanMap(fromName); intoName = cleanMap(intoName)
+    if fromName == intoName then notify(src, 'pick a different target map', 'error'); return end
+    local movedP, movedL, dberr = 0, 0, false
+    local acquired = withWriteLock(function()
+        local ok1 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_props SET map = ? WHERE map = ?', { intoName, fromName }) end)
+        if ok1 then for _, r in pairs(live) do if r.map == fromName then r.map = intoName; movedP = movedP + 1 end end end
+        local ok2 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_lights SET map = ? WHERE map = ?', { intoName, fromName }) end)
+        if ok2 then for _, l in pairs(lights) do if l.map == fromName then l.map = intoName; movedL = movedL + 1 end end end
+        dberr = not (ok1 and ok2)
+    end)
+    if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    TriggerClientEvent('palm6_mapeditor:live:mapRenamed', -1, fromName, intoName)
+    if dberr then notify(src, ('partial merge of "%s" — a DB update failed'):format(fromName), 'error'); return end
+    if movedP == 0 and movedL == 0 then notify(src, ('no live props or lights on map "%s"'):format(fromName), 'inform'); return end
+    notify(src, ('merged "%s" into "%s" (%d prop(s), %d light(s))'):format(fromName, intoName, movedP, movedL), 'success')
+    print(('[palm6_mapeditor] %s merged map "%s" into "%s"'):format(GetPlayerName(src) or src, fromName, intoName))
+end)
+
 -- ===========================================================================
 -- REVISIONS / SNAPSHOTS
 -- A snapshot serialises a map's current props + lights to a versioned row in

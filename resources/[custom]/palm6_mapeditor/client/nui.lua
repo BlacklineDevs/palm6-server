@@ -265,6 +265,16 @@ RegisterNUICallback('liveRevDelete', function(data, cb)
     cb('ok')
 end)
 
+-- Merge a named map into another. Stays open; mapRenamed broadcast re-pushes.
+RegisterNUICallback('liveMerge', function(data, cb)
+    local fromName = type(data) == 'table' and data.from or nil
+    local intoName = type(data) == 'table' and data.into or nil
+    if type(fromName) == 'string' and type(intoName) == 'string' and Live and Live.mergeMap then
+        Live.mergeMap(fromName, intoName)
+    end
+    cb('ok')
+end)
+
 -- Rename a named map (props + lights + entities). Stays open; the mapRenamed
 -- broadcast re-pushes the outliner with the new name.
 RegisterNUICallback('liveRename', function(data, cb)

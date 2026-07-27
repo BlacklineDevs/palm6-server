@@ -845,6 +845,8 @@ var liveMapFilter = 'all';    // named-map filter for the outliner ('all' = ever
 var liveRenaming = false;     // rename input bar open
 var liveRenameName = '';
 var liveRenameTarget = '';    // the map currently being renamed
+var liveMerging = false;      // merge selector bar open
+var liveMergeInto = '';       // the map currently selected as the merge target
 function sanitizeMapName(s) { return (s || '').trim().replace(/[^\w-]/g, '').slice(0, 48); }
 function mapOf(o) { return o.map || 'default'; }
 // Distinct named maps in the live set, with per-map prop counts (sorted).
@@ -970,8 +972,15 @@ function liveToolbar(shown) {
             var rn = document.createElement('button'); rn.className = 'scene-batch-clear'; rn.type = 'button';
             rn.textContent = 'Rename';
             rn.title = 'Rename map “' + target + '”';
-            rn.addEventListener('click', function () { liveRenaming = true; liveRenameTarget = target; liveRenameName = ''; selectLive(true); });
+            rn.addEventListener('click', function () { liveRenaming = true; liveMerging = false; liveRenameTarget = target; liveRenameName = ''; selectLive(true); });
             actWrap.appendChild(rn);
+            if (liveMaps().length > 1) {
+                var mg = document.createElement('button'); mg.className = 'scene-batch-clear'; mg.type = 'button';
+                mg.textContent = 'Merge';
+                mg.title = 'Merge map “' + target + '” into another';
+                mg.addEventListener('click', function () { liveMerging = true; liveRenaming = false; liveMergeInto = ''; selectLive(true); });
+                actWrap.appendChild(mg);
+            }
             var snaps = document.createElement('button'); snaps.className = 'scene-batch-clear'; snaps.type = 'button';
             snaps.textContent = 'Snapshots';
             snaps.title = 'Snapshot / roll back map “' + target + '”';
@@ -1024,6 +1033,38 @@ function doLiveRename() {
 }
 function cancelLiveRename() { liveRenaming = false; liveRenameName = ''; liveRenameTarget = ''; selectLive(true); }
 
+// Merge the filtered map into another existing map (pick the target from a list).
+function liveMergeBar() {
+    var from = liveExportTarget();
+    var others = liveMaps().filter(function (m) { return m.name !== from; });
+    if (!liveMergeInto || !others.some(function (m) { return m.name === liveMergeInto; })) {
+        liveMergeInto = others.length ? others[0].name : '';
+    }
+    var bar = document.createElement('div'); bar.className = 'scene-savebar';
+    var lab = document.createElement('span'); lab.className = 'merge-lab'; lab.textContent = 'Merge “' + from + '” into';
+    var sel = document.createElement('select'); sel.className = 'scenario-sel merge-sel';
+    others.forEach(function (m) {
+        var o = document.createElement('option'); o.value = m.name; o.textContent = m.name + ' (' + m.count + ')';
+        if (m.name === liveMergeInto) o.selected = true;
+        sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () { liveMergeInto = sel.value; });
+    var cancel = document.createElement('button'); cancel.className = 'scene-batch-clear'; cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', function () { liveMerging = false; liveMergeInto = ''; selectLive(true); });
+    var go = document.createElement('button'); go.className = 'scene-save-go'; go.type = 'button';
+    go.textContent = 'Merge';
+    go.addEventListener('click', doLiveMerge);
+    bar.appendChild(lab); bar.appendChild(sel); bar.appendChild(cancel); bar.appendChild(go);
+    return bar;
+}
+function doLiveMerge() {
+    var from = liveExportTarget();
+    if (!from || !liveMergeInto || liveMergeInto === from) return;
+    post('liveMerge', { from: from, into: liveMergeInto });
+    liveMerging = false; liveMergeInto = ''; liveMapFilter = 'all'; selectLive(true);
+}
+
 function selectLive(keepScroll) {
     view = { type: 'live' }; lastBrowse = view;
     renderCats();
@@ -1046,6 +1087,8 @@ function selectLive(keepScroll) {
     if (liveMapFilter !== 'all' && !maps.some(function (m) { return m.name === liveMapFilter; })) liveMapFilter = 'all';
     // Cancel an open rename if its target map is gone (renamed/wiped elsewhere).
     if (liveRenaming && !maps.some(function (m) { return m.name === liveRenameTarget; })) { liveRenaming = false; liveRenameTarget = ''; }
+    // Merge needs a specific target map + another map to merge into.
+    if (liveMerging && (!liveExportTarget() || maps.length < 2)) liveMerging = false;
 
     var container = document.createElement('div'); container.className = 'scene-view';
     if (maps.length > 1) container.appendChild(liveMapChips());   // picker only when there's more than one map
@@ -1055,6 +1098,7 @@ function selectLive(keepScroll) {
     var shown = filtered.slice(0, cap);
     container.appendChild(liveToolbar(shown));
     if (liveRenaming && liveRenameTarget) container.appendChild(liveRenameBar());
+    if (liveMerging && liveExportTarget()) container.appendChild(liveMergeBar());
     var list = document.createElement('div'); list.className = 'scene-list';
     for (var i = 0; i < cap; i++) list.appendChild(makeLiveRow(shown[i]));
     container.appendChild(list);

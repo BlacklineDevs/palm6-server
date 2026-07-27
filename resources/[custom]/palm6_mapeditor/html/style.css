@@ -621,6 +621,8 @@ kbd { font: inherit; }
 }
 .scenario-sel:focus { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 .scenario-sel option { background: var(--panel); color: var(--text); }
+.merge-lab { flex: 0 0 auto; align-self: center; font-size: 0.76rem; color: var(--muted-2); }
+.merge-sel { flex: 1 1 auto; width: auto; }
 
 /* ---- entity cards (Peds / Vehicles — no odb thumbnails, generative tile) ---- */
 .ent-tile {
