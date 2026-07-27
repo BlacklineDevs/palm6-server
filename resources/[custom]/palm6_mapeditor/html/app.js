@@ -750,16 +750,31 @@ function selectScene(keepScroll) {
 }
 
 // ---- live-map outliner ---------------------------------------------------
+var liveSel = {};   // id -> true (live multi-select)
+function liveSelectedIds() {
+    var out = [];
+    for (var i = 0; i < live.length; i++) if (liveSel[live[i].id]) out.push(live[i].id);
+    return out;
+}
 function onLive(list) {
     live = Array.isArray(list) ? list : [];
     if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Live count
-    if (view.type === 'live') selectLive();
+    if (view.type === 'live') selectLive(true);
 }
 
 function makeLiveRow(item) {
     var row = document.createElement('div');
-    row.className = 'scene-row';
+    row.className = 'scene-row' + (liveSel[item.id] ? ' picked' : '');
     row.tabIndex = 0; row.setAttribute('role', 'button'); row.title = 'Jump to ' + item.model;
+
+    var check = document.createElement('input');
+    check.type = 'checkbox'; check.className = 'scene-check';
+    check.checked = !!liveSel[item.id]; check.setAttribute('aria-label', 'Select ' + item.model);
+    check.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    check.addEventListener('change', function () {
+        if (check.checked) liveSel[item.id] = true; else delete liveSel[item.id];
+        selectLive(true);
+    });
 
     var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = ICON_CUBE;
     var main = document.createElement('div'); main.className = 'scene-main';
@@ -777,7 +792,7 @@ function makeLiveRow(item) {
     del.innerHTML = ICON_TRASH;
     del.addEventListener('click', function (ev) { ev.stopPropagation(); post('liveDelete', { id: item.id }); });
 
-    row.appendChild(ic); row.appendChild(main); row.appendChild(grab); row.appendChild(del);
+    row.appendChild(check); row.appendChild(ic); row.appendChild(main); row.appendChild(grab); row.appendChild(del);
     row.addEventListener('click', function () { hide(); post('liveGoto', { id: item.id }); });
     row.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); hide(); post('liveGoto', { id: item.id }); }
@@ -785,13 +800,47 @@ function makeLiveRow(item) {
     return row;
 }
 
-function selectLive() {
+function liveToolbar(shown) {
+    var selIds = liveSelectedIds();
+    var bar = document.createElement('div'); bar.className = 'scene-toolbar';
+    var left = document.createElement('label'); left.className = 'scene-selall';
+    var all = document.createElement('input'); all.type = 'checkbox';
+    all.checked = selIds.length > 0 && selIds.length === shown.length;
+    all.indeterminate = selIds.length > 0 && selIds.length < shown.length;
+    all.setAttribute('aria-label', 'Select all');
+    all.addEventListener('change', function () {
+        if (all.checked) { shown.forEach(function (o) { liveSel[o.id] = true; }); } else { liveSel = {}; }
+        selectLive(true);
+    });
+    var lab = document.createElement('span');
+    lab.textContent = selIds.length > 0 ? (selIds.length + ' selected')
+        : (live.length + (live.length === 1 ? ' live prop' : ' live props'));
+    left.appendChild(all); left.appendChild(lab);
+    bar.appendChild(left);
+    if (selIds.length > 0) {
+        var actions = document.createElement('div'); actions.className = 'scene-actions';
+        var clr = document.createElement('button'); clr.className = 'scene-batch-clear'; clr.type = 'button';
+        clr.textContent = 'Clear';
+        clr.addEventListener('click', function () { liveSel = {}; selectLive(true); });
+        var del = document.createElement('button'); del.className = 'scene-batch-del'; del.type = 'button';
+        del.textContent = 'Delete ' + selIds.length;
+        del.addEventListener('click', function () { post('liveDeleteMany', { ids: selIds }); liveSel = {}; selectLive(true); });
+        actions.appendChild(clr); actions.appendChild(del);
+        bar.appendChild(actions);
+    }
+    return bar;
+}
+
+function selectLive(keepScroll) {
     view = { type: 'live' }; lastBrowse = view;
     renderCats();
-    el.grid.scrollTop = 0;
+    var prev = keepScroll ? el.grid.scrollTop : 0;
     if (thumbObserver) thumbObserver.disconnect();
     el.grid.textContent = '';
     imgOk = 0; imgFail = 0; updateThumbStat();
+    var valid = {}; live.forEach(function (o) { valid[o.id] = true; });
+    Object.keys(liveSel).forEach(function (k) { if (!valid[k]) delete liveSel[k]; });
+
     if (!live.length) {
         el.grid.appendChild(emptyState('Live map is empty',
             'Commit props with /mapcommit to publish them to the shared map — they list here to jump to, grab, or delete.'));
@@ -799,9 +848,11 @@ function selectLive() {
         return;
     }
     var container = document.createElement('div'); container.className = 'scene-view';
-    var list = document.createElement('div'); list.className = 'scene-list';
     var cap = Math.min(live.length, 500);
-    for (var i = 0; i < cap; i++) list.appendChild(makeLiveRow(live[i]));
+    var shown = live.slice(0, cap);
+    container.appendChild(liveToolbar(shown));
+    var list = document.createElement('div'); list.className = 'scene-list';
+    for (var i = 0; i < cap; i++) list.appendChild(makeLiveRow(shown[i]));
     container.appendChild(list);
     if (live.length > cap) {
         var more = document.createElement('div'); more.className = 'empty';
@@ -810,6 +861,7 @@ function selectLive() {
     }
     el.grid.appendChild(container);
     el.ctx.textContent = live.length + (live.length === 1 ? ' live prop' : ' live props');
+    el.grid.scrollTop = prev;
 }
 
 // Restore whatever view was active before the user started typing a search.

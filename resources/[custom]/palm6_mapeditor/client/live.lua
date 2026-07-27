@@ -299,6 +299,13 @@ end)
 AddEventHandler('palm6_mapeditor:liveDelete', function(id)
     if liveObjs[id] then TriggerServerEvent('palm6_mapeditor:live:removeOne', id) end
 end)
+AddEventHandler('palm6_mapeditor:liveDeleteMany', function(ids)
+    if type(ids) ~= 'table' then return end
+    for _, id in ipairs(ids) do
+        local n = tonumber(id)
+        if n and liveObjs[n] then TriggerServerEvent('palm6_mapeditor:live:removeOne', n) end
+    end
+end)
 
 -- The server confirmed the grab (already despawned the live copy for everyone via
 -- live:remove); spawn it into the personal session, selected, ready to edit.

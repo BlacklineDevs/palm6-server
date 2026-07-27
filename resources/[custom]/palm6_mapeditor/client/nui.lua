@@ -171,6 +171,11 @@ RegisterNUICallback('liveDelete', function(data, cb)
     if id then TriggerEvent('palm6_mapeditor:liveDelete', id) end
     cb('ok')
 end)
+RegisterNUICallback('liveDeleteMany', function(data, cb)
+    local ids = type(data) == 'table' and data.ids or nil
+    if type(ids) == 'table' then TriggerEvent('palm6_mapeditor:liveDeleteMany', ids) end
+    cb('ok')
+end)
 RegisterNUICallback('liveGrab', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id then TriggerEvent('palm6_mapeditor:liveGrab', id) end
