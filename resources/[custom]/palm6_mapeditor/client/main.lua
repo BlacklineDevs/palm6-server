@@ -21,7 +21,8 @@
 -- ============================================================================
 
 local editing = false
-local placed = {}            -- { { obj, model, x, y, z, rx, ry, rz }, ... }
+local placed = {}            -- { { id, obj, model, x, y, z, rx, ry, rz }, ... }
+local nextId = 1             -- monotonic id per placed prop (stable for the outliner)
 local sel = nil              -- index into placed of the selected object
 local catNames, catIdx, propIdx = {}, 1, 0
 local undoStack = {}         -- { {type='spawn'|'delete', rec, index}, ... }
@@ -53,7 +54,8 @@ local function spawnProp(model, x, y, z, rx, ry, rz, noUndo)
     end
     local obj = Game.SpawnObject(model, x, y, z)
     if not obj then Game.Notify('bad model: ' .. tostring(model), 'error') return nil end
-    local rec = { obj = obj, model = model, x = x, y = y, z = z, rx = rx or 0.0, ry = ry or 0.0, rz = rz or 0.0 }
+    local rec = { id = nextId, obj = obj, model = model, x = x, y = y, z = z, rx = rx or 0.0, ry = ry or 0.0, rz = rz or 0.0 }
+    nextId = nextId + 1
     placed[#placed + 1] = rec
     Game.SetObjectTransform(obj, rec.x, rec.y, rec.z, rec.rx, rec.ry, rec.rz)
     selectLast()
@@ -136,6 +138,40 @@ function MapEd.deleteInRadius(x, y, z, rad)
     selectLast(); highlight()
     return n
 end
+
+-- ---- scene outliner (client/nui.lua Scene view) ---------------------------
+-- The NUI lists the session's placed props by stable id, with jump-to and delete.
+local function indexOfId(id)
+    for i, r in ipairs(placed) do if r.id == id then return i end end
+    return nil
+end
+function MapEd.sceneList()
+    local out = {}
+    for _, r in ipairs(placed) do
+        out[#out + 1] = { id = r.id, model = r.model, x = r.x, y = r.y, z = r.z }
+    end
+    return out
+end
+function MapEd.deleteById(id)
+    local i = indexOfId(id); if not i then return false end
+    local r = placed[i]
+    undoStack[#undoStack + 1] = { type = 'delete', rec = r }
+    Game.DeleteObject(r.obj)
+    table.remove(placed, i)
+    selectLast(); highlight()
+    Game.LogActivity('deleted ' .. tostring(r.model))
+    return true
+end
+function MapEd.gotoById(id)
+    local i = indexOfId(id); if not i then return false end
+    sel = i; highlight()
+    local r = placed[i]
+    Game.TeleportPlayer(r.x, r.y, r.z)
+    Game.Notify('jumped to ' .. tostring(r.model), 'inform')
+    return true
+end
+-- Push the current scene to the NUI (on browser open + after an outliner delete).
+Scene = { push = function() SendNUIMessage({ action = 'scene', props = MapEd.sceneList() }) end }
 
 local function applyTransform(r)
     Game.SetObjectTransform(r.obj, r.x, r.y, r.z, r.rx, r.ry, r.rz)

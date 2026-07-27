@@ -43,6 +43,7 @@ var thumbSent = {};     // model -> true once we've asked Lua (dedupe)
 var favs = {};          // model -> true
 var recent = [];        // [model, ...] most recent first
 var kits = [];          // [{name, props, lights}, ...] blueprint kits (prefabs) from Lua
+var scene = [];         // [{id, model, x, y, z}, ...] session placed props (outliner)
 
 // ---- persistence (localStorage; degrades to memory-only if unavailable) -----
 function lsGet(key) {
@@ -410,6 +411,9 @@ var ICON_STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.
 var ICON_RECENT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 7.5 5.3" fill="none" stroke-width="2" stroke-linecap="round"/><path d="M12 7v5l3.5 2" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2.5l3 2.2-3 2.2z"/></svg>';
 // Blueprint kits: outline paths (fill none) + one filled node dot.
 var ICON_KIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z" fill="none" stroke-width="1.7"/><path d="M8 4v5h5V4M13 9h7M13 9v11M4 14h9M8 14v6" fill="none" stroke-width="1.7"/><circle cx="17" cy="15" r="1.5"/></svg>';
+var ICON_SCENE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5Z" fill="none" stroke-width="1.7"/><path d="M3 12l9 5 9-5M3 16l9 5 9-5" fill="none" stroke-width="1.7"/></svg>';
+var ICON_CUBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3Z" fill="none"/><path d="M4.5 7.7l7.5 4.2 7.5-4.2M12 12v8.5" fill="none"/></svg>';
+var ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" fill="none"/><path d="M10 11v5M14 11v5" fill="none"/></svg>';
 
 function makeSpecialRow(id, label, icon, count, active) {
     var row = document.createElement('div');
@@ -425,7 +429,10 @@ function makeSpecialRow(id, label, icon, count, active) {
     row.appendChild(n);
     row.addEventListener('click', function () {
         el.search.value = ''; el.clear.style.display = 'none';
-        if (id === 'fav') selectFav(); else if (id === 'recent') selectRecent(); else selectKits();
+        if (id === 'fav') selectFav();
+        else if (id === 'recent') selectRecent();
+        else if (id === 'kits') selectKits();
+        else selectScene();
     });
     return row;
 }
@@ -433,7 +440,8 @@ function makeSpecialRow(id, label, icon, count, active) {
 function renderCats() {
     el.cats.textContent = '';
 
-    // Pinned pseudo-categories: Blueprint kits + Favorites + Recent, at the top.
+    // Pinned pseudo-categories: Scene + Blueprint kits + Favorites + Recent, at top.
+    el.cats.appendChild(makeSpecialRow('scene', 'Scene', ICON_SCENE, scene.length, view.type === 'scene'));
     el.cats.appendChild(makeSpecialRow('kits', 'Blueprint kits', ICON_KIT, kits.length, view.type === 'kits'));
     el.cats.appendChild(makeSpecialRow('fav', 'Favorites', ICON_STAR, favModels().length, view.type === 'fav'));
     el.cats.appendChild(makeSpecialRow('recent', 'Recent', ICON_RECENT, recentModels().length, view.type === 'recent'));
@@ -546,8 +554,64 @@ function selectKits() {
     el.ctx.textContent = kits.length + (kits.length === 1 ? ' blueprint kit' : ' blueprint kits');
 }
 
+// ---- scene outliner ------------------------------------------------------
+function onScene(list) {
+    scene = Array.isArray(list) ? list : [];
+    if (el.app && !el.app.classList.contains('hidden')) renderCats();  // refresh Scene count
+    if (view.type === 'scene') selectScene();
+}
+
+function gotoScene(id) { hide(); post('sceneGoto', { id: id }); }
+
+function makeSceneRow(item) {
+    var row = document.createElement('div');
+    row.className = 'scene-row';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.title = 'Jump to ' + item.model;
+
+    var ic = document.createElement('span'); ic.className = 'scene-ic'; ic.innerHTML = ICON_CUBE;
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = prettify(item.model);
+    var co = document.createElement('div'); co.className = 'scene-coords';
+    co.textContent = item.model + '  ·  ' + item.x.toFixed(1) + ', ' + item.y.toFixed(1) + ', ' + item.z.toFixed(1);
+    main.appendChild(nm); main.appendChild(co);
+    var del = document.createElement('button');
+    del.className = 'scene-del'; del.title = 'Delete'; del.setAttribute('aria-label', 'Delete prop');
+    del.innerHTML = ICON_TRASH;
+    del.addEventListener('click', function (ev) { ev.stopPropagation(); post('sceneDelete', { id: item.id }); });
+
+    row.appendChild(ic); row.appendChild(main); row.appendChild(del);
+    row.addEventListener('click', function () { gotoScene(item.id); });
+    row.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); gotoScene(item.id); }
+        else if (ev.key === 'Delete') { ev.preventDefault(); post('sceneDelete', { id: item.id }); }
+    });
+    return row;
+}
+
+function selectScene() {
+    view = { type: 'scene' }; lastBrowse = view;
+    renderCats();
+    el.grid.scrollTop = 0;
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+    if (!scene.length) {
+        el.grid.appendChild(emptyState('Nothing placed yet',
+            'Spawn props to build your scene — they list here to jump to or remove.'));
+        el.ctx.textContent = 'Scene';
+        return;
+    }
+    var list = document.createElement('div'); list.className = 'scene-list';
+    for (var i = 0; i < scene.length; i++) list.appendChild(makeSceneRow(scene[i]));
+    el.grid.appendChild(list);
+    el.ctx.textContent = scene.length + (scene.length === 1 ? ' object in scene' : ' objects in scene');
+}
+
 // Restore whatever view was active before the user started typing a search.
 function restoreBrowse() {
+    if (lastBrowse.type === 'scene') { selectScene(); return; }
     if (lastBrowse.type === 'kits') { selectKits(); return; }
     if (lastBrowse.type === 'fav') { selectFav(); return; }
     if (lastBrowse.type === 'recent') { selectRecent(); return; }
@@ -1018,6 +1082,7 @@ window.addEventListener('message', function (e) {
     // dedupes, so the browser-click path double-firing this is harmless.
     else if (d.action === 'recent') { if (typeof d.model === 'string') pushRecent(d.model); }
     else if (d.action === 'kits') onKits(d.kits);
+    else if (d.action === 'scene') onScene(d.props);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);
 });

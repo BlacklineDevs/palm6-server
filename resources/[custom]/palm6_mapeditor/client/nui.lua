@@ -28,6 +28,7 @@ local function openBrowser()
     SetNuiFocus(true, true)
     SendNUIMessage({ action = 'open', groups = Config.PropGroups or {} })
     if Prefabs and Prefabs.sendKits then Prefabs.sendKits() end   -- populate Blueprint Kits
+    if Scene and Scene.push then Scene.push() end                 -- populate the Scene outliner
 end
 
 local function closeBrowser()
@@ -99,6 +100,24 @@ RegisterNUICallback('stampPrefab', function(data, cb)
     if type(name) == 'string' and #name > 0 and #name <= 64 then
         TriggerEvent('palm6_mapeditor:stampPrefab', name)
     end
+    closeBrowser()
+    cb('ok')
+end)
+
+-- Scene outliner: delete a placed prop by id (browser stays open, list refreshes)
+-- or jump to it (select + teleport, then close so you can see it).
+RegisterNUICallback('sceneDelete', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and MapEd and MapEd.deleteById then
+        MapEd.deleteById(id)
+        if Scene and Scene.push then Scene.push() end
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('sceneGoto', function(data, cb)
+    local id = type(data) == 'table' and tonumber(data.id) or nil
+    if id and MapEd and MapEd.gotoById then MapEd.gotoById(id) end
     closeBrowser()
     cb('ok')
 end)

@@ -492,6 +492,32 @@ kbd { font: inherit; }
 }
 .kit-detail-tile svg { top: 50%; width: 64px; height: 64px; }
 
+/* ---- scene outliner (list, not cards) ---- */
+.cat.special.is-scene .ic svg { fill: none; }
+.scene-list { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 0.4rem; }
+.scene-row {
+    display: flex; align-items: center; gap: 0.7rem; padding: 0.55rem 0.75rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+}
+.scene-row:hover { border-color: var(--amber-line); background: var(--surface-2); }
+.scene-row:focus-visible { outline: none; border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); }
+.scene-ic {
+    flex: 0 0 auto; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+    border-radius: 7px; background: var(--panel-deep); border: 1px solid var(--line);
+}
+.scene-ic svg { width: 16px; height: 16px; fill: none; stroke: var(--cyan); stroke-width: 1.6; stroke-linejoin: round; }
+.scene-main { flex: 1 1 auto; min-width: 0; }
+.scene-name { font-family: var(--display); font-size: 0.8rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scene-coords { font-family: var(--mono); font-size: 0.62rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scene-del {
+    flex: 0 0 auto; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line-2); background: var(--panel); border-radius: 7px; cursor: pointer; transition: all 0.12s;
+}
+.scene-del svg { width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.scene-del:hover { border-color: var(--danger); background: rgba(255, 107, 107, 0.12); }
+.scene-del:hover svg { stroke: var(--danger); }
+
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar, .detail-info::-webkit-scrollbar { width: 11px; }
 .cats::-webkit-scrollbar-thumb, .grid::-webkit-scrollbar-thumb, .help-body::-webkit-scrollbar-thumb, .detail-info::-webkit-scrollbar-thumb {
