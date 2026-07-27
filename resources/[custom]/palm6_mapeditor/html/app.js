@@ -239,6 +239,7 @@ var el = {
     detailDesc: document.getElementById('detailDesc'),
     detailFav: document.getElementById('detailFav'),
     detailSpawnLabel: document.getElementById('detailSpawnLabel'),
+    detailRelated: document.getElementById('detailRelated'),
 };
 
 function post(cb, body) {
@@ -937,6 +938,43 @@ function describe(model, cat) {
     return s;
 }
 
+// Other models in the same family: strip a trailing variant token (digits +
+// optional letter, e.g. "02a") and match models sharing that stem. So
+// prop_barrel_02a surfaces prop_barrel_01a / 03a / pile_01a. Capped.
+function relatedModels(model) {
+    var stem = String(model).replace(/\d+[a-z]*$/i, '');
+    if (stem.length < 7) return [];   // too generic a stem -> skip
+    var out = [];
+    for (var i = 0; i < allModels.length && out.length < 10; i++) {
+        var m = allModels[i];
+        if (m !== model && m.indexOf(stem) === 0) out.push(m);
+    }
+    return out;
+}
+
+function renderRelated(model) {
+    if (!el.detailRelated) return;
+    el.detailRelated.textContent = '';
+    var rel = relatedModels(model);
+    if (!rel.length) { el.detailRelated.style.display = 'none'; return; }
+    el.detailRelated.style.display = '';
+    var h = document.createElement('div'); h.className = 'detail-related-t'; h.textContent = 'Variants';
+    el.detailRelated.appendChild(h);
+    var grid = document.createElement('div'); grid.className = 'rel-grid';
+    rel.forEach(function (m) {
+        var tile = document.createElement('button'); tile.className = 'rel-tile'; tile.type = 'button'; tile.title = m;
+        var th = document.createElement('div'); th.className = 'thumb rel-thumb';
+        th.setAttribute('data-glyph', initials(m)); th.style.setProperty('--h', catHue(modelCat[m] || ''));
+        var img = document.createElement('img'); img.alt = ''; th.appendChild(img);
+        requestThumb(m, img, th);
+        var lab = document.createElement('span'); lab.className = 'rel-lab'; lab.textContent = prettify(m);
+        tile.appendChild(th); tile.appendChild(lab);
+        tile.addEventListener('click', function () { openDetail(m); });
+        grid.appendChild(tile);
+    });
+    el.detailRelated.appendChild(grid);
+}
+
 function metaRow(k, v) {
     var row = document.createElement('div'); row.className = 'meta-row';
     var dt = document.createElement('dt'); dt.textContent = k;
@@ -978,6 +1016,7 @@ function openDetail(model) {
     el.detailMeta.appendChild(metaRow('Preview', res));
 
     el.detailFav.classList.toggle('on', isFav(model));
+    renderRelated(model);
 
     el.detail.classList.remove('hidden');
     el.detail.setAttribute('aria-hidden', 'false');
@@ -1028,6 +1067,7 @@ function openKitDetail(kit) {
     el.detailMeta.appendChild(metaRow('Target', 'Your aim'));
 
     if (el.detailFav) el.detailFav.style.display = 'none';
+    if (el.detailRelated) { el.detailRelated.textContent = ''; el.detailRelated.style.display = 'none'; }
     setDetailButton('Stamp at aim');
 
     el.detail.classList.remove('hidden');

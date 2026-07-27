@@ -451,6 +451,28 @@ kbd { font: inherit; }
 .meta-row dd { color: var(--text); font-family: var(--mono); font-size: 0.72rem; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .detail-desc { color: var(--muted-2); font-size: 0.82rem; line-height: 1.55; }
 
+.detail-related { margin-top: 1.15rem; }
+.detail-related-t {
+    font-family: var(--display); font-size: 0.64rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--amber); margin-bottom: 0.6rem;
+}
+.rel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 0.55rem; }
+.rel-tile {
+    display: flex; flex-direction: column; gap: 0.3rem; padding: 0; cursor: pointer;
+    background: none; border: none; text-align: left;
+}
+.rel-thumb {
+    width: 100%; border: 1px solid var(--line); border-radius: 7px; overflow: hidden;
+    transition: border-color 0.12s, box-shadow 0.12s;
+}
+.rel-tile:hover .rel-thumb { border-color: var(--amber-line); box-shadow: 0 0 0 1px var(--amber-line); }
+.rel-tile:focus-visible { outline: none; }
+.rel-tile:focus-visible .rel-thumb { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber); }
+.rel-lab {
+    font-size: 0.6rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rel-tile:hover .rel-lab { color: var(--text); }
+
 .detail-foot { flex: 0 0 auto; padding: 0.9rem 1.1rem 1.1rem; border-top: 1px solid var(--line); }
 .spawn-btn {
     width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem;
