@@ -47,8 +47,35 @@ end
 
 -- Register a callback fired when a player's job changes. The callback
 -- receives (src, jobName). This hides the framework's job-update event name.
+--
+-- AddEventHandler, NOT RegisterNetEvent: qbx_core raises
+-- QBCore:Server:OnJobUpdate server-side with TriggerEvent, so AddEventHandler is
+-- sufficient to receive it. RegisterNetEvent would additionally make the name
+-- network-addressable for EVERY listener on the box, letting a modified client
+-- announce an arbitrary job change and drive this whitelist enforcement path
+-- with fabricated arguments.
+--
+-- The swap is behaviour-neutral: RegisterNetEvent(name, cb) is just
+-- RegisterNetEvent(name) + AddEventHandler(name, cb), so the handler and the
+-- value of `source` inside it are identical either way. What is NOT true (an
+-- earlier version of this comment claimed it) is that a server-side
+-- TriggerEvent "inherits the triggering context's source". This repo's own
+-- shared server-raise predicate says the opposite: a raise from inside the
+-- server VM surfaces as nil, <= 0, or 65535 - see
+-- palm6_eventguard/server/main.lua guard(), palm6_mdt/bridge/sv_framework.lua:249-250
+-- and palm6_witnesses/server/main.lua:494-495. So `source` here must be treated
+-- as unreliable, which is why the explicit first argument wins below.
 function Bridge.OnJobChanged(handler)
-    RegisterNetEvent('QBCore:Server:OnJobUpdate', function(_src, jobInfo)
-        handler(source, jobInfo and jobInfo.name or nil)
+    AddEventHandler('QBCore:Server:OnJobUpdate', function(evtSrc, jobInfo)
+        -- Prefer the EXPLICIT first argument - qbx_core passes the affected
+        -- player's server id there, and enforcement (server/main.lua:59 ->
+        -- enforce(src, ...)) rolls back a job against whatever id it is handed.
+        -- Fall back to the ambient `source` only when the argument is missing or
+        -- is not a plausible player id, so a fork with a different signature
+        -- degrades to the old behaviour instead of enforcing against a
+        -- non-player.
+        local src = tonumber(evtSrc)
+        if not src or src <= 0 or src == 65535 then src = source end
+        handler(src, jobInfo and jobInfo.name or nil)
     end)
 end

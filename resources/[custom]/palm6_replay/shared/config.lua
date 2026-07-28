@@ -87,8 +87,23 @@ Config.Triggers = {
     -- Auto-flag scenes when other palm6 resources fire their incident events.
     -- Consumed read-only — palm6_replay never modifies those resources.
     -- Remove an entry to detach; add entries to flag more systems.
+    --
+    -- TRUST BOUNDARY (fixed 2026-07-28): this listed 'palm6_robbery:start', the
+    -- raw CLIENT-triggerable net event palm6_robbery/client/main.lua fires the
+    -- moment a player walks up to an ATM - before ANY of the server's start gates
+    -- (police count, weapon, per-ATM cooldown, proximity) have run. Any modified
+    -- client could therefore mint replay scenes at will, for robberies that were
+    -- rejected or never happened. The correct signal is 'palm6_robbery:started',
+    -- which palm6_robbery/server/main.lua:58 raises with TriggerEvent ONLY after
+    -- every gate passed. palm6_witnesses/shared/config.lua:56-62 already had
+    -- this right and its server/main.lua:502-512 documents the same reasoning.
+    --
+    -- Names listed here are subscribed through Bridge.OnForeignNetEvent, which
+    -- routes server-only signals to AddEventHandler instead of RegisterNetEvent
+    -- (see bridge/sv_framework.lua) - so switching the name here does NOT quietly
+    -- re-open it to the network.
     AutoFlagEvents = {
-        { event = 'palm6_robbery:start', type = 'robbery', label = 'Robbery in progress' },
+        { event = 'palm6_robbery:started', type = 'robbery', label = 'Robbery in progress' },
     },
 }
 

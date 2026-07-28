@@ -1,6 +1,8 @@
 # PALM6 AI-NPC Living World — Deploy & Browser-Walk RUNBOOK
 
-_The canonical, gate-by-gate procedure for lighting up the `palm6_brain` AI-NPC world safely. Everything ships **dark**; you flip one gate at a time, verify with a meter, and browser-walk each new behavior before moving on. The one that matters most is the money attack-path walk (§6) — do not skip it._
+_The canonical, gate-by-gate procedure for lighting up the `palm6_brain` AI-NPC world safely. You flip one gate at a time, verify with a meter, and browser-walk each new behavior before moving on. The one that matters most is the money attack-path walk (§6) - do not skip it._
+
+> **⚠️ Read §2 before you assume anything is off.** This doc used to open with "everything ships **dark**". That has not been true for a while: as of 2026-07-28 most of `palm6_brain` is **LIVE in production**, including the Director tick and the crime/911 path. §2's table below was regenerated from the as-shipped config values on that date and every row now cites the file:line it came from. The remaining genuinely-dark gate is the money one, `Config.Director.MoneyEnabled`.
 
 > Companion to `docs/AI-NPC-ROADMAP.md` (the plan). This is the **operations** doc: what's actually built, where every gate is, and how to turn it on without breaking a live server.
 
@@ -24,20 +26,37 @@ _The canonical, gate-by-gate procedure for lighting up the `palm6_brain` AI-NPC 
 
 ---
 
-## 2. Every gate (default state = the whole system is OFF)
+## 2. Every gate - AS SHIPPED (regenerated 2026-07-28)
 
-| Gate | File | Default | Controls |
+This table previously listed the *intended* dark defaults, not what is in the tree. Every row below was read out of the file it names on **2026-07-28**. **Re-verify before every gate flip** - that is the whole reason this table exists, and it is the one document that governs a flip.
+
+Rows are anchored by **key**, not by line number. Line numbers in `palm6_brain/shared/config.lua` drift on almost every commit, and a citation that quietly goes stale is exactly the failure this table is recovering from. To re-check the whole set in one shot:
+
+```
+grep -n "^Config.Enabled\|^\s*Enabled = \|^\s*DryRun = \|^\s*CrimeEnabled = \|^\s*MoneyEnabled = " \
+  resources/\[custom\]/palm6_brain/shared/config.lua
+```
+
+| Gate | File | As shipped 2026-07-28 | Controls |
 |---|---|---|---|
-| `Config.Enabled` | palm6_brain `shared/config.lua` | **true** | Ambient/named/dialogue (already live) |
-| `Config.Director.Enabled` | palm6_brain `shared/config.lua` | **false** | The Director tick loop + mover materialization |
-| `Config.Director.DryRun` | palm6_brain `shared/config.lua` | **true** | true = decide+log only; false = commit goals + broadcast + actuate |
-| `Config.Director.CrimeEnabled` | palm6_brain `shared/config.lua` | **false** | rob/deal/attack verbs + police dispatch |
-| `Config.Director.MoneyEnabled` | palm6_brain `shared/config.lua` | **false** | orderAt/buyFrom verbs + passive income |
-| `Config.NpcPassiveIncome` | **palm6_business** `shared/config.lua` | **false** | The palm6_business side of passive income (BOTH this and MoneyEnabled required) |
-| `CFG.Enabled` (factions) | palm6_brain `server/factions.lua` | **false** | Grudge tracking + retaliation context |
-| `CFG.Enabled` (chatter) | palm6_brain `client/chatter.lua` | **false** | Ambient overheard chatter |
+| `Config.Enabled` | palm6_brain `shared/config.lua` | 🟢 **true** | Master gate. Ambient + named NPC life, dialogue |
+| `Config.Director.Enabled` | palm6_brain `shared/config.lua` | 🟢 **true** | The 60s Director tick loop + mover materialization |
+| `Config.Director.DryRun` | palm6_brain `shared/config.lua` | 🟢 **false** (= live) | false means goals are COMMITTED, broadcast and actuated |
+| `Config.Director.CrimeEnabled` | palm6_brain `shared/config.lua` | 🟢 **true** | rob/deal/attack verbs + throttled 911 dispatch to on-duty cops |
+| `Config.Director.MoneyEnabled` | palm6_brain `shared/config.lua` | 🔴 **false** | orderAt/buyFrom verbs + passive income. **The one still held dark** |
+| `Config.NpcPassiveIncome` | **palm6_business** `shared/config.lua` | 🔴 **false** | palm6_business side of passive income (BOTH this and MoneyEnabled are required) |
+| `Config.NetPed.Enabled` | palm6_brain `shared/config.lua` | 🟡 **true**, inert | Armed: handler + re-assert loop run, but nothing spawns until `/netpedtest` |
+| `Config.Social.Enabled` | palm6_brain `shared/config.lua` | 🟢 **true** | talk-to-any-ped, personas, reputation. Witness/gossip/snitch stay inert until crime events fire |
+| `CFG.Enabled` (factions) | palm6_brain `server/factions.lua` | 🟢 **true** | Grudge tracking + retaliation context (inert until a crime happens) |
+| `CFG.Enabled` (chatter) | palm6_brain `client/chatter.lua` | 🟢 **true** | Ambient overheard chatter (also requires `Config.Enabled`) |
 
-> Rollback for ANY step = set that gate back to its default and redeploy.
+Legend: 🟢 live · 🟡 armed but inert until an explicit trigger · 🔴 dark.
+
+> Rollback for ANY step = set that gate back to `false` and redeploy. **There is no longer an all-dark baseline to fall back to** - rolling the master `Config.Enabled` to false turns off ambient NPC life that players currently see.
+
+**For anyone cross-checking:** `palm6_brain/fxmanifest.lua` and `custom.cfg` both described this resource as "Ships DARK" until they were corrected on 2026-07-28. If you find a third place still saying it, that place is wrong. The authority is `shared/config.lua`, always.
+
+**Sections 4 and 5 below are written as if the theater and crime gates are still off.** They are not; those walks describe state that is already live. Treat §4/§5 as the *verification checklist* for the current build rather than as steps still to perform. §6 (money) is the only section describing a flip that has genuinely not happened yet.
 
 ---
 
@@ -111,7 +130,9 @@ If ANY of these fails — income exceeds the cap, credits without supply, or flo
 | `braingoals` | Live goal store + TTL remaining |
 | `brainmemory` | Recent notable events (memory digest) |
 
-All are ACE-restricted (`command.<name>`).
+All are `RegisterCommand(..., true)`, i.e. ACE-restricted on `command.<name>`.
+
+> **Gap noted 2026-07-28, not yet fixed:** `custom.cfg` grants no `command.brain*` ACEs. Because these are plain restricted commands (no `lib.addCommand` auto-grant), the only principal that can run them in-game today is `group.owner`, via the blanket `add_ace group.owner command allow`. The **server console** can always run them, which is what §3 assumes, so this is a convenience gap rather than a blocker. If you want admins to reach the meters in-game, add `add_ace group.admin command.brainstatus allow` (and siblings) to `custom.cfg`.
 
 ---
 
