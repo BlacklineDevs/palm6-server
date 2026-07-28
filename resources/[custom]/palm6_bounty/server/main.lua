@@ -387,14 +387,41 @@ local function syncStateContracts()
     if not Config.State.Enabled then return end
     if Config.State.RequireMdt and not Bridge.ResourceStarted('palm6_mdt') then return end
 
+    -- Eligibility predicate (Config.State.RequireCase, ships dark). When off
+    -- this is the empty string and the query is byte-for-byte what it always
+    -- was. When on, only warrants the city can point at a real case file - or
+    -- one of the AUTOMATED issuers - put money on a head. case_id is the
+    -- column palm6_mdt writes at server/main.lua:335; officer_name is what
+    -- each automated issuer passes as its officerLabel. There are four of
+    -- them, not one (Config.State.SystemIssuers documents each with its call
+    -- site), so the placeholder list is built from the config rather than
+    -- hard-coded: a single-issuer predicate would have silently dropped
+    -- bail-skip and kidnapping warrants.
+    local eligibility, params = '', {}
+    if Config.State.RequireCase then
+        local issuers = Config.State.SystemIssuers or {}
+        local marks = {}
+        for _, label in ipairs(issuers) do
+            marks[#marks + 1] = '?'
+            params[#params + 1] = label
+        end
+        if #marks > 0 then
+            eligibility = (' AND (case_id IS NOT NULL OR officer_name IN (%s))'):format(
+                table.concat(marks, ','))
+        else
+            -- No automated issuers configured: case file or nothing.
+            eligibility = ' AND case_id IS NOT NULL'
+        end
+    end
+
     local warrantRows = {}
     pcall(function()
-        warrantRows = MySQL.query.await([[
+        warrantRows = MySQL.query.await(([[
             SELECT citizenid, citizen_name, COUNT(*) AS n
             FROM palm6_mdt_warrants
-            WHERE status = 'active'
+            WHERE status = 'active'%s
             GROUP BY citizenid, citizen_name
-        ]]) or {}
+        ]]):format(eligibility), params) or {}
     end)
 
     local S = Config.State
@@ -430,7 +457,11 @@ local function syncStateContracts()
     end
 
     -- Expire state contracts for anyone whose warrants all cleared without
-    -- being captured — no player money involved, nothing to refund.
+    -- being captured - no player money involved, nothing to refund. With
+    -- RequireCase ON this also retracts a contract whose warrant no longer
+    -- qualifies, which is the same "the city stopped wanting them" outcome and
+    -- equally refund-free. 'claimed' rows are never selected here, so a payout
+    -- in flight is untouched.
     local openState = {}
     pcall(function()
         openState = MySQL.query.await(

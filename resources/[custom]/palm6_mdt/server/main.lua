@@ -103,6 +103,10 @@ local function cmdMdt(src)
         lines[#lines + 1] = 'case system offline'
     end
     lines[#lines + 1] = 'file paperwork: /mdtreport [case# or 0] [text]'
+    -- Advertise the identification rung: without it an officer has no way to
+    -- learn the citizenid every other command below wants.
+    lines[#lines + 1] = ('identify who you are standing with: /%s%s'):format(
+        Config.Identify.Command, Config.RunPlate.Enabled and '  -  run a plate: /runplate [plate]' or '')
     Bridge.Reply(src, lines)
 end
 
@@ -306,6 +310,22 @@ function activeWarrantsFor(citizenid)
     return rows
 end
 
+-- Staff audit sink. The whole police stack wrote to NO audit log - a booking
+-- fired a Discord announce and a world-public cityfeed post naming a real
+-- citizen with nothing an admin could later query. palm6_staff:Log is the
+-- house sink four other resources already use (allowlist, devtest, eventguard,
+-- onboarding); this is the police stack's first two entries.
+--
+-- Soft by house rule: never let a missing/broken audit sink fail a booking.
+-- palm6_staff's log() is NOT internally pcall'd (its MySQL.insert.await can
+-- throw), so the pcall here is load-bearing, not decorative.
+local function auditLog(action, actorSrc, targetSrc, detail)
+    if not Bridge.ResourceStarted('palm6_staff') then return end
+    pcall(function()
+        exports.palm6_staff:Log(action, actorSrc, targetSrc, detail)
+    end)
+end
+
 -- Optional case reference shared by /warrant and /book: 0 = none, >0 must
 -- be a real case. Returns validated caseId (0 for none) or nil on error.
 local function refCase(src, raw)
@@ -357,15 +377,56 @@ local function issueWarrant(target, citizenName, caseId, reason, issuerCid, offi
     return warrantId
 end
 
--- /warrant <citizenid> <case#|0> <reason...>
+-- ---------------------------------------------------------------------------
+-- /id - who is this person? The rung the ladder was missing: every command
+-- below wanted a citizenid, and an officer had no in-game way to learn one.
+--
+-- Server-authoritative by construction: the officer supplies NO argument, so
+-- there is nothing to spoof. The server reads its own ped positions, picks the
+-- nearest player inside Config.Identify.Radius, and replies to the officer
+-- only. Police-gated by gate() (on duty + tablet) so this never becomes a
+-- civilian doxx tool: the citizenid it prints is exactly what /warrant, /book
+-- and /cite consume, and nobody outside the gate ever sees it.
+-- ---------------------------------------------------------------------------
+local function cmdId(src)
+    if not gate(src, 'id') then return end
+    local near = Bridge.NearestPlayer(src, Config.Identify.Radius)
+    if not near or not near.citizenid then
+        Bridge.Notify(src, 'MDT', 'Nobody close enough to identify - stand with them.', 'error')
+        return
+    end
+    local lines = {
+        ('%s - citizen %s'):format(near.name or 'Unknown citizen', near.citizenid),
+    }
+    local w = activeWarrantsFor(near.citizenid)
+    if #w > 0 then
+        lines[#lines + 1] = ('ACTIVE WARRANT #%d - %s'):format(w[1].id, w[1].reason)
+        if #w > 1 then lines[#lines + 1] = ('… and %d more active warrant(s)'):format(#w - 1) end
+    else
+        lines[#lines + 1] = 'no active warrants'
+    end
+    -- Print each command with the argument form THAT command can actually
+    -- parse. /warrant and /book go through Bridge.ResolveTarget and take
+    -- either, so they get the short server id an officer can realistically
+    -- retype mid-scene. /cite lives in palm6_citations, which resolves its
+    -- first argument with Bridge.GetCitizenName (palm6_citations/server/
+    -- main.lua:71,83) and has no ResolveTarget, so it gets the citizenid.
+    -- Printing a server id there would hand the officer a command that
+    -- answers "No citizen with that id on record."
+    lines[#lines + 1] = ('/cite %s … | /warrant %d … | /book %d …'):format(
+        near.citizenid, near.src, near.src)
+    Bridge.Reply(src, lines)
+end
+
+-- /warrant <citizenid|server id> <case#|0> <reason...>
 local function cmdWarrant(src, args)
     local cid = gate(src, 'warrant')
     if not cid then return end
-    local target = tostring(args[1] or '')
+    local raw = tostring(args[1] or '')
     local caseId = refCase(src, args[2])
     local reason = table.concat(args, ' ', 3):gsub('^%s+', ''):gsub('%s+$', '')
-    if target == '' or not caseId or #reason < Config.Warrants.ReasonMinChars then
-        Bridge.Notify(src, 'MDT', 'Usage: /warrant [citizenid] [case# or 0] [reason]', 'error')
+    if raw == '' or not caseId or #reason < Config.Warrants.ReasonMinChars then
+        Bridge.Notify(src, 'MDT', 'Usage: /warrant [citizenid or server id] [case# or 0] [reason]', 'error')
         return
     end
     if #reason > Config.Warrants.ReasonMaxChars then
@@ -374,8 +435,12 @@ local function cmdWarrant(src, args)
         return
     end
 
-    local citizenName = Bridge.GetCitizenName(target)
-    if not citizenName then
+    -- Accept EITHER a raw citizenid (unchanged, still works) or the online
+    -- server id /id just printed. ResolveTarget only treats an all-digit
+    -- argument as a server id when a live character actually sits on it, so a
+    -- numeric citizenid still resolves as a citizenid.
+    local target, citizenName = Bridge.ResolveTarget(raw)
+    if not target or not citizenName then
         Bridge.Notify(src, 'MDT', 'No citizen with that id on record.', 'error')
         return
     end
@@ -391,6 +456,12 @@ local function cmdWarrant(src, args)
         Bridge.Notify(src, 'MDT', 'Warrant system is down — nothing was issued.', 'error')
         return
     end
+    -- targetSrc is nil for an offline citizen - correct and expected here, a
+    -- warrant is issued in absentia; the citizenid in `detail` is the durable
+    -- link either way.
+    auditLog('mdt_warrant', src, Bridge.GetSourceByCitizenId(target),
+        ('warrant #%d on %s (%s), case %s: %s'):format(
+            warrantId, citizenName, target, caseId > 0 and tostring(caseId) or 'none', reason))
     dbg(('warrant #%d on %s by %s'):format(warrantId, target, cid))
 end
 
@@ -443,16 +514,17 @@ local function cmdWarrantClear(src, args)
     end
 end
 
--- /book <citizenid> <case#|0> <charges...> — arrest paperwork; auto-serves
--- the citizen's active warrants. The physical jailing stays qbx_police's.
+-- /book <citizenid|server id> <case#|0> <charges...> - arrest paperwork;
+-- auto-serves the citizen's active warrants. Physical jailing stays
+-- qbx_police's.
 local function cmdBook(src, args)
     local cid = gate(src, 'book')
     if not cid then return end
-    local target = tostring(args[1] or '')
+    local raw = tostring(args[1] or '')
     local caseId = refCase(src, args[2])
     local charges = table.concat(args, ' ', 3):gsub('^%s+', ''):gsub('%s+$', '')
-    if target == '' or not caseId or #charges < Config.Warrants.ChargesMin then
-        Bridge.Notify(src, 'MDT', 'Usage: /book [citizenid] [case# or 0] [charges]', 'error')
+    if raw == '' or not caseId or #charges < Config.Warrants.ChargesMin then
+        Bridge.Notify(src, 'MDT', 'Usage: /book [citizenid or server id] [case# or 0] [charges]', 'error')
         return
     end
     if #charges > Config.Warrants.ChargesMax then
@@ -461,10 +533,36 @@ local function cmdBook(src, args)
         return
     end
 
-    local citizenName = Bridge.GetCitizenName(target)
-    if not citizenName then
+    -- Same cid-or-server-id resolution as /warrant (see the comment there).
+    local target, citizenName = Bridge.ResolveTarget(raw)
+    if not target or not citizenName then
         Bridge.Notify(src, 'MDT', 'No citizen with that id on record.', 'error')
         return
+    end
+
+    -- Presence gate (A24, SHIPS DARK - Config.Warrants.RequirePresence=false).
+    -- Nothing in the booking path checked that the person being booked was
+    -- anywhere near the officer, or even online, yet a booking fires a Discord
+    -- announce and a world-public cityfeed post naming them. When flipped on,
+    -- the citizen must be connected and within a generous desk-sized radius,
+    -- both read server-side.
+    -- Resolved ONCE and reused by both the presence gate below and the
+    -- "you were booked" notify further down: GetSourceByCitizenId walks every
+    -- connected player, and two walks for the same citizen in one command was
+    -- pure duplication.
+    local tSrc = Bridge.GetSourceByCitizenId(target)
+
+    if Config.Warrants.RequirePresence then
+        if not tSrc then
+            Bridge.Notify(src, 'MDT', ('%s is not online - you cannot book them.'):format(citizenName), 'error')
+            return
+        end
+        local d = Bridge.DistanceBetween(src, tSrc)
+        if not d or d > Config.Warrants.PresenceRadius then
+            Bridge.Notify(src, 'MDT',
+                ('%s is not with you at the desk.'):format(citizenName), 'error')
+            return
+        end
     end
 
     -- Post-bail re-arrest grace (palm6_yard): someone who just posted bail can't
@@ -513,7 +611,6 @@ local function cmdBook(src, args)
         end)
     end
 
-    local tSrc = Bridge.GetSourceByCitizenId(target)
     if tSrc then
         Bridge.Notify(tSrc, 'Booking', ('You were booked: %s'):format(charges), 'error')
     end
@@ -553,10 +650,70 @@ local function cmdBook(src, args)
             })
         end)
     end
+    auditLog('mdt_booking', src, tSrc,
+        ('booking #%d on %s (%s), case %s, %d warrant(s) served: %s'):format(
+            bookingId, citizenName, target, caseId > 0 and tostring(caseId) or 'none',
+            served, charges))
     Bridge.Notify(src, 'MDT',
         ('Booking #%d filed on %s%s.'):format(bookingId, citizenName,
             served > 0 and (', %d warrant(s) served'):format(served) or ''), 'success')
     dbg(('booking #%d on %s by %s (%d warrants served)'):format(bookingId, target, cid, served))
+end
+
+-- ---------------------------------------------------------------------------
+-- /runplate <plate> - the first police counterplay to the chop-shop loop.
+-- palm6_chopshop keeps a real, persistent, queryable stolen-plate registry
+-- that no officer could read; this is the read. Purely a lookup: it writes
+-- nothing, takes nothing, and answers three questions an officer can act on -
+-- is this plate reported stolen, who is it registered to, and does that owner
+-- have warrants out.
+--
+-- Soft-dep on palm6_chopshop (GetResourceState + pcall, house idiom): with
+-- the chop shop stopped the command still runs and simply says the registry
+-- is offline rather than erroring.
+-- ---------------------------------------------------------------------------
+local function cmdRunPlate(src, args)
+    if not gate(src, 'runplate') then return end
+    local plate = tostring(args[1] or ''):upper():gsub('%s+', '')
+    if plate == '' or #plate > Config.RunPlate.MaxLen then
+        Bridge.Notify(src, 'MDT', 'Usage: /runplate [plate]', 'error')
+        return
+    end
+
+    local lines = { ('plate %s'):format(plate) }
+
+    local hot
+    if Bridge.ResourceStarted('palm6_chopshop') then
+        pcall(function() hot = exports.palm6_chopshop:IsStolen(plate) end)
+        if type(hot) ~= 'table' then hot = nil end
+    end
+    if not hot then
+        lines[#lines + 1] = 'stolen registry offline'
+    elseif hot.stolen then
+        lines[#lines + 1] = ('REPORTED STOLEN - since %s'):format(tostring(hot.since))
+    else
+        lines[#lines + 1] = 'no active stolen report'
+    end
+
+    -- Registered keeper, then that keeper's warrant status. An unregistered
+    -- plate is the normal case for an NPC vehicle, so say so plainly.
+    local owner = Bridge.GetPlateOwner(plate)
+    if not owner then
+        lines[#lines + 1] = 'not registered to any citizen'
+    else
+        lines[#lines + 1] = ('registered to %s (citizen %s)'):format(owner.name, owner.citizenid)
+        local w = activeWarrantsFor(owner.citizenid)
+        if #w > 0 then
+            lines[#lines + 1] = ('owner has ACTIVE WARRANT #%d - %s'):format(w[1].id, w[1].reason)
+        end
+        -- When the registered keeper reported it stolen themselves, the keeper
+        -- is the VICTIM, not the suspect. Say it out loud so nobody books the
+        -- wrong person off a hot-plate hit.
+        if hot and hot.stolen and hot.owner_citizenid == owner.citizenid then
+            lines[#lines + 1] = 'the registered owner filed the theft report (victim, not suspect)'
+        end
+    end
+    Bridge.Reply(src, lines)
 end
 
 -- ---------------------------------------------------------------------------
@@ -650,29 +807,64 @@ local function insertCall(text, coords, label)
     text = tostring(text or ''):gsub('^%s+', ''):gsub('%s+$', '')
     if text == '' then return false end
     if #text > Config.Calls.TextMax then text = text:sub(1, Config.Calls.TextMax) end
+    -- src_label is VARCHAR(64). Clamp rather than let a long label throw under
+    -- strict SQL mode, which the pcall below would swallow into a lost row.
+    label = tostring(label or '')
+    if #label > 64 then label = label:sub(1, 64) end
     local ok = false
     pcall(function()
         ok = MySQL.insert.await(
             'INSERT INTO palm6_mdt_calls (text, x, y, z, src_label) VALUES (?, ?, ?, ?, ?)',
             { text, coords and coords.x or nil, coords and coords.y or nil,
-              coords and coords.z or nil, tostring(label or '') }) ~= nil
+              coords and coords.z or nil, label }) ~= nil
     end)
     if ok then dbg(('call logged: %s'):format(text)) end
     return ok
 end
 
-local function recordCall(text, src, coords)
+-- Throttle for the dropped-alert console line: one print per window, so a
+-- flood costs one line, not thousands, while a LEGITIMATE client-side producer
+-- on the live box still shows up in the console within a minute of firing.
+local lastProvenanceWarn = 0
+
+local function recordCall(text, src, coords, serverRaised)
     if not Config.Calls.Enabled then return end
+
+    -- A3: provenance. Notify is the recipe's business (separate handler,
+    -- untouched); PERSISTING is ours. The DEFAULT behaviour is to keep the row
+    -- and stamp it (see the label block below) because the qbx robbery
+    -- producers raise this event client-side by design and dropping them would
+    -- gut the 911 log. RequireServerProvenance is the opt-in hard drop for
+    -- operators who would rather have no row than an unverified one; it bails
+    -- before the cooldown bookkeeping so a client flood cannot burn a slot a
+    -- real producer might want.
+    if Config.Calls.RequireServerProvenance and not serverRaised then
+        local t = now()
+        if lastProvenanceWarn + 60 <= t then
+            lastProvenanceWarn = t
+            print(('^3[palm6_mdt] client-raised policeAlert NOT persisted (Config.Calls.RequireServerProvenance) - src=%s text=%q. If a real producer raises this client-side, flip that flag.^0')
+                :format(tostring(src or '?'), tostring(text or ''):sub(1, 80)))
+        end
+        return
+    end
 
     local key = src or 0
     local t = now()
     if (lastCallBySrc[key] or 0) + Config.Calls.PerSourceCdSec > t then return end
     lastCallBySrc[key] = t
 
+    -- src_label is the row's provenance stamp, not just an attribution. A
+    -- client-raised alert is marked `unverified` so an officer reading /calls
+    -- can tell a dispatch a trusted server-side producer vouched for from one
+    -- that arrived across the net boundary and could have been fabricated.
+    -- Column is VARCHAR(64); the longest form here is well inside that.
     local label = ''
     if src then
         local cid = Bridge.GetCitizenId(src)
         label = cid and ('citizen %s'):format(cid) or ''
+    end
+    if not serverRaised then
+        label = label ~= '' and (label .. ' (unverified)') or 'unverified'
     end
     insertCall(text, coords, label)
 end
@@ -711,6 +903,131 @@ CreateThread(function()
 end)
 
 -- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_ems/server/main.lua
+-- :67-105: Wait(3000) for oxmysql, per-statement pcall, CREATE TABLE IF NOT
+-- EXISTS. sql/ files are applied BY HAND (deploy/README.md; CI never touches
+-- the DB), so a fresh box that missed one left every query here pcall-swallowed
+-- into silence - /mdt reporting zeros instead of "schema MISSING". Re-runs are
+-- harmless no-ops on the live box, which already has these tables.
+--
+-- Every statement below is copied VERBATIM from the matching sql/ file so the
+-- two can never diverge:
+--   palm6_mdt_bolos, palm6_mdt_reports        <- sql/0022_mdt.sql
+--   palm6_mdt_warrants, palm6_mdt_bookings    <- sql/0023_warrants.sql
+--   palm6_mdt_calls                           <- sql/0025_calls.sql
+-- and one BEST-EFFORT statement, run separately below:
+--   ALTER bookings ADD sealed_at              <- sql/0026_legal.sql
+-- The ALTER belongs to palm6_legal's migration but targets a table THIS
+-- resource owns, and palm6_legal has no self-create of its own; without it a
+-- fresh box would create bookings with no sealed_at and both GetBookingsFor
+-- and SealBooking would fail forever.
+--
+-- It is deliberately kept OUT of the schemaOk signal. ADD COLUMN IF NOT EXISTS
+-- is MariaDB syntax (exactly as 0026's own header argues); MySQL 8 has no such
+-- form and THROWS on it, even on a box where all five tables exist and sealed_at
+-- was already applied by hand from sql/0026_legal.sql. Folding that throw into
+-- schemaOk made the boot banner report `schema MISSING` forever on MySQL, which
+-- is the opposite of the signal the banner was added to give. The five CREATEs
+-- are the tables this resource owns and are what schemaOk answers for; the ALTER
+-- warns on its own line and is left to the operator.
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_mdt_bolos` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    officer_name VARCHAR(100) NOT NULL DEFAULT '',
+    body VARCHAR(160) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    resolved_by VARCHAR(64) DEFAULT NULL,
+    INDEX idx_palm6_mdt_bolos_active (resolved_at, expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_mdt_reports` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    officer_name VARCHAR(100) NOT NULL DEFAULT '',
+    case_id INT UNSIGNED DEFAULT NULL,
+    body TEXT NOT NULL,
+    filed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_mdt_reports_cid (citizenid),
+    INDEX idx_palm6_mdt_reports_case (case_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_mdt_warrants` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    citizen_name VARCHAR(100) NOT NULL DEFAULT '',
+    issued_by VARCHAR(64) NOT NULL,
+    officer_name VARCHAR(100) NOT NULL DEFAULT '',
+    case_id INT UNSIGNED DEFAULT NULL,
+    reason VARCHAR(200) NOT NULL,
+    status ENUM('active','served','dropped') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    resolved_by VARCHAR(64) DEFAULT NULL,
+    INDEX idx_palm6_mdt_warrants_citizen (citizenid, status),
+    INDEX idx_palm6_mdt_warrants_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_mdt_bookings` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    citizen_name VARCHAR(100) NOT NULL DEFAULT '',
+    booked_by VARCHAR(64) NOT NULL,
+    officer_name VARCHAR(100) NOT NULL DEFAULT '',
+    case_id INT UNSIGNED DEFAULT NULL,
+    warrant_id INT UNSIGNED DEFAULT NULL,
+    charges TEXT NOT NULL,
+    booked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_mdt_bookings_citizen (citizenid),
+    INDEX idx_palm6_mdt_bookings_case (case_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_mdt_calls` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    text VARCHAR(160) NOT NULL,
+    x DOUBLE DEFAULT NULL,
+    y DOUBLE DEFAULT NULL,
+    z DOUBLE DEFAULT NULL,
+    src_label VARCHAR(64) NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_mdt_calls_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+    }
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_mdt] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+
+    -- Best effort, NOT part of schemaOk (see the header note): MariaDB-only
+    -- syntax that throws on MySQL 8 whether or not the column is already there.
+    local okAlter, errAlter = pcall(function()
+        MySQL.query.await([[
+ALTER TABLE `palm6_mdt_bookings`
+    ADD COLUMN IF NOT EXISTS sealed_at TIMESTAMP NULL DEFAULT NULL;
+        ]])
+    end)
+    if not okAlter then
+        print(('^3[palm6_mdt] bookings.sealed_at self-heal skipped (MariaDB-only ADD COLUMN IF NOT EXISTS) -> %s. Apply sql/0026_legal.sql by hand if palm6_legal sealing misbehaves.^0')
+            :format(tostring(errAlter)))
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Commands + boot
 -- ---------------------------------------------------------------------------
 -- onResourceStart can fire more than once for this resource's own name in
@@ -745,17 +1062,33 @@ AddEventHandler('onResourceStart', function(resource)
     Bridge.RegisterCommand('warrantclear', function(source, args) cmdWarrantClear(source, args) end)
     Bridge.RegisterCommand('book', function(source, args) cmdBook(source, args) end)
     Bridge.RegisterCommand('calls', function(source, args) cmdCalls(source, args) end)
-
-    if Config.Calls.Enabled then
-        Bridge.OnPoliceAlert(recordCall)
-        pruneCalls()
+    Bridge.RegisterCommand(Config.Identify.Command, function(source) cmdId(source) end)
+    if Config.RunPlate.Enabled then
+        Bridge.RegisterCommand('runplate', function(source, args) cmdRunPlate(source, args) end)
     end
 
-    print(('[palm6_mdt] desk online — %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s), %d call(s)/24h; contract %s, case system %s, call log %s')
-        :format(activeBoloCount(), activeWarrantCount(), reportCount(), bookingCount(), calls24h(),
-            Bridge.GetMDTContract() and 'qbx_police_overrides' or 'built-in defaults',
-            Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline',
-            Config.Calls.Enabled and 'ON' or 'off'))
+    -- Net-event registration is a pure native and must NOT sit behind the
+    -- oxmysql-connect wait, or a `restart palm6_mdt` would miss every alert
+    -- raised in that ~3s window (the same reasoning palm6_ems documents at
+    -- :422-427 for its command registration).
+    if Config.Calls.Enabled then
+        Bridge.OnPoliceAlert(recordCall)
+    end
+
+    -- Schema + the counts that read it move into a thread so the DDL lands
+    -- before anything SELECTs. Everything above stays synchronous.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        if Config.Calls.Enabled then pruneCalls() end
+
+        print(('[palm6_mdt] desk online - %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s), %d call(s)/24h; contract %s, case system %s, call log %s, schema %s')
+            :format(activeBoloCount(), activeWarrantCount(), reportCount(), bookingCount(), calls24h(),
+                Bridge.GetMDTContract() and 'qbx_police_overrides' or 'built-in defaults',
+                Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline',
+                Config.Calls.Enabled and 'ON' or 'off',
+                schemaOk and 'OK' or '^1MISSING^0'))
+    end)
 end)
 
 -- ADDITIVE export — sibling systems (palm6_citations' overdue escalation)

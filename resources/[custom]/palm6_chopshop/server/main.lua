@@ -16,9 +16,11 @@
 -- staff-driven flag (a private local `Plates` table with no export, no
 -- persistence, resets on resource restart) — this resource does not (and
 -- cannot, no export exists) write into it. `palm6_chopshop_stolen` is its
--- own independent, persistent, queryable registry; a future palm6_mdt
--- extension could surface it via a `/runplate` command, but that is
--- explicitly out of scope here (no forced integration without a real hook).
+-- own independent, persistent, queryable registry; palm6_mdt now surfaces it
+-- via `/runplate`, reading the additive IsStolen export at the bottom of this
+-- file. That is a READ-ONLY integration in the correct direction: this
+-- resource publishes a frozen-signature export and knows nothing about the
+-- MDT, exactly like GetSummary.
 -- ============================================================================
 
 local lastAction = {} -- [src] = { [key] = ts } — chat-command spam guard
@@ -281,6 +283,45 @@ AddEventHandler('onResourceStart', function(resource)
         totalSales = r and tonumber(r.n) or 0
     end)
     print(('[palm6_chopshop] shop open — %d active stolen report(s), %d sale(s) all-time'):format(activeReports, totalSales))
+end)
+
+-- ADDITIVE export - the police side of the registry. Until now the stolen
+-- table was WRITE-ONLY from a cop's point of view: a citizen could report a
+-- plate stolen and the chop shop could consume the report, but no officer had
+-- any way to ask "is this plate hot?". palm6_mdt's /runplate is the first
+-- consumer. Same never-change-signature rule as GetSummary.
+--
+-- IsStolen(plate: string) -> { stolen: boolean, owner_citizenid: string|nil,
+--   since: string|nil }
+-- `stolen` is true only for a live report: status='active' AND not yet past
+-- expires_at, which is exactly the WHERE clause /sellstolen uses, so the two
+-- agree on what "still hot" means.
+--
+-- They do NOT agree on the lookup KEY, and that is pre-existing, not something
+-- this export introduced. The plate normalisation here (:upper() plus strip of
+-- ALL whitespace) matches the WRITER, /reportstolen. /sellstolen instead reads
+-- its plate off the vehicle entity via Bridge.GetVehiclePlate
+-- (bridge/sv_framework.lua), which only trims TRAILING pad and does not
+-- uppercase. So a report filed with odd casing or an interior space can still
+-- read hot here and clean at the shop. Do not read this export as a guarantee
+-- that the two surfaces classify every plate identically; it is a guarantee
+-- about the staleness rule only.
+-- `since` is the report timestamp (reported_at), stringified for the caller.
+exports('IsStolen', function(plate)
+    local out = { stolen = false, owner_citizenid = nil, since = nil }
+    plate = tostring(plate or ''):upper():gsub('%s+', '')
+    if plate == '' then return out end
+    local row
+    pcall(function()
+        row = MySQL.single.await(
+            "SELECT owner_citizenid, reported_at FROM palm6_chopshop_stolen WHERE plate = ? AND status = 'active' AND expires_at > NOW() ORDER BY id DESC LIMIT 1",
+            { plate })
+    end)
+    if not row then return out end
+    out.stolen = true
+    out.owner_citizenid = row.owner_citizenid
+    out.since = tostring(row.reported_at)
+    return out
 end)
 
 ---Report/sale counts for devtest and future consumers.

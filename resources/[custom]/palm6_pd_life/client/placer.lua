@@ -9,6 +9,8 @@
 --
 -- This is an admin DEV tool: the live input/HUD uses natives directly (never
 -- ships to GTA VI). Ped spawn/move/raycast/clipboard go through Game.* (bridge).
+-- Every command below is ACE-gated (Config.PlacerAce) - the server answers a
+-- perm request at load, see server/perm.lua.
 --
 -- COMMANDS
 --   /placeped [scenario]   start the editor (preview where you aim / at your feet)
@@ -103,23 +105,44 @@ local function clearAll()
     placed = {}
 end
 
+-- ---- ACE gate -------------------------------------------------------------
+-- This is an admin dev tool, so ask the server once at load whether we may
+-- drive it and refuse every command until it says yes. Same shape as the map
+-- editor (palm6_mapeditor/client/main.lua:32-35): the client cannot decide
+-- this for itself, and nothing here is networked, so an advisory gate is the
+-- right weight. See server/perm.lua for the full reasoning.
+local allowed = false
+
+RegisterNetEvent('palm6_pd_life:perm', function(ok) allowed = ok and true or false end)
+CreateThread(function() Wait(1500); TriggerServerEvent('palm6_pd_life:checkPerm') end)
+
+-- Returns true when the caller may NOT proceed (and has been told why), so
+-- every handler below opens with the same one-line guard.
+local function denied()
+    if allowed then return false end
+    Game.Chat('[placeped]', '^1not authorized - the ped placement editor is admin-only^7')
+    return true
+end
+
 -- ---- commands -------------------------------------------------------------
-RegisterCommand('placeped', function(_, args) startEditor(args[1]) end, false)
-RegisterCommand('pedroom', function(_, args) roomTag = args[1]; Game.Chat('[placeped]', 'room = ' .. tostring(roomTag)) end, false)
-RegisterCommand('pedscen', function(_, args) if preview and args[1] then preview.scen = args[1]; spawnPreview() end end, false)
-RegisterCommand('pednext', function() if preview then scenIdx = scenIdx % #SCENARIOS + 1; preview.scen = SCENARIOS[scenIdx]; spawnPreview() end end, false)
-RegisterCommand('pedprev', function() if preview then scenIdx = (scenIdx - 2) % #SCENARIOS + 1; preview.scen = SCENARIOS[scenIdx]; spawnPreview() end end, false)
-RegisterCommand('pedmodel', function() if preview then modelIdx = modelIdx + 1; spawnPreview() end end, false)
-RegisterCommand('pedrole', function(_, args) role = (args[1] == 'civ') and 'civ' or 'cop'; modelIdx = 1; if preview then spawnPreview() end end, false)
+RegisterCommand('placeped', function(_, args) if denied() then return end startEditor(args[1]) end, false)
+RegisterCommand('pedroom', function(_, args) if denied() then return end roomTag = args[1]; Game.Chat('[placeped]', 'room = ' .. tostring(roomTag)) end, false)
+RegisterCommand('pedscen', function(_, args) if denied() then return end if preview and args[1] then preview.scen = args[1]; spawnPreview() end end, false)
+RegisterCommand('pednext', function() if denied() then return end if preview then scenIdx = scenIdx % #SCENARIOS + 1; preview.scen = SCENARIOS[scenIdx]; spawnPreview() end end, false)
+RegisterCommand('pedprev', function() if denied() then return end if preview then scenIdx = (scenIdx - 2) % #SCENARIOS + 1; preview.scen = SCENARIOS[scenIdx]; spawnPreview() end end, false)
+RegisterCommand('pedmodel', function() if denied() then return end if preview then modelIdx = modelIdx + 1; spawnPreview() end end, false)
+RegisterCommand('pedrole', function(_, args) if denied() then return end role = (args[1] == 'civ') and 'civ' or 'cop'; modelIdx = 1; if preview then spawnPreview() end end, false)
 RegisterCommand('pedundo', function()
+    if denied() then return end
     if #placed == 0 then return end
     local last = table.remove(placed)
     Game.DeletePed(last.ped)
     Game.Chat('[placeped]', 'removed last (' .. #placed .. ' left)')
 end, false)
-RegisterCommand('pedclear', function() clearAll(); Game.Chat('[placeped]', 'cleared all') end, false)
-RegisterCommand('pedstop', function() closeEditor(); Game.Chat('[placeped]', ('editor closed — %d placed, /pedexport to copy'):format(#placed)) end, false)
+RegisterCommand('pedclear', function() if denied() then return end clearAll(); Game.Chat('[placeped]', 'cleared all') end, false)
+RegisterCommand('pedstop', function() if denied() then return end closeEditor(); Game.Chat('[placeped]', ('editor closed - %d placed, /pedexport to copy'):format(#placed)) end, false)
 RegisterCommand('pedexport', function(_, args)
+    if denied() then return end
     if #placed == 0 then Game.Chat('[placeped]', 'nothing placed yet') return end
     local lines = {}
     for _, p in ipairs(placed) do lines[#lines + 1] = p.line end

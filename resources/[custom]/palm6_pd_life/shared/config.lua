@@ -14,6 +14,14 @@ Config = {}
 Config.Brand = 'PBPD'
 Config.DevPlacement = true
 
+-- ACE the /placeped placement editor (and its ten sub-commands) is gated on.
+-- The server answers a perm request at load and the client refuses every
+-- command until it hears yes - the same shape palm6_mapeditor uses
+-- (server/main.lua:17-19 + client/main.lua:32-35, Config.Ace='command.mapedit').
+-- custom.cfg's blanket `add_ace group.owner command allow` already resolves
+-- this for the owner, so David keeps the tool with or without a specific grant.
+Config.PlacerAce = 'command.placeped'
+
 -- Height (m) a seated ped is raised above the furniture origin so it lands on the
 -- seat surface instead of the floor. Tune this one number if sits sink/float.
 Config.SeatHeight = 0.45
@@ -21,6 +29,29 @@ Config.SeatHeight = 0.45
 -- Interactive duty layer (Phase B). Police may man a post (relieving its ambient
 -- NPC) and toggle duty. PoliceJob matches the rest of the palm6 police stack.
 Config.PoliceJob = 'police'
+
+-- /pdduty gating. Being on duty is the gate for MDT, evidence, citations,
+-- seizure, blotter, heat and EMS, and until now it was a chat command an
+-- officer could fire from anywhere on the map with no cooldown.
+Config.DutyGate = {
+    -- Require the officer to be at the station's duty point. SHIPS OFF: the
+    -- post/duty layer has nothing to do inside the station yet (Config.Rooms
+    -- below is empty), so turning this on today would add a gate in front of
+    -- an empty room. Flip it once the room posts are captured in-game.
+    -- Note it gates BOTH directions: an officer must come back to the desk to
+    -- clock out, which is the intended "shift" feel but is worth a feel-test
+    -- before it goes live.
+    Enabled     = false,
+    -- The duty point itself is NEVER hardcoded here - it is read at call time
+    -- from exports.qbx_police_overrides:GetDutyToggle(). This is only the
+    -- floor applied to that contract's radius, which is sized for an ox_target
+    -- prompt (1.0m) rather than a typed command.
+    MinRadius   = 25.0,
+    -- Per-source anti-spam on the toggle itself. Ships ON because a duty flip
+    -- is a job-state write that fans out to seven other resources and no human
+    -- toggles duty twice in three seconds. Set 0 to disable.
+    CooldownSec = 3,
+}
 
 -- Chair models that become sittable via ox_target /sit. The station's resolved
 -- seating props (extracted from the MLO) plus common base-game office chairs.
