@@ -13,7 +13,11 @@
 -- ============================================================================
 
 local lastAction = {}   -- [src] = ts of last /launder (spam guard)
-AddEventHandler('playerDropped', function() lastAction[source] = nil end)  -- reclaim on disconnect
+local lastQuote  = {}   -- [src] = ts of last /dirtymoney (spam guard)
+AddEventHandler('playerDropped', function()  -- reclaim on disconnect
+    lastAction[source] = nil
+    lastQuote[source] = nil
+end)
 local frontHeat = 0.0   -- single-front heat accumulator (server-only, decays)
 
 math.randomseed(os.time())
@@ -59,6 +63,31 @@ local function assessHeat(amount)
         if math.random() < chance then return true end
     end
     return false
+end
+
+-- Persistent-heat scrutiny at the front. Returns (extraCut, tier, refuse) for
+-- the character. The front reads palm6_heat's frozen GetTier export and skims
+-- harder off a citizen the whole city is already looking for. Soft-dep + pcall:
+-- a stopped or throwing palm6_heat leaves the flat Config.Cut untouched, so the
+-- wash can never break because the heat layer is down.
+local function heatScrutiny(cid)
+    if not Config.HeatScrutiny.Enabled then return 0.0, nil, false end
+    if GetResourceState('palm6_heat') ~= 'started' then return 0.0, nil, false end
+    local tier
+    pcall(function() tier = exports.palm6_heat:GetTier(cid) end)
+    if type(tier) ~= 'string' then return 0.0, nil, false end
+    if Config.HeatScrutiny.Refuse[tier] then return 0.0, tier, true end
+    return tonumber(Config.HeatScrutiny.ExtraCut[tier]) or 0.0, tier, false
+end
+
+-- Persistent police attention this run earns its launderer, amount-proportional
+-- (see Config.PlayerHeat for why flat-per-run was the wrong shape).
+local function playerHeatFor(amount, flagged)
+    local H = Config.PlayerHeat
+    local h = math.floor(H.Base + (amount / 1000.0) * H.PerThousand)
+    if h > H.MaxPerRun then h = H.MaxPerRun end
+    if flagged then h = h + H.FlaggedBonus end
+    return h
 end
 
 -- Open/append an evidence case for a flagged run. Returns the case id or nil.
@@ -112,6 +141,16 @@ local function cmdLaunder(src)
         return
     end
 
+    -- How hot the launderer already is decides what the front charges them (or
+    -- whether it deals with them at all). Read BEFORE any item is removed so a
+    -- refusal costs the player nothing but the cooldown they already burned.
+    local extraCut, heatTier, refused = heatScrutiny(cid)
+    if refused then
+        Bridge.Notify(src, 'Laundromat',
+            'The front knows your face from the news. They want nothing to do with you.', 'error')
+        return
+    end
+
     local held = Bridge.CountItem(src, Config.DirtyItem)
     if held <= 0 then
         Bridge.Notify(src, 'Laundromat', 'You have no dirty money to wash.', 'error')
@@ -137,7 +176,11 @@ local function cmdLaunder(src)
         return
     end
 
-    local cleanOut = math.floor(amount * (1.0 - Config.Cut))
+    -- Total skim = the standing fee plus whatever the heat surcharge added.
+    -- Clamped so a wash always pays out something, and recorded in the run row
+    -- below (fee_bps) so the ledger reflects what was actually charged.
+    local cut = math.min(0.90, Config.Cut + extraCut)
+    local cleanOut = math.floor(amount * (1.0 - cut))
     if not Bridge.CreditBank(src, cleanOut, 'laundering') then
         -- Credit failed after we pulled the cash — hand it straight back so
         -- the player is never charged for a wash they didn't receive.
@@ -158,25 +201,30 @@ local function cmdLaunder(src)
             [[INSERT INTO palm6_laundering_runs
                 (citizenid, dirty_in, clean_out, fee_bps, flagged, evidence_case_id)
               VALUES (?, ?, ?, ?, ?, ?)]],
-            { cid, amount, cleanOut, math.floor(Config.Cut * 10000 + 0.5), flagged and 1 or 0, caseId })
+            { cid, amount, cleanOut, math.floor(cut * 10000 + 0.5), flagged and 1 or 0, caseId })
     end)
 
     Bridge.Notify(src, 'Laundromat',
-        ('Washed $%d — $%d landed clean in your account.'):format(amount, cleanOut), 'success')
+        (extraCut > 0.0)
+            and ('Washed $%d for $%d clean. The front skimmed extra; you are too hot to be worth the risk.')
+                :format(amount, cleanOut)
+            or ('Washed $%d — $%d landed clean in your account.'):format(amount, cleanOut),
+        (extraCut > 0.0) and 'warning' or 'success')
 
-    -- Persistent police attention: moving dirty money is a crime, and a run the
-    -- law flagged (police alerted + evidence filed) bumps the launderer harder
-    -- than a quiet wash. Keyed to the character (cid) so it follows them after
-    -- they log. Soft-dep + pcall — a stopped palm6_heat never touches the wash.
+    -- Persistent police attention: moving dirty money is a crime, the SIZE of
+    -- the wash is what makes it loud, and a run the law flagged (police alerted
+    -- + evidence filed) bumps the launderer harder still. Keyed to the character
+    -- (cid) so it follows them after they log. Fires only after the item pull +
+    -- bank credit above committed. Soft-dep + pcall: a stopped palm6_heat never
+    -- touches the wash.
     if GetResourceState('palm6_heat') == 'started' then
         pcall(function()
-            exports.palm6_heat:AddHeat(cid,
-                Config.PlayerHeat.Base + (flagged and Config.PlayerHeat.FlaggedBonus or 0),
-                'launder')
+            exports.palm6_heat:AddHeat(cid, playerHeatFor(amount, flagged), 'launder')
         end)
     end
 
-    dbg(('%s washed $%d -> $%d clean (flagged=%s, heat=%.1f)'):format(cid, amount, cleanOut, tostring(flagged), frontHeat))
+    dbg(('%s washed $%d -> $%d clean (flagged=%s, tier=%s, cut=%.2f, heat=%.1f)'):format(
+        cid, amount, cleanOut, tostring(flagged), tostring(heatTier), cut, frontHeat))
 end
 
 -- ---------------------------------------------------------------------------
@@ -184,13 +232,27 @@ end
 -- ---------------------------------------------------------------------------
 local function cmdDirtyMoney(src)
     if src == 0 then return end
+    -- Read-only, but not free: this command now costs TWO DB round-trips (the
+    -- dirtyWashedToday sum plus the palm6_heat GetTier read below), and unlike
+    -- /launder it has no Config.CooldownSec behind it. Check-and-set before any
+    -- yield, same idiom as cmdLaunder.
+    local t = now()
+    if (lastQuote[src] or 0) + Config.QuoteCooldownSec > t then return end
+    lastQuote[src] = t
+
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
     local held = Bridge.CountItem(src, Config.DirtyItem)
     local remaining = math.max(0, Config.DailyCap - dirtyWashedToday(cid))
+    -- Quote the fee this character would ACTUALLY pay, surcharge included.
+    -- Otherwise a hot launderer reads 30% here and gets charged 40% at the
+    -- machine, which looks like a bug rather than a consequence.
+    local extraCut = heatScrutiny(cid)
+    local cut = math.min(0.90, Config.Cut + extraCut)
     Bridge.Notify(src, 'Dirty Money',
-        ('Holding $%d dirty · today you can still wash $%d · fee %d%%'):format(
-            held, remaining, math.floor(Config.Cut * 100 + 0.5)), 'inform')
+        ('Holding $%d dirty · today you can still wash $%d · fee %d%%%s'):format(
+            held, remaining, math.floor(cut * 100 + 0.5),
+            (extraCut > 0.0) and ' (the front is charging you extra)' or ''), 'inform')
 end
 
 -- ---------------------------------------------------------------------------

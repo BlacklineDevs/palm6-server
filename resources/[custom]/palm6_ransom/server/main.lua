@@ -27,6 +27,12 @@ local lastAction = {}    -- [src] = { [key] = ts } — chat-command spam guard
 AddEventHandler('playerDropped', function() lastAction[source] = nil end)  -- reclaim on disconnect
 local lastKidnapBy = {}  -- [kidnapperCid] = { victimCid, victimName, ts } — validated kidnap, pending a demand
 
+-- Persistent police attention (palm6_heat) for opening a ransom case. Mirrors
+-- palm6_heat Config.Suggested.kidnap_ransom. Kidnapping is the second-heaviest
+-- weight in that table for a reason. Charged on the DEMAND, never on the payout
+-- (see the wire below for why).
+local HEAT_ON_DEMAND = 45
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -163,6 +169,21 @@ local function cmdDemandRansom(src, args)
     end
 
     Bridge.Notify(src, 'Ransom', ('Ransom #%d demanded: $%d.'):format(caseId, amount), 'success')
+
+    -- Persistent police attention: the felony is the kidnapping, not the payday,
+    -- so this fires on the DEMAND (after the case row committed above) and is
+    -- keyed to the kidnapper's own cid. Deliberately NOT in settleRansomPayout:
+    -- that path is re-driven by the boot reconcile to recover a crashed payout,
+    -- and would re-charge 45 heat on every recovering restart. Bounded by the
+    -- validated-kidnap gate (lastKidnapBy is consumed above) and the one-active-
+    -- case-per-victim check. Soft-dep + pcall: a stopped palm6_heat never
+    -- touches the demand path.
+    if Bridge.ResourceStarted('palm6_heat') then
+        pcall(function()
+            exports.palm6_heat:AddHeat(kidnapperCid, HEAT_ON_DEMAND, 'kidnap_ransom', kidnapperName)
+        end)
+    end
+
     local victimSrc = Bridge.GetSourceByCitizenId(pending.victimCid)
     if victimSrc then
         Bridge.Notify(victimSrc, 'Ransom',

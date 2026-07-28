@@ -66,6 +66,49 @@ local function near(src, coords, radius)
     return Bridge.Distance(c, coords) <= radius
 end
 
+-- ---------------------------------------------------------------------------
+-- Persistent police attention (palm6_heat). Distinct from `dealerHeat` above:
+-- dealerHeat is this resource's own transient corner-selling bust probability,
+-- this is the durable per-character score that drives /heat, the season
+-- Most-Wanted ladder and dispatch priority, and follows the dealer after they
+-- log. Weights mirror palm6_heat's Config.Suggested; they live here as named
+-- locals rather than in shared/config.lua so the numbers sit next to the wire
+-- and are never bare literals in a payout path.
+--
+-- ANTI-FARM: Config.Sell.cooldownSec is 8s, so an unthrottled wire would let a
+-- dealer with a full bag out-run palm6_heat's 0.75/min decay by ~20x and pin
+-- themselves to the cap off one harvest. HEAT_MIN_GAP caps this resource to one
+-- heat add per citizen per REASON per minute, so a long dealing session climbs
+-- steadily instead of instantly. The daily dirty-cash caps bound the session
+-- itself.
+-- ---------------------------------------------------------------------------
+local HEAT_ON_SELL = 3      -- palm6_heat Config.Suggested.drug_sale
+local HEAT_ON_COOK = 6      -- palm6_heat Config.Suggested.drug_lab
+local HEAT_MIN_GAP = 60     -- seconds between heat adds from this resource, per cid+reason
+-- Keyed cid..'|'..reason, NOT cid alone. One shared ledger would let the cheap
+-- action eat the expensive one's charge: a dealer who sells (3) and then
+-- collects a lab (6) inside the same minute would have scored 3 and had the 6
+-- silently swallowed, so the throttle would have been a discount on the heavier
+-- crime. Per-reason keeps the 8s sell cooldown from out-running decay (the
+-- reason this throttle exists) without letting a sale pay for a cook.
+local heatLast     = {}     -- [cid|reason] = ts of the last add (pruned on write)
+
+local function addPlayerHeat(cid, amount, reason)
+    if type(cid) ~= 'string' or cid == '' then return end
+    if GetResourceState('palm6_heat') ~= 'started' then return end
+    local t = now()
+    local key = cid .. '|' .. tostring(reason)
+    if (heatLast[key] or 0) + HEAT_MIN_GAP > t then return end
+    heatLast[key] = t
+    -- Bound the ledger: an entry older than the gap can no longer gate anything.
+    for k, ts in pairs(heatLast) do
+        if ts + HEAT_MIN_GAP < t then heatLast[k] = nil end
+    end
+    pcall(function()
+        exports.palm6_heat:AddHeat(cid, amount, reason)
+    end)
+end
+
 local function normQuality(q)
     q = tonumber(q)
     if not q then return Config.DefaultQuality end
@@ -931,6 +974,13 @@ RegisterNetEvent('palm6_drugs:sell', function(slot, item)
         msg = msg .. ' (Daily buyer limit hit — the rest keeps.)'
     end
     Bridge.Notify(src, Config.Sell.label, msg, flagged and 'warning' or 'success')
+
+    -- Persistent police attention: street dealing is a crime. Keyed to the
+    -- seller (cid) so it follows them after they log. Fires only after the
+    -- payout above committed. Soft-dep + pcall (inside addPlayerHeat): a
+    -- stopped palm6_heat never touches the sale path.
+    addPlayerHeat(cid, HEAT_ON_SELL, 'drug_sale')
+
     dbg(('%s sold %dx %s for $%d (flagged=%s)'):format(cid, units, item, total, tostring(flagged)))
 end)
 
@@ -1493,6 +1543,13 @@ RegisterNetEvent('palm6_drugs:cookCollect', function(stationId)
     Bridge.Notify(src, Config.Cook.label,
         ('Collected %dx crystal (%s)%s.'):format(
             yieldN, Config.QualityLabel(quality), (#effects > 0) and ' — came out dirty' or ''), 'success')
+
+    -- Persistent police attention: running a lab is a heavier crime than moving
+    -- a few grams. Keyed to the cook (cid). Fires only after the crystal was
+    -- actually handed over above. A "hands full" bail puts the process back and
+    -- returns before here, so a jammed collect scores nothing. Soft-dep + pcall.
+    addPlayerHeat(cid, HEAT_ON_COOK, 'drug_lab')
+
     dbg(('%s collected %dx meth (q%d) from burner %d'):format(cid, yieldN, quality, stationId))
 end)
 

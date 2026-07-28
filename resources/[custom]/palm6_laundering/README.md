@@ -69,3 +69,21 @@ Export `GetSummary()` returns `{ totalRuns, totalDirtyWashed, flaggedRuns }`.
 `Config.Cut` (fee), `MinPerRun`/`MaxPerRun`/`DailyCap`, `CooldownSec`,
 `Config.Heat.*`, and `Config.Front.coords` (a Tier-3 Los Santos placeholder —
 verify/retune the laundromat spot in-game).
+
+Two knobs govern this front's relationship with `palm6_heat` (the durable,
+per-character police-attention score, not the transient `Config.Heat` above):
+
+- `Config.PlayerHeat` is what a wash **costs** you in heat. It is
+  amount-proportional (`Base + dirty/1000 * PerThousand`, capped at
+  `MaxPerRun`, plus `FlaggedBonus` when the law noticed). It used to be a flat
+  charge per run, which made the fewest, largest runs the cheapest way to move
+  a haul (a $500 wash and a $25,000 wash scored the same 5), the exact
+  inverse of the stated design, where dumping a whole bank haul at once is
+  supposed to be the loud play. This is a **default-on balance change**: a
+  minimum $500 wash now scores 1 instead of 5. Set `Base = 5` and
+  `PerThousand = 0` to restore the old flat charge exactly.
+- `Config.HeatScrutiny` is what your existing heat **costs you at the front**.
+  A `HOT` or `WANTED` citizen pays `ExtraCut` on top of `Config.Cut` (quoted
+  honestly by `/dirtymoney`), or is refused outright if their tier is listed in
+  `Refuse`. Set `Enabled = false` to restore the old flat-cut behaviour. This is
+  the first live consumer of the `palm6_heat:GetTier` export.

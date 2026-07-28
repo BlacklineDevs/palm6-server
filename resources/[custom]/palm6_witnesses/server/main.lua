@@ -325,6 +325,26 @@ local function finalizeIncident(draft)
     Bridge.Notify(draft.src, 'Witnesses',
         ('Someone saw that. %d pair%s of eyes on you.'):format(#rows, #rows == 1 and '' or 's'), 'error')
 
+    -- Persistent police attention: a crime with living witnesses is a crime the
+    -- city remembers. This is the only portable hook that reaches the heavy qbx
+    -- crimes (they are not in this repo). See Config.Heat for the weight table,
+    -- for which crimes are deliberately absent from it, and for the
+    -- `emitterOwnsHeat` suppression that keeps an in-repo crime from being
+    -- charged twice. Keyed to the incident's OWN suspect cid, and fired only
+    -- after the incident actually persisted above, so a dropped incident scores
+    -- nothing. Soft-dep + pcall: a stopped palm6_heat never touches this path.
+    if Config.Heat.Enabled and draft.cid and not draft.emitterOwnsHeat then
+        local weight = Config.Heat.Weights[inc.crime]
+        local exempt = Config.Heat.ExemptOnDutyPolice and Bridge.IsOnDutyPolice(draft.src)
+        if weight and weight > 0 and not exempt
+            and GetResourceState('palm6_heat') == 'started' then
+            pcall(function()
+                exports.palm6_heat:AddHeat(draft.cid, weight, inc.crime,
+                    Bridge.GetPlayerName(draft.src))
+            end)
+        end
+    end
+
     -- Opt-in alert layer. NEVER for hooks qbx already alerts on — those
     -- resources roll their own NPC-reported alerts for the same crimes,
     -- and a second ping would double-dispatch every robbery.
@@ -343,8 +363,10 @@ end
 
 -- The bus entry point. `witnessCoordsOverride` lets the intimidation path
 -- seed witnesses from known observer positions instead of a fresh NPC
--- scan. Returns true if an incident draft was accepted.
-local function reportCrime(src, hook, witnessCoordsOverride)
+-- scan. `emitterOwnsHeat` marks a crime whose OWNING resource already scores
+-- its own palm6_heat (see Config.Heat): witnesses are still created, only the
+-- heat charge is suppressed. Returns true if an incident draft was accepted.
+local function reportCrime(src, hook, witnessCoordsOverride, emitterOwnsHeat)
     if not hook or not hook.enabled then return false end
     src = tonumber(src)
     if not src or src <= 0 then return false end
@@ -381,6 +403,7 @@ local function reportCrime(src, hook, witnessCoordsOverride)
         vehicle = Bridge.GetVehicleFacts(src),  -- server-side natives only
         appearance = nil,
         skipCooldown = witnessCoordsOverride ~= nil,
+        emitterOwnsHeat = emitterOwnsHeat == true,
     }
 
     -- Appearance (top variation + mask) needs the suspect's client. A
@@ -477,7 +500,18 @@ RegisterNetEvent('police:server:policeAlert', function(_, _, playerSource)
     local src = isServerCall and tonumber(playerSource) or invoker
     if not src or src <= 0 or src == 65535 then return end
     if not rl(src, 'policeAlert') then return end
-    reportCrime(src, hook)
+
+    -- HEAT SUPPRESSION (see Config.Heat). `isServerCall` is not just a trust
+    -- discriminator, it is also the emitter discriminator: every in-repo
+    -- palm6_* resource that raises this alert does so from its own
+    -- bridge/sv_framework.lua with a server-side TriggerEvent and an explicit
+    -- playerSource (business, counterfeit, drugs, laundering, protection,
+    -- smuggling, and this resource itself; grep 'police:server:policeAlert'),
+    -- and each of those already owns its AddHeat wire. The qbx robbery clients
+    -- this hook exists for fire the alert from the CLIENT, so the suspect is
+    -- the caller and isServerCall is false. Pass the flag through so a
+    -- server-side emitter still gets witnesses but is never charged twice.
+    reportCrime(src, hook, nil, isServerCall)
 end)
 
 -- palm6_robbery ATM hold-ups (custom layer). SERVER-ONLY listener

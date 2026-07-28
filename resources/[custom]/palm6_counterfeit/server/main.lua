@@ -39,6 +39,14 @@ local lastAction   = {}     -- [src] = { [key] = ts } rate-limit ledger
 local cooldowns    = {}     -- [cid] = { [key] = ts }
 local fenceQuota   = {}     -- [cid .. '|' .. fenceId .. '|' .. yyyymmdd] = n
 
+-- Persistent police attention (palm6_heat) for a completed print cycle. NOT the
+-- same thing as `heat` above: that is this resource's own per-DISTRICT zone-ping
+-- model, this is the durable per-CHARACTER score other resources read. Mirrors
+-- palm6_heat Config.Suggested.counterfeit; a named local next to nothing else so
+-- the number is never a bare literal in the print path. Bounded by
+-- Config.Print.CooldownSec (180s per character) plus the paper/ink consumables.
+local HEAT_ON_PRINT = 8
+
 math.randomseed(os.time())
 
 local function now() return os.time() end
@@ -834,6 +842,20 @@ RegisterNetEvent('palm6_counterfeit:printer:finish', function()
     Bridge.Notify(src, 'Printer',
         ('%d wads off the press — batch %s. Small batches stay crisp; every hand they touch wears them down.')
         :format(delivered, code), 'success')
+
+    -- Persistent police attention: running a press is a federal-flavoured crime.
+    -- Distinct from the DISTRICT heat added above, which is this resource's own
+    -- transient zone-ping model. This is the durable per-character score that
+    -- follows the printer after they log. Keyed to the printer's own cid, and
+    -- placed AFTER the delivered == 0 bail so a jammed run (pockets full, no
+    -- wads handed over) scores nothing. Soft-dep + pcall: a stopped palm6_heat
+    -- never touches the print path.
+    if GetResourceState('palm6_heat') == 'started' then
+        pcall(function()
+            exports.palm6_heat:AddHeat(pend.cid, HEAT_ON_PRINT, 'counterfeit', name)
+        end)
+    end
+
     dbg(('batch %s: %d wads by %s in %s'):format(code, delivered, pend.cid, p.district))
 end)
 

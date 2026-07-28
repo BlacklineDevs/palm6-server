@@ -78,6 +78,91 @@ Config.Hooks = {
 Config.FirePoliceAlerts = true
 
 -- ---------------------------------------------------------------------------
+-- Persistent police attention (palm6_heat) for a witnessed crime.
+--
+-- WHY THIS HOOK EXISTS. The heaviest crimes on this server (murder, the bank
+-- job, the jewellery store, house robberies) live in qbx_* resources that are
+-- NOT part of this repo, so there is no file to add a one-line AddHeat to. They
+-- all funnel through police:server:policeAlert, and this resource already
+-- shadow-listens on it. finalizeIncident is therefore the single portable point
+-- where a crime the base recipe owns becomes a durable, server-side FACT with a
+-- suspect citizenid attached, which makes it the right place to score heat.
+--
+-- WHAT THE BUS ACTUALLY CARRIES. `reported_crime` is NOT "the qbx robbery
+-- fan-in": police:server:policeAlert is a shared bus, and seven IN-REPO
+-- resources raise it too (palm6_business, palm6_counterfeit, palm6_drugs,
+-- palm6_laundering, palm6_protection, palm6_smuggling and this one, each from
+-- its own bridge/sv_framework.lua). Five of those call AddHeat on the very same
+-- code path, so scoring every alert here would have charged a flagged wash, a
+-- flagged street sale, a shakedown, a cook start and a smuggling run TWICE, and
+-- would have put a store-robbery-sized 15 on counterfeit and business printing
+-- runs that are deliberately priced elsewhere or not at all.
+--
+-- THE SUPPRESSION LATCH. Instead of listing those emitters (a list that rots the
+-- moment a new palm6 resource calls Bridge.PoliceAlert), server/main.lua's
+-- policeAlert hook passes its existing `isServerCall` discriminator through to
+-- reportCrime as `emitterOwnsHeat`. Every in-repo emitter uses a SERVER-side
+-- TriggerEvent with an explicit playerSource; the qbx robbery clients this hook
+-- exists for fire the alert from the CLIENT, so the suspect is the caller. A
+-- server-side alert therefore still creates witnesses and testimony, it just
+-- does not get charged heat here, because its owning resource already did that
+-- or deliberately does not price it. This is the cross-resource form of the
+-- `selfAlerting` latch that keeps our OWN opt-in alert from echoing back.
+-- Failure direction is safe: a future out-of-repo resource that alerted
+-- server-side would be under-charged, never double-charged.
+--
+-- Weights are keyed by the hook's `crime` string. A crime with NO entry here
+-- scores nothing, which is deliberate:
+--   * `sim`         : the /witnesses sim QA path must never move a real score.
+--   * `atm_robbery` : this crime does NOT arrive on the alert bus (palm6_robbery
+--                     dispatches through its own palm6_robbery:dispatch event);
+--                     it reaches us on the dedicated palm6Robbery hook above,
+--                     fired by palm6_robbery/server/main.lua:58, which also
+--                     calls AddHeat at :93. Listing it here would double-charge.
+-- Sibling resources feeding the bus via the ReportCrime export are unlisted for
+-- the same reason: they own their own AddHeat wire if they want one.
+--
+-- ANTI-FARM, inherited for free: Config.IncidentCooldownSec caps reported_crime
+-- and shots_fired at one scoring incident per suspect per window, so a robbery
+-- that also involves gunfire cannot score both inside the same window. It is a
+-- witnesses-side per-suspect cap only, and it knows nothing about another
+-- resource's wire, which is why the suppression latch above is needed and not
+-- optional.
+--   EXCEPTION, do not assume otherwise: the cooldown is SKIPPED whenever
+-- witnessCoordsOverride is set (server/main.lua's reportCrime), and the
+-- intimidation path is exactly that case. intimidation heat is therefore
+-- bounded by available active witnesses and the palm6_witnesses:press:finish
+-- eventguard budget, NOT by the 120s incident window. That is tolerable only
+-- because intimidation is SELF-heat: raising your own police attention is a
+-- penalty, and the policeAlert trust boundary means a modded client can never
+-- aim it at someone else. Revisit this the day intimidation scores a third
+-- party.
+--   Two further brakes apply to every weight here: MinWitnesses means an unseen
+-- crime scores nothing, and the policeAlert trust boundary in server/main.lua
+-- means a modded client can only ever mint heat against ITSELF, never another
+-- player.
+-- ---------------------------------------------------------------------------
+Config.Heat = {
+    Enabled = true,
+
+    -- Police doing police work are not criminals. weaponDamageEvent fires for
+    -- an officer returning fire in a shootout exactly as it does for the robber,
+    -- so on-duty police are exempt from the heat wire (they still generate
+    -- witnesses and testimony, which is the point of this resource).
+    ExemptOnDutyPolice = true,
+
+    -- crime string -> heat points. Sized against palm6_heat's Config.Suggested.
+    Weights = {
+        reported_crime = 15,  -- Suggested.store_robbery. Only client-fired
+                              -- alerts reach this weight (see the suppression
+                              -- latch above), i.e. the qbx store/house/bank/
+                              -- jewellery jobs it was sized for.
+        shots_fired    = 18,  -- Suggested.assault, an armed assault someone saw
+        intimidation   = 10,  -- leaning on a witness in front of another witness
+    },
+}
+
+-- ---------------------------------------------------------------------------
 -- Witness snapshot
 -- ---------------------------------------------------------------------------
 Config.WitnessRadius       = 40.0 -- NPC peds within this range of the crime
