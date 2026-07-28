@@ -126,10 +126,11 @@ Config.Suggested = {
                             -- charges: that wire is amount-proportional (see its
                             -- Config.PlayerHeat), because a launder run takes a
                             -- variable $500..$25,000 and a flat per-run charge
-                            -- made one huge wash as quiet as a tiny one. 5 is
-                            -- what a mid-size quiet wash lands near; keep it as
-                            -- the anchor a new flat-charge wirer would size
-                            -- against, not as a value anything reads.
+                            -- made one huge wash as quiet as a tiny one. Under
+                            -- that wire a quiet wash spans 1 ($500) to 13
+                            -- ($25,000) and hits exactly 5 at ~$8,000; 5 stays
+                            -- here as the anchor a new FLAT-charge wirer would
+                            -- size against, not as a value anything reads.
     shakedown        = 6,
     atm_robbery      = 8,
     store_robbery    = 15,

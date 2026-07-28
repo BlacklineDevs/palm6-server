@@ -82,11 +82,23 @@ end
 
 -- Persistent police attention this run earns its launderer, amount-proportional
 -- (see Config.PlayerHeat for why flat-per-run was the wrong shape).
+--
+-- EVERY key is read guarded (tonumber(...) or a default, Base included) so the
+-- documented reversal to the old FLAT charge is genuinely config-only:
+-- PerThousand = 0 (or absent) makes this return exactly Base, and an absent
+-- MaxPerRun means "no cap". An absent Base falls back to 0, which charges
+-- nothing rather than erroring, so a table must still set one. That matters
+-- because the pre-reshape table was literally `{ Base = 5, FlaggedBonus = 8 }`,
+-- and the obvious way to revert is to paste it back. Reading the missing keys
+-- unguarded would throw inside the caller's pcall, which does not surface an
+-- error, it just silently stops charging heat at all.
 local function playerHeatFor(amount, flagged)
     local H = Config.PlayerHeat
-    local h = math.floor(H.Base + (amount / 1000.0) * H.PerThousand)
-    if h > H.MaxPerRun then h = H.MaxPerRun end
-    if flagged then h = h + H.FlaggedBonus end
+    local h = math.floor((tonumber(H.Base) or 0)
+        + (amount / 1000.0) * (tonumber(H.PerThousand) or 0))
+    local cap = tonumber(H.MaxPerRun)
+    if cap and h > cap then h = cap end
+    if flagged then h = h + (tonumber(H.FlaggedBonus) or 0) end
     return h
 end
 
@@ -232,10 +244,10 @@ end
 -- ---------------------------------------------------------------------------
 local function cmdDirtyMoney(src)
     if src == 0 then return end
-    -- Read-only, but not free: this command now costs TWO DB round-trips (the
-    -- dirtyWashedToday sum plus the palm6_heat GetTier read below), and unlike
-    -- /launder it has no Config.CooldownSec behind it. Check-and-set before any
-    -- yield, same idiom as cmdLaunder.
+    -- Read-only, but not free: this command now costs up to THREE DB round-trips
+    -- (the palm6_mdt warrant check, the dirtyWashedToday sum, and the palm6_heat
+    -- GetTier read, all below), and unlike /launder it has no Config.CooldownSec
+    -- behind it. Check-and-set before any yield, same idiom as cmdLaunder.
     local t = now()
     if (lastQuote[src] or 0) + Config.QuoteCooldownSec > t then return end
     lastQuote[src] = t
@@ -243,11 +255,35 @@ local function cmdDirtyMoney(src)
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
     local held = Bridge.CountItem(src, Config.DirtyItem)
+    -- The door has TWO refusals and the quote has to honour both. This is the
+    -- one that actually fires today: Config.BlockWhileWanted ships true and
+    -- palm6_mdt is running, so a wanted character quoted 30% here would walk to
+    -- the machine and be turned away outright. Checked before the daily-sum read
+    -- so a refused quote costs one DB round-trip fewer. Same soft-dep as
+    -- /launder: no palm6_mdt, or the flag off, and this is a no-op.
+    if Config.BlockWhileWanted and Bridge.HasActiveWarrant(cid) then
+        Bridge.Notify(src, 'Dirty Money',
+            ("Holding $%d dirty · the front won't touch a wanted man's cash until you clear your warrant.")
+                :format(held), 'error')
+        return
+    end
     local remaining = math.max(0, Config.DailyCap - dirtyWashedToday(cid))
     -- Quote the fee this character would ACTUALLY pay, surcharge included.
     -- Otherwise a hot launderer reads 30% here and gets charged 40% at the
-    -- machine, which looks like a bug rather than a consequence.
-    local extraCut = heatScrutiny(cid)
+    -- machine, which looks like a bug rather than a consequence. Same reason
+    -- BOTH door refusals are honoured here (the warrant one above, the tier one
+    -- just below): quoting a fee for a wash the front is going to turn away at
+    -- the door is a worse lie than quoting the wrong fee.
+    -- Config.HeatScrutiny.Refuse ships empty, so this branch is inert until an
+    -- operator fills it in; it exists so that filling it in cannot produce a
+    -- quote that contradicts /launder.
+    local extraCut, _, refused = heatScrutiny(cid)
+    if refused then
+        Bridge.Notify(src, 'Dirty Money',
+            ('Holding $%d dirty · the front knows your face from the news and wants nothing to do with you.')
+                :format(held), 'error')
+        return
+    end
     local cut = math.min(0.90, Config.Cut + extraCut)
     Bridge.Notify(src, 'Dirty Money',
         ('Holding $%d dirty · today you can still wash $%d · fee %d%%%s'):format(

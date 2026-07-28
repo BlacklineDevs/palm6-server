@@ -58,10 +58,11 @@ Config.MinPerRun  = 500     -- below this there's nothing worth washing
 Config.MaxPerRun  = 25000   -- most dirty $ a single run will take
 Config.DailyCap   = 75000   -- most dirty $ a character can wash per calendar day
 Config.CooldownSec = 45     -- per-character, between runs
--- /dirtymoney is read-only but costs two DB round-trips (today's washed sum +
--- the palm6_heat tier read that makes the quoted fee honest), so it carries its
--- own light spam guard rather than riding CooldownSec, which would make the
--- quote unusable between washes.
+-- /dirtymoney is read-only but costs up to three DB round-trips (the palm6_mdt
+-- warrant check + today's washed sum + the palm6_heat tier read, the last two
+-- being what make the quoted fee honest), so it carries its own light spam guard
+-- rather than riding CooldownSec, which would make the quote unusable between
+-- washes.
 Config.QuoteCooldownSec = 3
 
 -- Refuse to wash for a player with an ACTIVE warrant (palm6_mdt). Closes the
@@ -114,12 +115,28 @@ Config.Heat = {
 -- 39 for three big ones). The goal was never to make splitting cheap, it was
 -- to stop a single enormous wash being as quiet as a pocket-change one.
 --
--- Base is a floor so any wash at all registers; MaxPerRun keeps a single wash
--- from jumping a launderer more than one tier; FlaggedBonus rides ON TOP of the
+-- Base is a floor so any wash at all registers; FlaggedBonus rides ON TOP of the
 -- cap because "the law actually noticed this one" is a separate fact from size.
+-- MaxPerRun is a SAFETY RAIL, NOT an active guard: a run is already capped at
+-- Config.MaxPerRun = 25000 dollars above, so the formula tops out at
+-- floor(1 + 25 * 0.5) = 13 and the cap of 15 can never bind at the shipped
+-- numbers. It only starts binding if an operator raises Config.MaxPerRun to
+-- $30,000+ or PerThousand to 0.6+. Do not read it as the thing holding a single
+-- wash down; the $25,000 per-run ceiling is.
 -- KNOCK-ON: a minimum $500 wash now scores 1 where the flat charge scored 5.
--- To restore the old flat behaviour exactly, set Base = 5 and PerThousand = 0
--- (MaxPerRun and FlaggedBonus already match the old numbers).
+--
+-- REVERSAL, config only, no code edit: replace the table below with the
+-- pre-reshape one, which is this single line:
+--     Config.PlayerHeat = { Base = 5, FlaggedBonus = 8 }
+-- EVERY key is read guarded in playerHeatFor(), so that paste is safe: an absent
+-- (or zero) PerThousand makes the charge exactly Base, and an absent MaxPerRun
+-- means no cap. That restores the old flat 5, or 13 on a flagged run, exactly.
+-- Base is guarded too rather than mandatory, so a table that omits it charges 0
+-- heat per run SILENTLY instead of erroring. Always keep a Base set.
+-- Note the old table had NO MaxPerRun key at all: the cap is new with the
+-- reshape, and it would not have bound at Base = 5 either, the same way it does
+-- not bind at the shipped numbers. FlaggedBonus = 8 is the old number,
+-- unchanged.
 -- Soft-dep: if palm6_heat is stopped the whole block is a no-op.
 Config.PlayerHeat = {
     Base         = 1,
