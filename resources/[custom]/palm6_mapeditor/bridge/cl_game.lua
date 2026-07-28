@@ -59,8 +59,12 @@ function Game.DeleteObject(obj)
     end
 end
 
--- Spawn a static scene ped (client-local, frozen, non-reactive). Optional
--- ambient scenario (e.g. WORLD_HUMAN_GUARD_STAND, WORLD_HUMAN_CLIPBOARD).
+-- Spawn a static scene ped (client-local, non-reactive). Optional ambient
+-- scenario (e.g. WORLD_HUMAN_GUARD_STAND, WORLD_HUMAN_CLIPBOARD).
+-- Frozen by default; a scenario ped is left unfrozen ONLY when
+-- Config.ScenePedScenarioUnfreeze is on (ships off). See the note on that
+-- branch below before flipping it, and note that any caller which hard-writes
+-- a ped's transform every frame must pass '' rather than a scenario.
 function Game.SpawnPed(model, x, y, z, heading, scenario)
     local hash = loadModel(model)
     if not hash then return nil end
@@ -71,7 +75,19 @@ function Game.SpawnPed(model, x, y, z, heading, scenario)
     SetBlockingOfNonTemporaryEvents(ped, true)   -- don't flee / react to the world
     SetPedCanRagdoll(ped, false)
     SetPedDiesWhenInjured(ped, false)
-    FreezeEntityPosition(ped, true)
+    -- Frozen by default, which is what every scene ped has always shipped as: the
+    -- ped holds the exact placed coords. The native below is TaskStartScenarioInPlace,
+    -- which never walks the ped, so GUARD_PATROL/JOG_STANDING/PICNIC play on the
+    -- spot and are fine frozen. Only the settle-onto-a-surface scenarios
+    -- (WORLD_HUMAN_SEAT_LEDGE, WORLD_HUMAN_SUNBATHE; see data/scene_models.lua)
+    -- want the small engine reposition a freeze blocks, and unfreezing costs the
+    -- ped gravity + player/vehicle collision, so it is opt-in per
+    -- Config.ScenePedScenarioUnfreeze (OFF = today's behaviour) and needs an
+    -- in-game look before anyone flips it. Callers that hard-write the ped's
+    -- transform every frame (the carry preview) must NOT pass a scenario.
+    if not (Config.ScenePedScenarioUnfreeze and scenario and scenario ~= '') then
+        FreezeEntityPosition(ped, true)
+    end
     if scenario and scenario ~= '' then
         pcall(function() TaskStartScenarioInPlace(ped, scenario, 0, true) end)
     end

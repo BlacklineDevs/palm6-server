@@ -88,12 +88,16 @@ RegisterNetEvent('palm6_mapeditor:ent:removeBatch', function(ids)
 end)
 
 -- Server relabelled a map (rename or merge): update the streamed entities' map
--- tags in place. Nothing respawns, but Entities.exportList selects on this
--- field, so without the relabel every export after a rename or merge silently
--- dropped that map's peds and vehicles.
+-- tags in place, then re-push the outliner exactly like the prop half does
+-- (client/live.lua mapRenamed). Nothing respawns, but Entities.exportList selects
+-- on this field, so without the relabel every export after a rename or merge
+-- silently dropped that map's peds and vehicles; and without the re-push the
+-- Entities view's map chips keep showing the old name until an unrelated
+-- add/remove, which is a fake drift in the one view meant to reveal a real one.
 RegisterNetEvent('palm6_mapeditor:ent:mapRenamed', function(oldName, newName)
     if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
     for _, e in pairs(liveEnts) do if e.map == oldName then e.map = newName end end
+    if Entities and Entities.push then Entities.push() end
 end)
 
 CreateThread(function()
@@ -191,10 +195,14 @@ function Entities.count()
     end
     return peds, veh
 end
+-- `map` is carried so the /propui Entities view can show the same map-chip bar
+-- the live-prop view has. Entity map tags are server-authoritative (the server
+-- drives the entity relabel from inside the prop rename/merge guards), and this
+-- is the only UI anywhere that can reveal a drift between the two halves.
 function Entities.list()
     local out = {}
     for id, e in pairs(liveEnts) do
-        out[#out + 1] = { id = id, kind = e.kind, model = e.model, x = e.x, y = e.y, z = e.z }
+        out[#out + 1] = { id = id, kind = e.kind, model = e.model, map = e.map, x = e.x, y = e.y, z = e.z }
     end
     return out
 end
@@ -257,8 +265,13 @@ RegisterNetEvent('palm6_mapeditor:ent:grabbed', function(rec)
     CreateThread(function()
         local x, y, z = Game.CameraAimPoint(40.0)
         if not x then x, y, z = Game.PlayerPos() end
+        -- No scenario on the preview ped, deliberately: Game.SpawnPed can leave a
+        -- scenario ped unfrozen (Config.ScenePedScenarioUnfreeze), and this loop
+        -- hard-writes its transform every frame, so the task would fight the write
+        -- and the ped would sink/drift and shove the player. The preview is deleted
+        -- when the carry resolves; the real scenario rides on the ent:place below.
         local ent = (rec.kind == 'veh') and Game.SpawnVehicle(rec.model, x, y, z, rec.heading or 0.0)
-                    or Game.SpawnPed(rec.model, x, y, z, rec.heading or 0.0, rec.extra)
+                    or Game.SpawnPed(rec.model, x, y, z, rec.heading or 0.0, '')
         local resolved = false
         while carrying do
             if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then break end   -- editor off -> restore below

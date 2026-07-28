@@ -1204,10 +1204,43 @@ function selectRevs() {
 // (pushed on open + on any add/remove); delete routes through the audited
 // ent:remove server event.
 var entSel = {};   // id -> true (entities multi-select)
+var entMapFilter = 'all';   // named-map filter for the entities outliner ('all' = every map)
+// Distinct named maps in the entity set, with per-map counts (sorted). Entity map
+// tags are set server-side from inside the prop rename/merge guards, so this bar
+// is the only surface that can show the entity half drifting from the prop half.
+function entMaps() {
+    var counts = {};
+    for (var i = 0; i < ents.length; i++) { var m = mapOf(ents[i]); counts[m] = (counts[m] || 0) + 1; }
+    return Object.keys(counts).sort().map(function (m) { return { name: m, count: counts[m] }; });
+}
+function entFiltered() {
+    if (entMapFilter === 'all') return ents;
+    return ents.filter(function (e) { return mapOf(e) === entMapFilter; });
+}
+// Selection is scoped to the visible (filtered) map, exactly like the live view,
+// so "Delete N" / select-all never touch entities hidden by the current filter.
 function entSelectedIds() {
+    var f = entFiltered();
     var out = [];
-    for (var i = 0; i < ents.length; i++) if (entSel[ents[i].id]) out.push(ents[i].id);
+    for (var i = 0; i < f.length; i++) if (entSel[f[i].id]) out.push(f[i].id);
     return out;
+}
+// Map-picker chip bar, shown above the entities outliner when more than one named
+// map exists. Switching maps clears the selection (it was scoped to the old map).
+function entMapChips() {
+    var bar = document.createElement('div'); bar.className = 'map-chips';
+    function chip(name, label, count) {
+        var c = document.createElement('button'); c.type = 'button';
+        c.className = 'map-chip' + (entMapFilter === name ? ' active' : '');
+        var t = document.createElement('span'); t.textContent = label;
+        var n = document.createElement('span'); n.className = 'map-chip-n'; n.textContent = count;
+        c.appendChild(t); c.appendChild(n);
+        c.addEventListener('click', function () { entMapFilter = name; entSel = {}; selectEnts(); });
+        return c;
+    }
+    bar.appendChild(chip('all', 'All maps', ents.length));
+    entMaps().forEach(function (m) { bar.appendChild(chip(m.name, m.name, m.count)); });
+    return bar;
 }
 
 function onEnts(list) {
@@ -1232,7 +1265,7 @@ function entToolbar(all) {
     });
     var lab = document.createElement('span');
     lab.textContent = selIds.length > 0 ? (selIds.length + ' selected')
-        : (ents.length + (ents.length === 1 ? ' entity' : ' entities'));
+        : (all.length + (all.length === 1 ? ' entity' : ' entities'));
     left.appendChild(box); left.appendChild(lab);
     bar.appendChild(left);
     if (selIds.length > 0) {
@@ -1299,19 +1332,25 @@ function selectEnts(keepScroll) {
     Object.keys(entSel).forEach(function (k) { if (!valid[k]) delete entSel[k]; });
 
     if (!ents.length) {
+        entMapFilter = 'all';
         el.grid.appendChild(emptyState('No scene entities',
             'Place peds and vehicles with /matped and /matveh — they list here to jump to or remove (they can’t be clicked in-world).'));
         el.ctx.textContent = 'Entities';
         return;
     }
+    var maps = entMaps();
+    // If the filtered map was wiped away, fall back to all so the view is never blank.
+    if (entMapFilter !== 'all' && !maps.some(function (m) { return m.name === entMapFilter; })) entMapFilter = 'all';
+    var filtered = entFiltered();
     // Peds first, then vehicles; stable by model within each group.
-    var sorted = ents.slice().sort(function (a, b) {
+    var sorted = filtered.slice().sort(function (a, b) {
         if (a.kind !== b.kind) return a.kind === 'veh' ? 1 : -1;
         return a.model < b.model ? -1 : (a.model > b.model ? 1 : 0);
     });
     var peds = sorted.filter(function (e) { return e.kind !== 'veh'; });
     var vehs = sorted.filter(function (e) { return e.kind === 'veh'; });
     var container = document.createElement('div'); container.className = 'scene-view';
+    if (maps.length > 1) container.appendChild(entMapChips());   // picker only when there's more than one map
     container.appendChild(entToolbar(sorted));
     if (peds.length) {
         var ph = document.createElement('div'); ph.className = 'scene-section';
@@ -1330,7 +1369,9 @@ function selectEnts(keepScroll) {
         container.appendChild(vl);
     }
     el.grid.appendChild(container);
-    el.ctx.textContent = ents.length + (ents.length === 1 ? ' scene entity' : ' scene entities');
+    var entCtx = filtered.length + (filtered.length === 1 ? ' scene entity' : ' scene entities');
+    if (entMapFilter !== 'all') entCtx += ' · map “' + entMapFilter + '”';
+    el.ctx.textContent = entCtx;
     el.grid.scrollTop = prev;
 }
 
