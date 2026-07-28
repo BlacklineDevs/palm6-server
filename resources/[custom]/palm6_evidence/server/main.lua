@@ -694,13 +694,43 @@ RegisterCommand('caseadd', function(src, args)
     end
 end, false)
 
+-- Turn /casesuspect's known-suspect argument into a citizenid. Accepts EITHER
+-- a raw citizenid (unchanged - the only form this command ever took) or the
+-- online server id that palm6_mdt's /id prints, so one number works across
+-- /id, /cite, /warrant, /book and here.
+--
+-- Soft cross-resource read, deliberately NOT a second copy of the logic: the
+-- single implementation is Bridge.ResolveTarget in
+-- palm6_mdt/bridge/sv_framework.lua, exposed as exports.palm6_mdt:ResolveTarget.
+--
+-- Returns citizenid, verified. Non-numeric input that does not resolve falls
+-- through UNCHANGED (verified = false), because this command never verified the
+-- citizenid it stored and an officer working a case may legitimately link an id
+-- this server has no player row for. An ALL-DIGIT token is different: when
+-- palm6_mdt answered and still could not resolve it, it is unambiguously a dead
+-- server id, because ResolveTarget already retries an all-digit argument as a
+-- citizenid against the `players` table (palm6_mdt/bridge/sv_framework.lua:162-173).
+-- Storing that verbatim writes a server id into the citizenid column, and server
+-- ids are reused across sessions, so UNIQUE (case_id, citizenid) would later
+-- collapse two different people into one suspect row. Return nil so the caller
+-- rejects it, matching /cite (palm6_citations/server/main.lua:107-110).
+local function suspectCitizenId(raw)
+    if GetResourceState('palm6_mdt') == 'started' then
+        local hit
+        pcall(function() hit = exports.palm6_mdt:ResolveTarget(raw) end)
+        if type(hit) == 'table' and hit.citizenid then return hit.citizenid, true end
+        if tostring(raw):match('^%d+$') then return nil, false end
+    end
+    return raw, false
+end
+
 RegisterCommand('casesuspect', function(src, args)
     if not requireOfficer(src) then return end
     local caseId = tonumber(args[1])
     local second = args[2]
     if not caseId or not second then
         Bridge.Notify(src, 'Evidence',
-            'Usage: /casesuspect <case id> <citizenid> — or — /casesuspect <case id> unknown <descriptors>', 'error')
+            'Usage: /casesuspect <case id> <citizenid or server id> — or — /casesuspect <case id> unknown <descriptors>', 'error')
         return
     end
 
@@ -714,8 +744,23 @@ RegisterCommand('casesuspect', function(src, args)
         if not allowWrite(src) then return end
         ok = linkSuspect(caseId, nil, descriptor, Bridge.GetPlayerName(src))
     else
+        -- Resolve BEFORE allowWrite, so a dead server id never burns the
+        -- write cooldown (same rule as the arg validation above).
+        local suspect, verified = suspectCitizenId(second)
+        if not suspect then
+            Bridge.Notify(src, 'Evidence',
+                'No citizen with that id on record. Re-check the server id with /id, or pass the citizenid.', 'error')
+            return
+        end
         if not allowWrite(src) then return end
-        ok = linkSuspect(caseId, clamp(second, 64), nil, Bridge.GetPlayerName(src))
+        ok = linkSuspect(caseId, clamp(suspect, 64), nil, Bridge.GetPlayerName(src))
+        -- Only reachable with palm6_mdt stopped: nothing could check the
+        -- number, so say so rather than implying the suspect was identified.
+        if ok and not verified and suspect:match('^%d+$') then
+            Bridge.Notify(src, 'Evidence',
+                ('Stored "%s" verbatim: the MDT is offline, so it could not be checked against a citizen.')
+                :format(suspect), 'inform')
+        end
     end
 
     if ok then

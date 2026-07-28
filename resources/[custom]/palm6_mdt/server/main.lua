@@ -104,9 +104,17 @@ local function cmdMdt(src)
     end
     lines[#lines + 1] = 'file paperwork: /mdtreport [case# or 0] [text]'
     -- Advertise the identification rung: without it an officer has no way to
-    -- learn the citizenid every other command below wants.
-    lines[#lines + 1] = ('identify who you are standing with: /%s%s'):format(
-        Config.Identify.Command, Config.RunPlate.Enabled and '  -  run a plate: /runplate [plate]' or '')
+    -- learn the citizenid every other command below wants. Each half is
+    -- gated on its own Config flag so a command an operator switched off is
+    -- never advertised here.
+    local tools = {}
+    if Config.Identify.Enabled then
+        tools[#tools + 1] = ('identify who you are standing with: /%s'):format(Config.Identify.Command)
+    end
+    if Config.RunPlate.Enabled then
+        tools[#tools + 1] = 'run a plate: /runplate [plate]'
+    end
+    if #tools > 0 then lines[#lines + 1] = table.concat(tools, '  -  ') end
     Bridge.Reply(src, lines)
 end
 
@@ -405,16 +413,17 @@ local function cmdId(src)
     else
         lines[#lines + 1] = 'no active warrants'
     end
-    -- Print each command with the argument form THAT command can actually
-    -- parse. /warrant and /book go through Bridge.ResolveTarget and take
-    -- either, so they get the short server id an officer can realistically
-    -- retype mid-scene. /cite lives in palm6_citations, which resolves its
-    -- first argument with Bridge.GetCitizenName (palm6_citations/server/
-    -- main.lua:71,83) and has no ResolveTarget, so it gets the citizenid.
-    -- Printing a server id there would hand the officer a command that
-    -- answers "No citizen with that id on record."
-    lines[#lines + 1] = ('/cite %s … | /warrant %d … | /book %d …'):format(
-        near.citizenid, near.src, near.src)
+    -- All three take EITHER form now, so print the short server id an officer
+    -- can realistically retype mid-scene. /warrant and /book resolve it in
+    -- process via Bridge.ResolveTarget; /cite lives in palm6_citations and
+    -- resolves it through this resource's ResolveTarget export. That export is
+    -- started when this line prints, but NOT necessarily when the officer types
+    -- the command seconds later, so palm6_citations soft-calls it and falls back
+    -- to its own citizenid lookup ("No citizen with that id on record"). The
+    -- citizenid is still on the first line above for anyone who wants to paste
+    -- it instead.
+    lines[#lines + 1] = ('/cite %d … | /warrant %d … | /book %d …'):format(
+        near.src, near.src, near.src)
     Bridge.Reply(src, lines)
 end
 
@@ -1062,7 +1071,11 @@ AddEventHandler('onResourceStart', function(resource)
     Bridge.RegisterCommand('warrantclear', function(source, args) cmdWarrantClear(source, args) end)
     Bridge.RegisterCommand('book', function(source, args) cmdBook(source, args) end)
     Bridge.RegisterCommand('calls', function(source, args) cmdCalls(source, args) end)
-    Bridge.RegisterCommand(Config.Identify.Command, function(source) cmdId(source) end)
+    -- Gated like /runplate below. See Config.Identify.Enabled for why a name
+    -- as common as `id` needs an off switch on a 157-resource box.
+    if Config.Identify.Enabled then
+        Bridge.RegisterCommand(Config.Identify.Command, function(source) cmdId(source) end)
+    end
     if Config.RunPlate.Enabled then
         Bridge.RegisterCommand('runplate', function(source, args) cmdRunPlate(source, args) end)
     end
@@ -1189,6 +1202,26 @@ exports('LogCall', function(text, coords, label)
     if not Config.Calls.Enabled then return false end
     if type(coords) ~= 'table' or type(coords.x) ~= 'number' then coords = nil end
     return insertCall(text, coords, label)
+end)
+
+-- ADDITIVE export — police commands that live in OTHER resources (/cite in
+-- palm6_citations, /casesuspect in palm6_evidence) accept the same
+-- "citizenid or online server id" argument /warrant and /book take, without
+-- each one re-deriving the framework lookups and drifting from this one.
+-- Same never-change-signature rule as the exports above.
+--
+-- ResolveTarget(arg: string|number)
+--   -> { citizenid = string, name = string } | nil
+-- nil when the argument is neither an online player's server id nor a
+-- citizenid on record. A table rather than two return values so the result
+-- survives the export boundary unambiguously.
+--
+-- Read-only, and it gates NOTHING: it answers "who is this" for anyone who
+-- asks, so every caller must run its own police/duty gate first.
+exports('ResolveTarget', function(arg)
+    local citizenid, name = Bridge.ResolveTarget(arg)
+    if not citizenid then return nil end
+    return { citizenid = citizenid, name = name }
 end)
 
 ---Desk counts for devtest and future consumers.

@@ -20,17 +20,19 @@ running and falls back to identical built-in defaults when it isn't.
 - `/id` - identify the nearest player: name, citizenid, active-warrant flag,
   and a copy-paste hint for the three commands that consume it. **The rung
   the ladder was missing** - `/cite`, `/warrant` and `/book` all wanted a raw
-  citizenid an officer had no in-game way to learn. The hint prints each
-  command with the argument form that command can actually parse: the short
-  server id for `/warrant` and `/book` (both resolve either), the citizenid
-  for `/cite`, which lives in `palm6_citations` and takes citizenid only.
-  Server-authoritative by
+  citizenid an officer had no in-game way to learn. All three now take
+  **either** form, so the hint prints the short server id for all three:
+  `/warrant` and `/book` resolve it in process, `/cite` (in
+  `palm6_citations`) resolves it through this resource's `ResolveTarget`
+  export. Server-authoritative by
   construction: the officer sends no argument at all, the server picks the
   nearest ped from its own entity positions inside
   `Config.Identify.Radius`. Police-gated like everything else, so the
   citizenid it prints never reaches a civilian. Command name is
-  configurable (`Config.Identify.Command`) in case the live box already has
-  an `/id`.
+  configurable (`Config.Identify.Command`) and the whole command can be
+  switched off (`Config.Identify.Enabled`, default `true`) in case the live
+  box already has an `/id` - the last resource to register a name wins, and
+  ~157 out-of-repo resources start after this one.
 - `/runplate [plate]` - is this plate hot? Reads `palm6_chopshop`'s stolen
   registry (frozen `IsStolen` export, soft-dep), the registered keeper from
   the vehicle records, and that keeper's warrant status. Read-only. When the
@@ -108,6 +110,15 @@ running and falls back to identical built-in defaults when it isn't.
   tables directly.
 - BOLOs expire passively (`resolved_at IS NULL AND expires_at > NOW()`) —
   no sweep thread, nothing is owed on expiry.
+- **One resolver for the officer loop.** `ResolveTarget(arg)` →
+  `{ citizenid, name }` or `nil` wraps this resource's
+  `Bridge.ResolveTarget` so `/id`, `/warrant`, `/book`, `/cite`
+  (`palm6_citations`) and `/casesuspect` (`palm6_evidence`) all read the
+  same argument the same way. The two out-of-resource callers call it softly
+  (`GetResourceState` + `pcall`) rather than each keeping a copy that could
+  drift. It is read-only and gates nothing, so every caller runs its own
+  police gate first. When `palm6_mdt` is stopped both callers fall back to
+  their pre-existing citizenid-only path.
 - Soft dependencies: `palm6_evidence` missing → case commands report
   "case system offline", BOLOs/reports still work; `palm6_discord`
   missing or feed unset → BOLOs still broadcast in-city.

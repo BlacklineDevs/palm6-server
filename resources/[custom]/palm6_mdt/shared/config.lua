@@ -68,6 +68,13 @@ Config.Warrants = {
 -- server-authoritative by construction - the officer sends NOTHING, the server
 -- re-derives the nearest ped from its own entity positions.
 Config.Identify = {
+    -- Kill switch, same shape as Config.RunPlate.Enabled. `/id` is a common
+    -- name in the wider FiveM ecosystem and the live box runs ~157 resources
+    -- this repo cannot see; the LAST resource to RegisterCommand a name wins,
+    -- and those ~157 all start after palm6_mdt. If another resource's /id is
+    -- the one an operator wants, rename via Command below or switch this off
+    -- here - neither needs a code change.
+    Enabled = true,
     -- Command name. Configurable because `/id` is a common name in the wider
     -- FiveM ecosystem and the live box runs ~157 resources this repo cannot
     -- see; rename here if it ever collides.

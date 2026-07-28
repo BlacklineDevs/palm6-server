@@ -51,8 +51,31 @@ local function paidCount()
     return n
 end
 
+-- Resolve /cite's target argument into citizenid + display name. Accepts
+-- EITHER a raw citizenid (unchanged - the only form this command ever took)
+-- or the online server id that palm6_mdt's /id prints, so one number an
+-- officer can actually read off screen works across /cite, /warrant and /book.
+--
+-- Soft cross-resource read, deliberately NOT a second copy of the logic: the
+-- single implementation is Bridge.ResolveTarget in
+-- palm6_mdt/bridge/sv_framework.lua, exposed as exports.palm6_mdt:ResolveTarget.
+-- When palm6_mdt is stopped the citizenid lookup below still answers, which is
+-- exactly what this resource did before, so /cite never depends on the MDT.
+local function resolveTarget(raw)
+    if Bridge.ResourceStarted('palm6_mdt') then
+        local hit
+        pcall(function() hit = exports.palm6_mdt:ResolveTarget(raw) end)
+        if type(hit) == 'table' and hit.citizenid and hit.name then
+            return hit.citizenid, hit.name
+        end
+    end
+    local name = Bridge.GetCitizenName(raw)
+    if name then return raw, name end
+    return nil, nil
+end
+
 -- ---------------------------------------------------------------------------
--- /cite <citizenid> <amount> <reason...> — police + tablet
+-- /cite <citizenid|server id> <amount> <reason...> — police + tablet
 -- ---------------------------------------------------------------------------
 local function cmdCite(src, args)
     if src == 0 then return end
@@ -68,20 +91,20 @@ local function cmdCite(src, args)
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
 
-    local target = tostring(args[1] or '')
+    local raw = tostring(args[1] or '')
     local amount = math.floor(tonumber(args[2]) or 0)
     local reason = table.concat(args, ' ', 3):gsub('^%s+', ''):gsub('%s+$', '')
     local C = Config.Citation
-    if target == '' or amount < C.MinAmount or amount > C.MaxAmount
+    if raw == '' or amount < C.MinAmount or amount > C.MaxAmount
         or #reason < C.ReasonMin or #reason > C.ReasonMax then
         Bridge.Notify(src, 'Citations',
-            ('Usage: /cite [citizenid] [$%d-%d] [reason %d-%d chars]')
+            ('Usage: /cite [citizenid or server id] [$%d-%d] [reason %d-%d chars]')
             :format(C.MinAmount, C.MaxAmount, C.ReasonMin, C.ReasonMax), 'error')
         return
     end
 
-    local citizenName = Bridge.GetCitizenName(target)
-    if not citizenName then
+    local target, citizenName = resolveTarget(raw)
+    if not target or not citizenName then
         Bridge.Notify(src, 'Citations', 'No citizen with that id on record.', 'error')
         return
     end
