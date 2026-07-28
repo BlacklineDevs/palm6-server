@@ -94,9 +94,13 @@ Config.Triggers = {
     -- (police count, weapon, per-ATM cooldown, proximity) have run. Any modified
     -- client could therefore mint replay scenes at will, for robberies that were
     -- rejected or never happened. The correct signal is 'palm6_robbery:started',
-    -- which palm6_robbery/server/main.lua:58 raises with TriggerEvent ONLY after
-    -- every gate passed. palm6_witnesses/shared/config.lua:56-62 already had
-    -- this right and its server/main.lua:502-512 documents the same reasoning.
+    -- which palm6_robbery/server/main.lua raises with TriggerEvent ONLY after
+    -- every gate passed (grep `TriggerEvent('palm6_robbery:started'`).
+    -- palm6_witnesses already had this right: its shared/config.lua
+    -- Config.Hooks.palm6Robbery entry, and the comment above the
+    -- AddEventHandler for it in server/main.lua (grep `palm6Robbery.event`),
+    -- document the same reasoning. Cited by symbol, not line number - the line
+    -- numbers in both files have drifted since this comment was written.
     --
     -- Names listed here are subscribed through Bridge.OnForeignNetEvent, which
     -- routes server-only signals to AddEventHandler instead of RegisterNetEvent

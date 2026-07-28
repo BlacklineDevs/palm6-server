@@ -39,9 +39,8 @@ end
 -- Register a callback fired once a character is loaded and in the world,
 -- server-side. Hides the framework's loaded-event name (same convention as
 -- the client-side Game.OnPlayerLoaded in server_base/palm6_turf/
--- server_identity — see their bridge/cl_game.lua). qbx_core fires
--- QBCore:Server:OnPlayerLoaded from server/events.lua with `source` set to
--- the newly-loaded player.
+-- server_identity - see their bridge/cl_game.lua). qbx_core raises
+-- QBCore:Server:OnPlayerLoaded from its own server/events.lua.
 --
 -- Because it is raised SERVER-side, AddEventHandler is the correct primitive and
 -- RegisterNetEvent was wrong: the latter does not merely add a listener, it
@@ -49,22 +48,55 @@ end
 -- client could announce "I just loaded" at will and drive the onboarding flow
 -- (and anything else listening for a real character load) off a forged signal.
 --
--- `source` is unaffected by the swap, but not for the reason an earlier version
--- of this comment gave. It is NOT true that "a server TriggerEvent inherits the
--- triggering context's source" - this repo's own shared server-raise predicate
--- says a raise from inside the server VM surfaces as nil, <= 0, or 65535 (see
--- palm6_eventguard/server/main.lua guard(),
--- palm6_mdt/bridge/sv_framework.lua:249-250 and
--- palm6_witnesses/server/main.lua:494-495). The swap is neutral for a much more
--- boring reason: RegisterNetEvent(name, cb) is just RegisterNetEvent(name) +
+-- The RegisterNetEvent -> AddEventHandler swap is behaviour-neutral for a boring
+-- reason: RegisterNetEvent(name, cb) is just RegisterNetEvent(name) +
 -- AddEventHandler(name, cb), so the handler and the value of `source` inside it
 -- are identical either way.
 --
--- We therefore still rely on the qbx_core-specific fact stated above (it sets
--- `source` to the newly-loaded player). Unlike QBCore:Server:OnJobUpdate, this
--- event carries no verified explicit player-id argument in this tree, so there
--- is nothing safer to prefer. If a future qbx_core is confirmed to pass one,
--- prefer it here the way palm6_whitelist_jobs/bridge/sv_framework.lua does.
+-- WHAT `source` ACTUALLY IS HERE IS NOT KNOWN FROM THIS REPO. An earlier version
+-- of this comment asserted BOTH of the following, and they cannot both be
+-- universally true:
+--   (1) the repo's shared server-raise predicate - a raise from inside the
+--       server VM surfaces as nil, <= 0, or 65535 (palm6_eventguard/server/
+--       main.lua guard(); palm6_mdt/bridge/sv_framework.lua Bridge.OnPoliceAlert,
+--       grep `local fromNet`; palm6_witnesses/server/main.lua's
+--       police:server:policeAlert handler, grep `local isServerCall`), and
+--   (2) that this server-raised event nevertheless delivers the newly-loaded
+--       player's server id in `source`.
+-- qbx_core is NOT in this repo (it lives on the game box), so nothing here can
+-- settle it. Stating the consequence each way instead of picking one:
+--   • If (2) holds, this works as intended: the prompt fires on character load.
+--   • If (1) holds, `source` is a sentinel, Bridge.GetCitizenId returns nil, and
+--     server/main.lua's handler returns immediately. It is FAIL-SAFE, not wrong:
+--     nothing is granted, nothing is charged, and the belt-and-suspenders
+--     palm6_onboarding:checkStatus net event (which the client always sends on
+--     load, and which reads `source` from a real net event) still raises the
+--     prompt. The only symptom would be the prompt arriving on the client's ask
+--     rather than on the load event, which is invisible in play.
+-- To settle it on the box: add a temporary print of `source` in this handler and
+-- watch one character load.
+--
+-- WHY palm6_brain LEANS ON (1) WHILE THIS FILE REFUSES TO, so the two files are
+-- not read as contradicting each other: palm6_brain/shared/config.lua's
+-- Config.PoliceBus block builds on the same predicate for
+-- police:server:policeAlert, and it can, because SEVEN in-repo resources already
+-- raise that event in the identical shape from their own bridge/sv_framework.lua
+-- (business, counterfeit, drugs, laundering, protection, smuggling,
+-- palm6_witnesses) and ship live on that basis. QBCore:Server:OnPlayerLoaded has
+-- no such precedent: nothing in this tree raises it, qbx_core does. Same
+-- predicate, seven in-repo raises versus zero, so different confidence - and
+-- palm6_brain still states the inverted consequences for the case where it does
+-- not hold. Neither file asserts more than its evidence.
+--
+-- Why this does NOT copy palm6_whitelist_jobs/bridge/sv_framework.lua's fix of
+-- preferring the explicit argument: for QBCore:Server:OnJobUpdate the affected
+-- player's server id is documented (in that file) as argument 1. For
+-- QBCore:Server:OnPlayerLoaded this tree records nothing about what its
+-- arguments mean, so preferring argument 1 would be a guess - and a wrong guess
+-- would push the mandatory rules prompt at the wrong player (the grants are safe
+-- either way: they hang off the palm6_onboarding:acceptRules NET event, whose
+-- `source` is the real accepting client, not off this handler). Prefer the
+-- explicit argument here only once someone has confirmed its meaning on the box.
 function Bridge.OnPlayerLoaded(handler)
     AddEventHandler('QBCore:Server:OnPlayerLoaded', function()
         handler(source)

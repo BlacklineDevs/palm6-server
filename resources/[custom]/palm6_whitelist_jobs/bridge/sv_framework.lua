@@ -61,10 +61,12 @@ end
 -- earlier version of this comment claimed it) is that a server-side
 -- TriggerEvent "inherits the triggering context's source". This repo's own
 -- shared server-raise predicate says the opposite: a raise from inside the
--- server VM surfaces as nil, <= 0, or 65535 - see
--- palm6_eventguard/server/main.lua guard(), palm6_mdt/bridge/sv_framework.lua:249-250
--- and palm6_witnesses/server/main.lua:494-495. So `source` here must be treated
--- as unreliable, which is why the explicit first argument wins below.
+-- server VM surfaces as nil, <= 0, or 65535 - see palm6_eventguard/server/main.lua
+-- guard(), palm6_mdt/bridge/sv_framework.lua Bridge.OnPoliceAlert (grep
+-- `local fromNet`) and palm6_witnesses/server/main.lua's
+-- police:server:policeAlert handler (grep `local isServerCall`). Cited by symbol,
+-- not line number: those files have drifted twice already. So `source` here must
+-- be treated as unreliable, which is why the explicit first argument wins below.
 function Bridge.OnJobChanged(handler)
     AddEventHandler('QBCore:Server:OnJobUpdate', function(evtSrc, jobInfo)
         -- Prefer the EXPLICIT first argument - qbx_core passes the affected

@@ -369,11 +369,17 @@ Config.Events = {
     -- `talk:say` is the LLM-backed dialogue path: every accepted call can fire an
     -- outbound PerformHttpRequest, so an unbudgeted flood costs real money as
     -- well as thread time. Sized to match its `:say` sibling above (a normal
-    -- conversation pace is nowhere near 40/min). `crime:report` feeds the 911
-    -- dispatch fan-out (a routed blip on every on-duty officer), so it is
-    -- tighter. Both have their own light per-src anti-spam in-resource; these are
-    -- the blunt outer bound. NOTE: palm6_brain is LIVE in production
-    -- (shared/config.lua:25), so these are not inert.
+    -- conversation pace is nowhere near 40/min). `crime:report` feeds
+    -- palm6_brain's OWN dispatch fan-out - a routed blip on every on-duty
+    -- officer over the private palm6_brain:dispatch client event - so it is
+    -- tighter. Note that is NOT the same thing as the shared 911 bus below:
+    -- palm6_brain does not touch police:server:policeAlert, so its dispatches
+    -- are absent from palm6_mdt's /calls log and from palm6_witnesses'
+    -- incidents unless palm6_brain Config.PoliceBus.Enabled is flipped on (it
+    -- ships off). Both events have their own light per-src anti-spam
+    -- in-resource; these are the blunt outer bound. NOTE: palm6_brain is LIVE in
+    -- production (shared/config.lua, grep `Config.Enabled = true`), so these are
+    -- not inert.
     ['palm6_brain:talk:say']              = { calls = 40, window_seconds = 60 },
     ['palm6_brain:crime:report']          = { calls = 20, window_seconds = 60 },
 

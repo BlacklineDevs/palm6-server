@@ -806,6 +806,16 @@ RegisterCommand('brainstatus', function(src)
     -- next to a flat `accepted` means the gate is eating real reports, not forgeries.
     local okCW, cwLine = pcall(function() return exports[GetCurrentResourceName()]:GetCrimeWatchSummary() end)
     if okCW and cwLine then print('  crime claims: ' .. tostring(cwLine)) end
+    -- POLICE RECORD BUS (Config.PoliceBus) - whether brain's dispatches are real
+    -- 911s or private blips. Counted in BOTH states, so `not routed (flag off)`
+    -- is an UPPER BOUND on what flipping the flag would put on the police record,
+    -- not a preview of it: each sink still has its own gates after the raise
+    -- (palm6_mdt Config.Calls.Enabled / RequireServerProvenance / PerSourceCdSec,
+    -- palm6_witnesses' rate limit / IncidentCooldownSec / MinWitnesses). Same
+    -- caveat on the raised-onto-policeAlert count once the flag is on.
+    if Bridge and Bridge.PoliceBusLine then
+        print('  police record bus: ' .. Bridge.PoliceBusLine())
+    end
     print('  note: passive money needs BOTH Director.MoneyEnabled AND palm6_business Config.NpcPassiveIncome')
     print('  note: factions + chatter each have their OWN local CFG.Enabled (server/factions.lua, client/chatter.lua)')
     print('  meters: /brainvalidate /braincrime /braindirector /braingoals /brainmemory')

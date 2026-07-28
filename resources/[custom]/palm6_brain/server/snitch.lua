@@ -20,6 +20,14 @@
 -- Dark by default (Config.Social.Enabled). Every Bridge call is pcall-isolated —
 -- a missing/broken Bridge must never error a witness event — and the handler
 -- never yields (all reads + a fire-and-forget alert).
+--
+-- "Fire-and-forget" is enforced on the OTHER side of the seam, not assumed here:
+-- Config.PoliceBus can route a dispatch into palm6_mdt, whose insert yields, so
+-- bridge/sv_framework.lua's recordDispatch does that routing in a detached
+-- CreateThread. Read the comment above it before removing that detach: the
+-- cooldown writes in tryReport below happen AFTER the Bridge.AlertPolice call,
+-- so a yield inside it re-opens the crowd-flood window GLOBAL_COOLDOWN_SEC exists
+-- to close.
 -- ============================================================================
 
 local CFG = Config.Social or {}
@@ -83,7 +91,9 @@ local function snitchChance(witnesses, disguised)
 end
 
 -- Fire a police dispatch for a witnessed crime, if the roll AND the gates pass.
--- Returns true if a report was dispatched. Never yields.
+-- Returns true if a report was dispatched. Never yields - see the header note on
+-- recordDispatch's detached routing, which is what keeps that true once
+-- Config.PoliceBus is on.
 local function tryReport(evt)
     if not enabled() or type(evt) ~= 'table' then return false end
     if type(evt.coords) ~= 'table' then return false end
@@ -110,10 +120,15 @@ local function tryReport(evt)
     end
 
     -- FIRE — a 911 blip + notify to on-duty cops, then record the cooldown.
+    -- evt.playerSrc is the SUSPECT's server id (witness.lua carries it through
+    -- from the crime report). The blip fan-out ignores it; it only matters when
+    -- Config.PoliceBus.Enabled is on, where it is what lets this dispatch be
+    -- recorded as a real 911 against a named citizen instead of an anonymous
+    -- log line. See Config.PoliceBus for exactly what that turns on.
     local label = ('%s reported nearby'):format(crimeLabel(evt.crimeKind))
     local okFire = pcall(function()
         if not (Bridge and Bridge.AlertPolice) then error('no-bridge') end
-        Bridge.AlertPolice(evt.coords, label, 90, 161, 1, 1.2)
+        Bridge.AlertPolice(evt.coords, label, 90, 161, 1, 1.2, evt.playerSrc)
     end)
     if not okFire then return false end
 

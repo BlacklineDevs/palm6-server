@@ -65,13 +65,15 @@ local function guard(eventName, budget)
         -- invention: a raise from inside the server VM surfaces as nil, <= 0,
         -- OR 65535 - never a real player id. The two other consumers of
         -- police:server:policeAlert reasoned this out independently and now
-        -- share it verbatim: palm6_mdt/bridge/sv_framework.lua:249-250
-        -- (`local invoker = tonumber(source)` / `not (invoker == nil or
-        -- invoker <= 0 or invoker == 65535)`) and
-        -- palm6_witnesses/server/main.lua:494-495 (`local isServerCall =
-        -- invoker == nil or invoker <= 0 or invoker == 65535`). Keep all three
-        -- identical; two consumers of one event must not disagree about what
-        -- its source means.
+        -- share it verbatim. Cited by SYMBOL, not by line number, because line
+        -- numbers in those files have already drifted twice:
+        --   palm6_mdt/bridge/sv_framework.lua, inside Bridge.OnPoliceAlert
+        --     (grep `local fromNet`)
+        --   palm6_witnesses/server/main.lua, inside its
+        --     police:server:policeAlert handler (grep `local isServerCall`)
+        -- Both read `tonumber(source)` and test `== nil or <= 0 or == 65535`.
+        -- Keep all three identical; two consumers of one event must not
+        -- disagree about what its source means.
         --
         -- The old test here was `src == 0` only. That missed 65535 and missed
         -- negatives, so a SERVER-side TriggerEvent that surfaced as 65535 got
