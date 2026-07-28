@@ -29,6 +29,10 @@ local ITEMS = Config.Items
 -- ---------------------------------------------------------------------------
 local itemsReady   = false  -- every REQUIRED item resolves in ox_inventory
 local bagsReady    = false  -- qbx_police evidence-bag items resolve (soft)
+local bootReady    = false  -- printers/heat/fenceQuota rehydrated from the DB.
+                            -- Every net event whose CAP is enforced against one
+                            -- of those tables must refuse until this is true,
+                            -- or the ~3s boot window is a free pass.
 local printers     = {}     -- [id] = { id, owner, ownerName, district, coords,
                             --          paper, ink, prop } (status='placed' only)
 local heat         = {}     -- [districtId] = { heat, lastPing }
@@ -252,15 +256,25 @@ local function addHeat(districtId, amount)
     h.dirty = true
 end
 
-local function persistHeat(districtId)
+-- `inline` is the TEARDOWN path (onResourceStop) and it must not yield even
+-- once: MySQL.query.await IS Citizen.Await, and a stopping resource is never
+-- ticked again, so a yield here abandons every district after the first. The
+-- inline path uses the non-await call form, which only hands the query to
+-- oxmysql (a separate, still-running resource) and returns. The live sweep and
+-- the seize path keep the awaiting form so they surface DB errors in-line.
+local function persistHeat(districtId, inline)
     local h = heat[districtId]
     if not h then return end
-    pcall(function()
-        MySQL.query.await(
-            [[INSERT INTO palm6_counterfeit_heat (district_id, heat, last_ping)
+    local sql = [[INSERT INTO palm6_counterfeit_heat (district_id, heat, last_ping)
               VALUES (?, ?, ?)
-              ON DUPLICATE KEY UPDATE heat = VALUES(heat), last_ping = VALUES(last_ping)]],
-            { districtId, h.heat, h.lastPing })
+              ON DUPLICATE KEY UPDATE heat = VALUES(heat), last_ping = VALUES(last_ping)]]
+    local params = { districtId, h.heat, h.lastPing }
+    pcall(function()
+        if inline then
+            MySQL.query(sql, params)
+        else
+            MySQL.query.await(sql, params)
+        end
     end)
 end
 
@@ -333,6 +347,128 @@ local function removePrinter(p, status)
 end
 
 -- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_mdt/server/main.lua:
+-- Wait(3000) for oxmysql, per-statement pcall, CREATE TABLE IF NOT EXISTS.
+-- sql/ files are applied BY HAND (deploy/README.md; CI never touches the DB),
+-- so a fresh box that missed one left every query here pcall-swallowed into
+-- silence - printers that vanish on restart, serials with no registry row, a
+-- provenance chain that never records, and a "ready" banner reporting nothing
+-- wrong. Re-runs are harmless no-ops on the live box, which already has these
+-- tables.
+--
+-- Every statement below is copied VERBATIM from the matching sql/ file so the
+-- two can never diverge:
+--   palm6_counterfeit_printers, _batches, _wads, _hops, _leads, _heat
+--                                       <- sql/0020_counterfeit.sql
+--   palm6_counterfeit_fence_quota       <- sql/0052_counterfeit_fence_quota.sql
+-- There are no ALTERs on this resource's tables, so schemaOk answers for all
+-- seven with no best-effort list.
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_printers` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_citizenid VARCHAR(64) NOT NULL,
+    owner_name VARCHAR(100) NOT NULL DEFAULT '',
+    district_id VARCHAR(32) NOT NULL,
+    coords TEXT NOT NULL,
+    heading FLOAT NOT NULL DEFAULT 0.0,
+    paper SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    ink SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    status ENUM('placed','removed','seized') NOT NULL DEFAULT 'placed',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    seized_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_counterfeit_printers_owner (owner_citizenid, status),
+    INDEX idx_palm6_counterfeit_printers_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_batches` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    code CHAR(6) NOT NULL UNIQUE,
+    printer_id INT UNSIGNED NOT NULL,
+    printed_by VARCHAR(64) NOT NULL,
+    printed_by_name VARCHAR(100) NOT NULL DEFAULT '',
+    district_id VARCHAR(32) NOT NULL,
+    face_value INT UNSIGNED NOT NULL,
+    wads_printed SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    circulation INT UNSIGNED NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_counterfeit_batches_printer (printer_id),
+    INDEX idx_palm6_counterfeit_batches_printed_by (printed_by)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_wads` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    serial VARCHAR(20) NOT NULL UNIQUE,
+    batch_code CHAR(6) NOT NULL,
+    status ENUM('circulating','spent','fenced','burned','seized')
+        NOT NULL DEFAULT 'circulating',
+    seized_by VARCHAR(64) DEFAULT NULL,
+    seized_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_counterfeit_wads_batch (batch_code),
+    INDEX idx_palm6_counterfeit_wads_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_hops` (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    serial VARCHAR(20) NOT NULL,
+    kind ENUM('print','trade','drop','pickup','sink','fence') NOT NULL,
+    from_citizenid VARCHAR(64) DEFAULT NULL,
+    from_name VARCHAR(100) NOT NULL DEFAULT '',
+    to_citizenid VARCHAR(64) DEFAULT NULL,
+    to_name VARCHAR(100) NOT NULL DEFAULT '',
+    detail VARCHAR(190) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_counterfeit_hops_serial (serial, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_leads` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    case_id INT UNSIGNED NOT NULL,
+    serial VARCHAR(20) NOT NULL,
+    batch_code CHAR(6) NOT NULL,
+    depth SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_palm6_counterfeit_leads_case_serial (case_id, serial),
+    INDEX idx_palm6_counterfeit_leads_case (case_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_heat` (
+    district_id VARCHAR(32) NOT NULL PRIMARY KEY,
+    heat FLOAT NOT NULL DEFAULT 0,
+    last_ping INT UNSIGNED NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_counterfeit_fence_quota` (
+    `cid`      VARCHAR(64) NOT NULL,
+    `fence_id` VARCHAR(64) NOT NULL,
+    `day_key`  VARCHAR(8)  NOT NULL,
+    `cnt`      INT         NOT NULL DEFAULT 0,
+    PRIMARY KEY (`cid`, `fence_id`, `day_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+    }
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_counterfeit] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Boot
 -- ---------------------------------------------------------------------------
 AddEventHandler('onResourceStart', function(resource)
@@ -373,41 +509,6 @@ AddEventHandler('onResourceStart', function(resource)
         print('^3[palm6_counterfeit] WARN: palm6_evidence is not running — '
             .. 'the serial terminal (/runserial, /interrogate) is offline.^0')
     end
-
-    -- Reload placed printers + district heat.
-    pcall(function()
-        local rows = MySQL.query.await(
-            "SELECT * FROM palm6_counterfeit_printers WHERE status = 'placed'") or {}
-        for _, r in ipairs(rows) do
-            local coords = json.decode(r.coords)
-            local p = {
-                id = r.id, owner = r.owner_citizenid, ownerName = r.owner_name,
-                district = r.district_id, coords = coords,
-                paper = r.paper, ink = r.ink,
-            }
-            if Config.Printer.SpawnProp then
-                p.prop = Bridge.SpawnWorldProp(Config.Printer.PropModel, coords, r.heading or 0.0)
-            end
-            printers[p.id] = p
-        end
-        print(('[palm6_counterfeit] restored %d placed printer(s)'):format(#rows))
-    end)
-    pcall(function()
-        local rows = MySQL.query.await('SELECT * FROM palm6_counterfeit_heat') or {}
-        for _, r in ipairs(rows) do
-            heat[r.district_id] = { heat = tonumber(r.heat) or 0.0, lastPing = tonumber(r.last_ping) or 0 }
-        end
-    end)
-
-    -- Rehydrate today's fence quota so the per-day cash-out cap survives restart.
-    pcall(function()
-        local today = os.date('%Y%m%d')
-        local rows = MySQL.query.await(
-            'SELECT cid, fence_id, cnt FROM palm6_counterfeit_fence_quota WHERE day_key = ?', { today }) or {}
-        for _, r in ipairs(rows) do
-            fenceQuota[('%s|%s|%s'):format(r.cid, r.fence_id, today)] = tonumber(r.cnt) or 0
-        end
-    end)
 
     -- Usable items.
     Bridge.OnUseItem(ITEMS.Printer.name, function(src)
@@ -469,22 +570,98 @@ AddEventHandler('onResourceStart', function(resource)
         end)
     end)
 
-    print(('[palm6_counterfeit] ready — items %s, evidence bags %s, %d districts, %d sinks, %d fences')
-        :format(itemsReady and 'OK' or 'MISSING', bagsReady and 'OK' or 'absent',
-            #Config.Districts, #Config.Sinks, #Config.Fences))
+    -- Schema + every read that depends on it move into a thread so the DDL
+    -- lands before anything SELECTs. Item presence checks and the item/move
+    -- handler registration above stay synchronous: those are pure natives, and
+    -- a `restart palm6_counterfeit` must not miss a wad move in the ~3s window
+    -- (the same reasoning palm6_mdt documents for its alert handler). That
+    -- precedent only covers WRITE-ONLY recorders though: palm6_mdt's alert
+    -- handler has no in-memory precondition, while palm6_counterfeit:place and
+    -- :fence:pass enforce their caps against `printers` / `fenceQuota`, which
+    -- are empty until this thread finishes. Those two gate on `bootReady`
+    -- below, the same shape palm6_numbers uses for `drawEnabled`.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+
+        -- Reload placed printers + district heat.
+        pcall(function()
+            local rows = MySQL.query.await(
+                "SELECT * FROM palm6_counterfeit_printers WHERE status = 'placed'") or {}
+            for _, r in ipairs(rows) do
+                local coords = json.decode(r.coords)
+                local p = {
+                    id = r.id, owner = r.owner_citizenid, ownerName = r.owner_name,
+                    district = r.district_id, coords = coords,
+                    paper = r.paper, ink = r.ink,
+                }
+                if Config.Printer.SpawnProp then
+                    p.prop = Bridge.SpawnWorldProp(Config.Printer.PropModel, coords, r.heading or 0.0)
+                end
+                printers[p.id] = p
+            end
+            print(('[palm6_counterfeit] restored %d placed printer(s)'):format(#rows))
+        end)
+        pcall(function()
+            local rows = MySQL.query.await('SELECT * FROM palm6_counterfeit_heat') or {}
+            for _, r in ipairs(rows) do
+                local dbHeat = tonumber(r.heat) or 0.0
+                local dbPing = tonumber(r.last_ping) or 0
+                local h = heat[r.district_id]
+                if h then
+                    -- A sink spend (addHeat via :spend) inside the boot window
+                    -- already built this entry up from a zero baseline. A plain
+                    -- assignment would throw that accumulation away, so add and
+                    -- keep the newer ping.
+                    h.heat = h.heat + dbHeat
+                    if dbPing > (h.lastPing or 0) then h.lastPing = dbPing end
+                    h.dirty = true
+                else
+                    heat[r.district_id] = { heat = dbHeat, lastPing = dbPing }
+                end
+            end
+        end)
+
+        -- Rehydrate today's fence quota so the per-day cash-out cap survives restart.
+        pcall(function()
+            local today = os.date('%Y%m%d')
+            local rows = MySQL.query.await(
+                'SELECT cid, fence_id, cnt FROM palm6_counterfeit_fence_quota WHERE day_key = ?', { today }) or {}
+            for _, r in ipairs(rows) do
+                fenceQuota[('%s|%s|%s'):format(r.cid, r.fence_id, today)] = tonumber(r.cnt) or 0
+            end
+        end)
+
+        -- LAST: the cap-bearing net events refuse everything until this flips.
+        bootReady = true
+
+        print(('[palm6_counterfeit] ready — items %s, evidence bags %s, %d districts, %d sinks, %d fences, schema %s')
+            :format(itemsReady and 'OK' or 'MISSING', bagsReady and 'OK' or 'absent',
+                #Config.Districts, #Config.Sinks, #Config.Fences,
+                schemaOk and 'OK' or '^1MISSING^0'))
+    end)
 end)
 
+-- TEARDOWN, and it must not yield even once. MySQL.update.await IS
+-- Citizen.Await: that yield propagates out through pcall and out of this
+-- handler, and teardown never ticks this resource again, so the old .await form
+-- suspended on the FIRST printer and every printer after it - plus the whole
+-- heat flush below, which never ran at all - silently lost its unsaved
+-- paper/ink and heat. Same fix as palm6_mapeditor/server/live.lua restorePending's
+-- inline path: the non-await call form only hands the query to oxmysql (a
+-- separate, still-running resource) and returns, so every row leaves this VM
+-- before the handler does.
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     for _, p in pairs(printers) do
         Bridge.DeleteWorldProp(p.prop)
         pcall(function()
-            MySQL.update.await(
+            MySQL.update(
                 'UPDATE palm6_counterfeit_printers SET paper = ?, ink = ? WHERE id = ?',
                 { p.paper, p.ink, p.id })
         end)
     end
-    for districtId in pairs(heat) do persistHeat(districtId) end
+    for districtId in pairs(heat) do persistHeat(districtId, true) end
 end)
 
 AddEventHandler('playerDropped', function()
@@ -576,6 +753,14 @@ RegisterNetEvent('palm6_counterfeit:place', function(anchorModel)
     local src = source
     if not rl(src, 'action') then return end
     if not itemsReady then return end
+    -- MaxPerCitizen and MinSpacing below are both enforced against the
+    -- in-memory `printers` table, which is empty until the boot thread has
+    -- reloaded status='placed' rows. Placing inside that window would pass both
+    -- checks against nothing and persist a second press.
+    if not bootReady then
+        Bridge.Notify(src, 'Printer', 'The block is still waking up. Try again in a moment.', 'error')
+        return
+    end
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
 
@@ -1055,6 +1240,14 @@ RegisterNetEvent('palm6_counterfeit:fence:pass', function(fenceId, serial)
     local left = cdRemaining(cid, 'fence', Config.Fence.CooldownSec)
     if left > 0 then
         Bridge.Notify(src, fence.label, ('"Slow down. %ds."'):format(left), 'error')
+        return
+    end
+    -- The daily cap below reads `fenceQuota`, which sql/0052 exists to rehydrate
+    -- precisely because an in-memory counter reset to 0 on every reboot is a
+    -- money faucet. Refusing until the boot thread has read it back keeps that
+    -- faucet closed for the ~3s window too.
+    if not bootReady then
+        Bridge.Notify(src, fence.label, '"Not right now. Come back in a minute."', 'error')
         return
     end
     local qk = quotaKey(cid, fenceId)

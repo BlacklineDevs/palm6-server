@@ -22,6 +22,13 @@ local LEGIT_MAX_SEC = 60          -- max wall-clock for the legit minigame
 -- Runtime state
 -- ---------------------------------------------------------------------------
 local activeDrop   = nil    -- current drop event (see arm())
+-- False until the boot thread has run ensureSchema() AND the mid-flight-drop
+-- cleanup. Those moved onto a Wait(3000) thread so the DDL lands before
+-- anything reads the tables, which opened a ~3s window: a drop armed inside it
+-- would have its row flipped to 'cancelled' by that cleanup while the drop kept
+-- running in memory, leaving the DB disagreeing with the world. arm() refuses
+-- until this flips. Same shape as palm6_counterfeit's bootReady gate.
+local bootReady    = false
 local nextAutoAt   = nil    -- unix ts the scheduler may arm the next drop
 local pendingCraft = {}     -- [src] = { dropRow, startedAt, cid }
 local pendingLegit = {}     -- [src] = { uid, startedAt, cid }
@@ -220,6 +227,9 @@ end
 
 -- Arm a drop. Returns true, or false + reason.
 local function arm(catalogCode, locationId, hintLeadSec, revealLeadSec, liveDurationSec)
+    if not bootReady then
+        return false, 'still starting up (schema + mid-flight cleanup), try again in a few seconds'
+    end
     if activeDrop then return false, 'a drop is already armed' end
     if not itemRegistered then
         return false, ('item %s is not registered with ox_inventory — see server console'):format(Config.Item.name)
@@ -1353,6 +1363,133 @@ AddEventHandler('playerDropped', function()
     end
 end)
 
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_mdt/server/main.lua:
+-- Wait(3000) for oxmysql, per-statement pcall, CREATE TABLE IF NOT EXISTS.
+-- sql/ files are applied BY HAND (deploy/README.md; CI never touches the DB),
+-- so a fresh box that missed one left every query here pcall-swallowed into
+-- silence - drops that arm and never record, claimed pairs with no serial
+-- registry behind them, and a "ready" banner that says nothing is wrong. Only
+-- palm6_flashdrop_listings had a self-create anywhere (palm6_dbmigrate); the
+-- other three tables had none. Re-runs are harmless no-ops on the live box,
+-- which already has these tables.
+--
+-- All four CREATEs below are copied VERBATIM from the matching sql/ file so the
+-- two can never diverge:
+--   palm6_flashdrop_drops, _serials, _provenance, _listings
+--                                            <- sql/0017_flashdrop.sql
+-- and two BEST-EFFORT ALTERs, run separately below:
+--   listings.buyer_paid, listings.settled    <- sql/0062_flashdrop_settlement.sql
+--
+-- The ALTERs are deliberately kept OUT of the schemaOk signal. ADD COLUMN IF
+-- NOT EXISTS is MariaDB syntax; MySQL 8 has no such form and THROWS on it even
+-- on a box where both columns were already applied by hand. Folding that throw
+-- into schemaOk would make a perfectly healthy MySQL box print "schema MISSING"
+-- every boot, which is the opposite of the signal this banner exists to give.
+-- The four CREATEs are the tables this resource owns and are what schemaOk
+-- answers for; the ALTERs warn on their own line and are left to the operator.
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_flashdrop_drops` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    catalog_code VARCHAR(8) NOT NULL,
+    label VARCHAR(100) NOT NULL,
+    location_id VARCHAR(50) NOT NULL,
+    retail INT UNSIGNED NOT NULL,
+    supply_cap SMALLINT UNSIGNED NOT NULL,
+    claimed SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    status ENUM('announced','revealed','live','sold_out','expired','cancelled')
+        NOT NULL DEFAULT 'announced',
+    hint_at INT UNSIGNED NOT NULL,
+    reveal_at INT UNSIGNED NOT NULL,
+    live_at INT UNSIGNED NOT NULL,
+    closes_at INT UNSIGNED NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_flashdrop_drops_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_flashdrop_serials` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    uid CHAR(16) NOT NULL UNIQUE,
+    serial VARCHAR(32) NOT NULL,
+    drop_id INT UNSIGNED NOT NULL,
+    catalog_code VARCHAR(8) NOT NULL,
+    is_fake TINYINT(1) NOT NULL DEFAULT 0,
+    is_dirty TINYINT(1) NOT NULL DEFAULT 0,
+    owner_citizenid VARCHAR(64) NOT NULL,
+    claimed_by VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_flashdrop_serials_owner (owner_citizenid),
+    INDEX idx_palm6_flashdrop_serials_drop (drop_id),
+    INDEX idx_palm6_flashdrop_serials_claim (drop_id, claimed_by)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_flashdrop_provenance` (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    uid CHAR(16) NOT NULL,
+    event ENUM('drop_claim','counterfeit_mint','consign_list','consign_cancel',
+               'consign_sale','fenced','reported_stolen','legit_check')
+        NOT NULL,
+    actor_citizenid VARCHAR(64) NOT NULL,
+    actor_name VARCHAR(100) NOT NULL DEFAULT '',
+    counterparty_citizenid VARCHAR(64) DEFAULT NULL,
+    price INT DEFAULT NULL,
+    detail VARCHAR(190) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_flashdrop_prov_uid (uid, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_flashdrop_listings` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    uid CHAR(16) NOT NULL,
+    seller_citizenid VARCHAR(64) NOT NULL,
+    seller_name VARCHAR(100) NOT NULL,
+    price INT UNSIGNED NOT NULL,
+    status ENUM('active','sold','cancelled') NOT NULL DEFAULT 'active',
+    buyer_citizenid VARCHAR(64) DEFAULT NULL,
+    listed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_flashdrop_listings_status (status),
+    INDEX idx_palm6_flashdrop_listings_seller (seller_citizenid, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+    }
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_flashdrop] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+
+    -- Best effort, NOT part of schemaOk (see the header note): MariaDB-only
+    -- syntax that throws on MySQL 8 whether or not the column is already there.
+    local alters = {
+        [[
+ALTER TABLE `palm6_flashdrop_listings`
+    ADD COLUMN IF NOT EXISTS `buyer_paid` TINYINT NOT NULL DEFAULT 1;
+        ]],
+        [[
+ALTER TABLE `palm6_flashdrop_listings`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1;
+        ]],
+    }
+    for _, sql in ipairs(alters) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print(('^3[palm6_flashdrop] listings column self-heal skipped (MariaDB-only ADD COLUMN IF NOT EXISTS) -> %s. Apply sql/0062_flashdrop_settlement.sql by hand if consignment sale recovery misbehaves.^0')
+                :format(tostring(err)))
+        end
+    end
+end
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
 
@@ -1363,18 +1500,34 @@ AddEventHandler('onResourceStart', function(resource)
     -- so every claim can actually deliver a pair.
     itemRegistered = Bridge.RegisterItem(Config.Item.name, Config.Item)
 
-    -- Any drop that was mid-flight when the server went down is dead.
-    pcall(function()
-        MySQL.update.await(
-            "UPDATE palm6_flashdrop_drops SET status = 'cancelled' WHERE status IN ('announced','revealed','live')")
+    if Config.Scheduler.Enabled then scheduleNextAuto() end
+
+    -- Schema + the mid-flight-drop cleanup that reads it move into a thread so
+    -- the DDL lands before anything touches the tables. Nothing above this
+    -- point touches the DB.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+
+        -- Any drop that was mid-flight when the server went down is dead.
+        pcall(function()
+            MySQL.update.await(
+                "UPDATE palm6_flashdrop_drops SET status = 'cancelled' WHERE status IN ('announced','revealed','live')")
+        end)
+
+        -- Open the gate only AFTER the cleanup above, never before it: the
+        -- whole point is that a drop armed earlier would be cancelled by it.
+        bootReady = true
+
+        print(('[palm6_flashdrop] ready — %d catalog entries, %d locations, scheduler %s, schema %s')
+            :format(#Config.Catalog, #Config.Locations, Config.Scheduler.Enabled and 'ON' or 'OFF',
+                schemaOk and 'OK' or '^1MISSING^0'))
     end)
 
-    if Config.Scheduler.Enabled then scheduleNextAuto() end
-    print(('[palm6_flashdrop] ready — %d catalog entries, %d locations, scheduler %s')
-        :format(#Config.Catalog, #Config.Locations, Config.Scheduler.Enabled and 'ON' or 'OFF'))
-
     -- Recover consignment sales interrupted by the last restart, once oxmysql +
-    -- palm6_dbmigrate (0062 buyer_paid/settled columns) are up.
+    -- palm6_dbmigrate (0062 buyer_paid/settled columns) are up. The 8s also
+    -- clears the 3s schema thread above, so on a fresh box the tables exist
+    -- before the reconcile reads them.
     CreateThread(function()
         Wait(8000)
         reconcileConsignSales()

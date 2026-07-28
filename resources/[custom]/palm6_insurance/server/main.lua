@@ -678,23 +678,136 @@ RegisterNetEvent('palm6_insurance:agent:claimList', function()
     TriggerClientEvent('palm6_insurance:agent:claimListData', src, { policies = policies })
 end)
 
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_mdt/server/main.lua:
+-- Wait(3000) for oxmysql, per-statement pcall, CREATE TABLE IF NOT EXISTS.
+-- sql/ files are applied BY HAND (deploy/README.md; CI never touches the DB),
+-- so a fresh box that missed one left every query here pcall-swallowed into
+-- silence - premiums taken with no policy written and claims that never
+-- resolve, with the boot banner cheerfully reporting zeros. Re-runs are
+-- harmless no-ops on the live box, which already has these tables.
+--
+-- Both CREATEs below are copied VERBATIM from the matching sql/ file so the
+-- two can never diverge:
+--   palm6_insurance_policies, palm6_insurance_claims  <- sql/0021_insurance.sql
+-- and three BEST-EFFORT ALTERs, run separately below:
+--   policies.tier                <- sql/0064_insurance_tier.sql
+--   policies.status +'claimed'   <- sql/0065_insurance_status_claimed.sql
+--   claims.credited_at           <- sql/0057_insurance_settlement.sql
+--
+-- The ALTERs are deliberately kept OUT of the schemaOk signal. ADD COLUMN IF
+-- NOT EXISTS is MariaDB syntax; MySQL 8 has no such form and THROWS on it even
+-- on a box where those columns were already applied by hand. Folding that throw
+-- into schemaOk would make a perfectly healthy MySQL box print "schema MISSING"
+-- every boot, which is the opposite of the signal this banner exists to give.
+-- The two CREATEs are the tables this resource owns and are what schemaOk
+-- answers for; the ALTERs warn on their own line and are left to the operator.
+-- (0065's MODIFY COLUMN is portable, but it is grouped with the others because
+-- it is meaningless without the table the CREATEs make and it is an ALTER, not
+-- part of this resource's owned-table contract.)
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_insurance_policies` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    plate VARCHAR(15) NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    vehicle_model VARCHAR(50) NOT NULL,
+    vehicle_value INT UNSIGNED NOT NULL,
+    premium_paid INT UNSIGNED NOT NULL,
+    coverage INT UNSIGNED NOT NULL,
+    deductible INT UNSIGNED NOT NULL,
+    status ENUM('active','lapsed','cancelled') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    INDEX idx_palm6_insurance_policies_plate (plate, status),
+    INDEX idx_palm6_insurance_policies_cid (citizenid),
+    INDEX idx_palm6_insurance_policies_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_insurance_claims` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    policy_id INT UNSIGNED NOT NULL,
+    plate VARCHAR(15) NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    kind ENUM('damage','total_loss','theft') NOT NULL,
+    assessed INT UNSIGNED NOT NULL,
+    risk_score TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    risk_factors TEXT DEFAULT NULL,
+    status ENUM('processing','paid','flagged_paid') NOT NULL DEFAULT 'processing',
+    case_id INT UNSIGNED DEFAULT NULL,
+    filed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    due_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_insurance_claims_cid (citizenid),
+    INDEX idx_palm6_insurance_claims_status_due (status, due_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
+    }
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_insurance] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+
+    -- Best effort, NOT part of schemaOk (see the header note): mostly MariaDB-only
+    -- syntax that throws on MySQL 8 whether or not the column is already there.
+    local alters = {
+        { file = 'sql/0064_insurance_tier.sql', sql = [[
+ALTER TABLE `palm6_insurance_policies`
+    ADD COLUMN IF NOT EXISTS `tier` VARCHAR(16) NOT NULL DEFAULT 'standard';
+        ]] },
+        { file = 'sql/0065_insurance_status_claimed.sql', sql = [[
+ALTER TABLE `palm6_insurance_policies`
+    MODIFY COLUMN `status` ENUM('active','lapsed','cancelled','claimed') NOT NULL DEFAULT 'active';
+        ]] },
+        { file = 'sql/0057_insurance_settlement.sql', sql = [[
+ALTER TABLE `palm6_insurance_claims`
+    ADD COLUMN IF NOT EXISTS `credited_at` BIGINT NOT NULL DEFAULT 1;
+        ]] },
+    }
+    for _, a in ipairs(alters) do
+        local ok, err = pcall(function() MySQL.query.await(a.sql) end)
+        if not ok then
+            print(('^3[palm6_insurance] column self-heal skipped (%s) -> %s. Apply it by hand if tiers, policy retirement, or claim payout recovery misbehave.^0')
+                :format(a.file, tostring(err)))
+        end
+    end
+end
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local active, pending = 0, 0
-    pcall(function()
-        local a = MySQL.single.await(
-            "SELECT COUNT(*) AS n FROM palm6_insurance_policies WHERE status = 'active' AND expires_at > NOW()")
-        active = a and tonumber(a.n) or 0
-        local p = MySQL.single.await(
-            "SELECT COUNT(*) AS n FROM palm6_insurance_claims WHERE resolved_at IS NULL")
-        pending = p and tonumber(p.n) or 0
+    -- Schema + the counts that read it move into a thread so the DDL lands
+    -- before anything SELECTs. Nothing above this point touches the DB.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+
+        local active, pending = 0, 0
+        pcall(function()
+            local a = MySQL.single.await(
+                "SELECT COUNT(*) AS n FROM palm6_insurance_policies WHERE status = 'active' AND expires_at > NOW()")
+            active = a and tonumber(a.n) or 0
+            local p = MySQL.single.await(
+                "SELECT COUNT(*) AS n FROM palm6_insurance_claims WHERE resolved_at IS NULL")
+            pending = p and tonumber(p.n) or 0
+        end)
+        print(('[palm6_insurance] Mors Mutual open — %d active policy(ies), %d claim(s) processing; replay forensics %s, schema %s')
+            :format(active, pending,
+                Bridge.ResourceStarted('palm6_replay') and 'ONLINE' or 'offline (no-scene signal disabled)',
+                schemaOk and 'OK' or '^1MISSING^0'))
     end)
-    print(('[palm6_insurance] Mors Mutual open — %d active policy(ies), %d claim(s) processing; replay forensics %s')
-        :format(active, pending,
-            Bridge.ResourceStarted('palm6_replay') and 'ONLINE' or 'offline (no-scene signal disabled)'))
     -- Recover any claim payout interrupted by the last restart, once oxmysql +
     -- palm6_dbmigrate (0057 credited_at column) are up. Non-time-critical, so
-    -- wait it out before the WHERE credited_at = 0 query runs.
+    -- wait it out before the WHERE credited_at = 0 query runs. The 8s also
+    -- clears the 3s schema thread above, so on a fresh box the table exists
+    -- before the reconcile reads it.
     CreateThread(function()
         Wait(8000)
         reconcileUncredited()

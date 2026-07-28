@@ -298,6 +298,58 @@ local function cmdInfo(src)
 end
 
 -- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_mdt/server/main.lua:
+-- Wait(3000) for oxmysql, per-statement pcall, CREATE TABLE IF NOT EXISTS.
+-- sql/ files are applied BY HAND (deploy/README.md; CI never touches the DB),
+-- so a fresh box that missed one left every query here pcall-swallowed into
+-- silence: bets take the player's cash and never persist, and the draw resolves
+-- nothing, all without a single console line. Re-runs are harmless no-ops on
+-- the live box, which already has these tables.
+--
+-- Both statements below are copied VERBATIM from the matching sql/ file so the
+-- two can never diverge:
+--   palm6_numbers_bets, palm6_numbers_draws   <- sql/0034_numbers.sql
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_numbers_bets` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    number TINYINT UNSIGNED NOT NULL,
+    stake INT UNSIGNED NOT NULL,
+    draw_seq INT UNSIGNED NOT NULL,
+    status ENUM('open', 'won', 'lost') NOT NULL DEFAULT 'open',
+    payout INT UNSIGNED NOT NULL DEFAULT 0,
+    paid TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_numbers_bets_draw (draw_seq, status),
+    INDEX idx_palm6_numbers_bets_collect (citizenid, status, paid)
+);
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_numbers_draws` (
+    draw_seq INT UNSIGNED NOT NULL PRIMARY KEY,
+    winning_number TINYINT UNSIGNED NOT NULL,
+    bets INT UNSIGNED NOT NULL DEFAULT 0,
+    staked INT UNSIGNED NOT NULL DEFAULT 0,
+    payout_total INT UNSIGNED NOT NULL DEFAULT 0,
+    drawn_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+        ]],
+    }
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_numbers] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Commands, draw loop, boot
 -- ---------------------------------------------------------------------------
 Bridge.RegisterCommand('numbers', function(source, args) cmdNumbers(source, args) end)
@@ -318,30 +370,41 @@ AddEventHandler('onResourceStart', function(resource)
             .. 'numbers game disabled (nothing to pay winners in).^0'):format(Config.WinItem))
         return
     end
-    -- Continue an in-progress open draw across restarts: pick up after the last
-    -- resolved sequence, but never behind an existing open bet's sequence.
-    local maxDrawn, maxOpen = 0, 0
-    pcall(function()
-        local r = MySQL.single.await("SELECT COALESCE(MAX(draw_seq),0) AS n FROM palm6_numbers_draws")
-        maxDrawn = r and tonumber(r.n) or 0
-    end)
-    pcall(function()
-        local r = MySQL.single.await("SELECT COALESCE(MAX(draw_seq),0) AS n FROM palm6_numbers_bets WHERE status = 'open'")
-        maxOpen = r and tonumber(r.n) or 0
-    end)
-    openDrawSeq = math.max(maxDrawn + 1, maxOpen, 1)
-    nextDrawAt = now() + Config.DrawIntervalSec
-    drawEnabled = true
+    -- Schema + every read that depends on it move into a thread so the DDL
+    -- lands before anything SELECTs. drawEnabled is flipped at the END of that
+    -- thread on purpose: until the open sequence has been recovered, a bet
+    -- would be filed against the wrong draw, so cmdNumbers' existing
+    -- drawEnabled gate turns the bookie away for the first ~3s of a restart.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
 
-    local draws, staked = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT COUNT(*) AS c, COALESCE(SUM(staked),0) AS s FROM palm6_numbers_draws")
-        draws = r and tonumber(r.c) or 0
-        staked = r and tonumber(r.s) or 0
+        -- Continue an in-progress open draw across restarts: pick up after the last
+        -- resolved sequence, but never behind an existing open bet's sequence.
+        local maxDrawn, maxOpen = 0, 0
+        pcall(function()
+            local r = MySQL.single.await("SELECT COALESCE(MAX(draw_seq),0) AS n FROM palm6_numbers_draws")
+            maxDrawn = r and tonumber(r.n) or 0
+        end)
+        pcall(function()
+            local r = MySQL.single.await("SELECT COALESCE(MAX(draw_seq),0) AS n FROM palm6_numbers_bets WHERE status = 'open'")
+            maxOpen = r and tonumber(r.n) or 0
+        end)
+        openDrawSeq = math.max(maxDrawn + 1, maxOpen, 1)
+        nextDrawAt = now() + Config.DrawIntervalSec
+        drawEnabled = true
+
+        local draws, staked = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT COUNT(*) AS c, COALESCE(SUM(staked),0) AS s FROM palm6_numbers_draws")
+            draws = r and tonumber(r.c) or 0
+            staked = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_numbers] bookie open — draw #%d live (every %dm), %d draw(s) run, $%d staked all-time; pays %dx, schema %s'):format(
+            openDrawSeq, math.floor(Config.DrawIntervalSec / 60), draws, staked, Config.PayoutMultiple,
+            schemaOk and 'OK' or '^1MISSING^0'))
     end)
-    print(('[palm6_numbers] bookie open — draw #%d live (every %dm), %d draw(s) run, $%d staked all-time; pays %dx'):format(
-        openDrawSeq, math.floor(Config.DrawIntervalSec / 60), draws, staked, Config.PayoutMultiple))
 end)
 
 --- Totals for devtest and future consumers.
