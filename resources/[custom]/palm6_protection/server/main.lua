@@ -55,7 +55,16 @@ local function ownedBusinessAt(src)
     if not Config.ExtortOwned then return nil end
     local c = Bridge.GetCoords(src)
     if not c then return nil end
-    local biz = exports.palm6_business:BusinessAtCoords(c.x, c.y, c.z, Config.OwnedRadius)
+    -- Cross-resource calls are SOFT here, same as fileEvidence() below: if
+    -- palm6_business is not on the box (or throws), the bare export call would
+    -- hard-error the whole /shakedown handler. Returning nil already means "no
+    -- owned target", so the flow degrades cleanly to the hardcoded Config
+    -- businesses instead of dying.
+    if not Bridge.ResourceStarted('palm6_business') then return nil end
+    local biz
+    pcall(function()
+        biz = exports.palm6_business:BusinessAtCoords(c.x, c.y, c.z, Config.OwnedRadius)
+    end)
     if not biz then return nil end
     local zone = nearestZone({ x = biz.x, y = biz.y, z = biz.z })
     if not zone then return nil end
@@ -192,7 +201,17 @@ local function cmdShakedown(src)
     -- hand-off fails, the drain is refunded so no money is lost. Any failure voids
     -- the claim so the business isn't falsely locked for a payout that never happened.
     if business.isOwned then
-        local taken = exports.palm6_business:Extort(business.bizId, amount, cid, 'Shakedown')
+        -- Soft-guarded, like every other cross-resource call in this file. A
+        -- throw here would abort the handler with the durable claim row still
+        -- written and collectLock still held, locking the business out of every
+        -- future shakedown until a restart. pcall so the failure lands in the
+        -- existing voidClaim() branch below, which already unwinds both.
+        local taken
+        if Bridge.ResourceStarted('palm6_business') then
+            pcall(function()
+                taken = exports.palm6_business:Extort(business.bizId, amount, cid, 'Shakedown')
+            end)
+        end
         if not taken or taken < 1 then
             voidClaim()
             Bridge.Notify(src, 'Protection', ("%s's register came up dry."):format(business.label), 'error')
@@ -203,7 +222,13 @@ local function cmdShakedown(src)
             -- Refund the drain. It only fails if the owner CLOSED the business in the
             -- gap (its row is gone) — then the amount is destroyed (deflationary, rare,
             -- non-exploitable). Meter it rather than swallow it, per the money-safety note.
-            if not exports.palm6_business:RefundExtortion(business.bizId, amount, 'shakedown-void') then
+            local refunded
+            if Bridge.ResourceStarted('palm6_business') then
+                pcall(function()
+                    refunded = exports.palm6_business:RefundExtortion(business.bizId, amount, 'shakedown-void')
+                end)
+            end
+            if not refunded then
                 print(('^3[palm6_protection] shakedown void: $%d could not be refunded to business %s ')
                     :format(amount, tostring(business.bizId))
                     .. '(closed mid-shakedown) — destroyed.^0')

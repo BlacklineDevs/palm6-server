@@ -10,6 +10,47 @@
 -- qbx_adminmenu; registering them here overrode the recipe handlers.
 -- ============================================================================
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql, per-statement pcall, CREATE TABLE IF NOT
+-- EXISTS so re-runs are harmless no-ops.
+--
+-- Why this resource in particular: sql/ is applied BY HAND (deploy/README.md)
+-- and CI never touches the DB, so a restored backup or a new box boots with no
+-- audit_log. This is the sink EVERY other resource writes its security trail
+-- into (allowlist denials, eventguard kicks, pumpcoin rug reveals) - losing it
+-- silently means losing the record of exactly the events you would later need
+-- to reconstruct. On the live box this statement is a pure no-op.
+--
+-- DDL copied VERBATIM from sql/0007_staff_log.sql.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local ok, err = pcall(function()
+        MySQL.query.await([[
+CREATE TABLE IF NOT EXISTS `audit_log` (
+    `id`                INT AUTO_INCREMENT PRIMARY KEY,
+    `action`            VARCHAR(50) NOT NULL,
+    `actor_name`        VARCHAR(100) DEFAULT NULL,
+    `actor_identifier`  VARCHAR(100) DEFAULT NULL,
+    `target_name`       VARCHAR(100) DEFAULT NULL,
+    `target_identifier` VARCHAR(100) DEFAULT NULL,
+    `detail`            TEXT,
+    `created_at`        DATETIME NOT NULL,
+    KEY `idx_action_time` (`action`, `created_at`),
+    KEY `idx_actor`       (`actor_identifier`),
+    KEY `idx_target`      (`target_identifier`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]])
+    end)
+    if not ok then
+        print(('^1[palm6_staff] schema init FAILED -> %s^0'):format(tostring(err)))
+    end
+    SchemaReady = ok
+    return ok
+end
+
 local function actorName(src)
     if src == 0 then return 'console' end
     local name = Bridge.GetPlayerName(src) or ('player:%d'):format(src)
@@ -52,9 +93,17 @@ end
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    print(('[palm6_staff] audit-log sink online; webhook=%s'):format(
-        GetConvar(Config.WebhookConvar, '') ~= '' and 'set' or 'unset'
-    ))
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- The banner names the schema state explicitly. "online" with a missing
+        -- table was the old behaviour and it read as healthy while every Log()
+        -- call threw into its caller's pcall and vanished.
+        print(('[palm6_staff] audit-log sink %s; webhook=%s'):format(
+            SchemaReady and 'online' or 'ONLINE BUT SCHEMA MISSING (audit_log absent)',
+            GetConvar(Config.WebhookConvar, '') ~= '' and 'set' or 'unset'
+        ))
+    end)
 end)
 
 -- Public export so other resources (allowlist denials, eventguard kicks,

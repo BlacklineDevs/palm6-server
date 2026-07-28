@@ -25,6 +25,120 @@
 
 local STASH_ID = 'evidence_locker'
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql, per-statement pcall, every statement
+-- IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this resource in particular: sql/ is applied BY HAND (deploy/README.md)
+-- and CI never touches the DB, so a restored backup or a new box boots with no
+-- evidence tables. This resource owns a FROZEN export API that five sibling
+-- resources (protection, counterfeit, witnesses, seizure, replay) call inside
+-- pcall - so a missing table means EnsureCase silently returns nil forever and
+-- the entire case-file layer disappears with no console line. On the live box
+-- these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0012_evidence.sql (the v1 log table) and
+-- sql/0018_evidence_v2.sql (cases, suspects, and the additive v1 columns).
+-- The v2 ALTERs are included because the v1 CREATE alone leaves case_id/kind/
+-- source absent, which breaks every v2 insert path. `ADD COLUMN IF NOT EXISTS`
+-- / `ADD INDEX IF NOT EXISTS` are MariaDB syntax, which is what this stack
+-- runs (qbx_core is MariaDB-only) - same assumption sql/0018 states.
+--
+-- One deliberate deviation from byte-verbatim: the five-line SQL comment that
+-- sits above uq_palm6_evidence_suspects_case_cid in sql/0018 is NOT reproduced
+-- here. The DDL itself is identical; only the comment is dropped. Read sql/0018
+-- for the reasoning behind that key (race-safe INSERT IGNORE dedupe, NULL
+-- citizenid exempt because MariaDB unique keys permit multiple NULLs).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_evidence` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    officer_name VARCHAR(100) NOT NULL,
+    description TEXT NOT NULL,
+    coords TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_evidence_citizenid (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_evidence_cases` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    incident_key VARCHAR(80) DEFAULT NULL,
+    title VARCHAR(150) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'open',
+    created_by VARCHAR(64) NOT NULL DEFAULT 'system',
+    created_by_name VARCHAR(100) NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_palm6_evidence_cases_incident (incident_key),
+    INDEX idx_palm6_evidence_cases_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_evidence_suspects` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    case_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) DEFAULT NULL,
+    descriptor TEXT DEFAULT NULL,
+    added_by VARCHAR(100) NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_palm6_evidence_suspects_case_cid (case_id, citizenid),
+    INDEX idx_palm6_evidence_suspects_case (case_id),
+    INDEX idx_palm6_evidence_suspects_citizenid (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN/INDEX IF
+    -- NOT EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- or index already exists. Folding these into SchemaReady made a perfectly
+    -- healthy MySQL box print `schema MISSING` on every boot, which is the
+    -- permanent-false-alarm failure that trains an operator to ignore the
+    -- banner (see palm6_perf/server/tables.lua's header). The CREATE TABLEs
+    -- above are what this resource owns and what SchemaReady answers for.
+    -- Same pattern as palm6_mdt/server/main.lua's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_evidence`
+    ADD COLUMN IF NOT EXISTS case_id INT UNSIGNED DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS kind VARCHAR(32) NOT NULL DEFAULT 'note',
+    ADD COLUMN IF NOT EXISTS source VARCHAR(64) NOT NULL DEFAULT 'police'
+        ]],
+        [[
+ALTER TABLE `palm6_evidence`
+    ADD INDEX IF NOT EXISTS idx_palm6_evidence_case (case_id)
+        ]],
+        [[
+ALTER TABLE `palm6_evidence_suspects`
+    ADD UNIQUE INDEX IF NOT EXISTS uq_palm6_evidence_suspects_case_cid (case_id, citizenid)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_evidence] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_evidence] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column or index already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     -- Restrict to the police group and to the locker coords so ox_inventory
@@ -33,6 +147,15 @@ AddEventHandler('onResourceStart', function(resource)
     Bridge.RegisterStash(STASH_ID, 'Evidence Locker', Config.LockerSlots, Config.LockerMaxWeight,
         { police = 0 }, Config.LockerCoords)
     print('[palm6_evidence] evidence locker registered')
+    -- Schema on its own thread: the stash registration above must not wait on
+    -- oxmysql, and nothing in this resource queries before a player acts.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        if not SchemaReady then
+            print('^1[palm6_evidence] schema MISSING - case files and the frozen export API are INERT on this box.^0')
+        end
+    end)
 end)
 
 -- ---------------------------------------------------------------------------

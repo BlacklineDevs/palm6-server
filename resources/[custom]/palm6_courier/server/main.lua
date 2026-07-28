@@ -10,16 +10,130 @@
 
 local Postings = {}  -- id -> posting (snapshot from DB, refreshed on mutation)
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no
+-- courier_postings at all. The old failure mode was ONE boot-time Lua error
+-- from the unguarded loadPostings() and then nothing: the board showed no
+-- postings forever, with no line saying why. Loud once, then silent - which is
+-- silence by the time an operator looks. On the live box these statements are
+-- pure no-ops.
+--
+-- The DDL is copied VERBATIM from sql/0006_courier.sql, plus the two
+-- idempotent ALTERs from sql/0050_courier_pickup.sql and
+-- sql/0056_courier_settlement.sql. The ALTERs are repeated here (they also
+-- live in palm6_dbmigrate) because dbmigrate and this resource boot on
+-- independent threads: whichever runs second is a no-op, and neither can lose
+-- the race. settled DEFAULT 1 is load-bearing and must NOT be changed to 0 -
+-- see the long note in sql/0056: DEFAULT 0 would make the boot reconcile
+-- re-pay the entire terminal history exactly once.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- Statements THIS resource owns and can answer for. Only these feed
+    -- SchemaReady. See the ALTER note below for why they are kept separate.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `courier_postings` (
+    `id`                 INT AUTO_INCREMENT PRIMARY KEY,
+    `poster_citizenid`   VARCHAR(50) NOT NULL,
+    `courier_citizenid`  VARCHAR(50) DEFAULT NULL,
+    `bounty`             INT NOT NULL,
+    `pickup_x`           DOUBLE NOT NULL,
+    `pickup_y`           DOUBLE NOT NULL,
+    `pickup_z`           DOUBLE NOT NULL,
+    `dropoff_x`          DOUBLE NOT NULL,
+    `dropoff_y`          DOUBLE NOT NULL,
+    `dropoff_z`          DOUBLE NOT NULL,
+    `label`              VARCHAR(100) DEFAULT 'Package',
+    `status`             ENUM('open','taken','complete','cancelled','expired') NOT NULL DEFAULT 'open',
+    `created_at`         DATETIME NOT NULL,
+    `accepted_at`        DATETIME DEFAULT NULL,
+    `completed_at`       DATETIME DEFAULT NULL,
+    KEY `idx_status_created` (`status`, `created_at`),
+    KEY `idx_poster`         (`poster_citizenid`),
+    KEY `idx_courier`        (`courier_citizenid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists. Folding these into SchemaReady made a perfectly healthy
+    -- MySQL box print `schema MISSING` on every single boot, which is the
+    -- permanent-false-alarm failure that trains an operator to ignore the
+    -- banner (the same argument palm6_perf/server/tables.lua makes in its
+    -- header). courier_postings is the table this resource owns and is what
+    -- SchemaReady answers for; these two columns are additive and their
+    -- absence is reported on its own line instead. Same pattern as
+    -- palm6_mdt/server/main.lua's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `courier_postings`
+    ADD COLUMN IF NOT EXISTS `picked_up` TINYINT NOT NULL DEFAULT 0
+        ]],
+        [[
+ALTER TABLE `courier_postings`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_courier] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_courier] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
+local PostingsLoaded = false  -- true once a load has actually populated the cache
+
 local function loadPostings()
     local rows = MySQL.query.await('SELECT * FROM courier_postings WHERE status = ?', { 'open' })
     Postings = {}
     if rows then
         for _, r in ipairs(rows) do Postings[r.id] = r end
     end
+    PostingsLoaded = true  -- set LAST: a throw above must leave this false
     print(('[palm6_courier] loaded %d open postings'):format(#(rows or {})))
 end
 
+-- Counts a poster's live postings for the MaxPostingsPerPlayer cap.
+--
+-- The cache is EMPTY until the boot load lands, and that load runs ~3s after
+-- onResourceStart because it has to wait for oxmysql's connection. A
+-- cache-only count would therefore report 0 for everyone during those 3s, so
+-- an `ensure palm6_courier` with players online would open a window where the
+-- per-player cap is not enforced at all. Until the cache is authoritative we
+-- ask the DB instead; if that query fails we return the cap itself so the
+-- caller refuses the post. No count, no posting.
 local function countActiveByCitizen(citizenid)
+    if not PostingsLoaded then
+        local n
+        local ok = pcall(function()
+            n = MySQL.scalar.await(
+                "SELECT COUNT(*) FROM courier_postings WHERE poster_citizenid = ? AND status = 'open'",
+                { citizenid })
+        end)
+        if not ok or not tonumber(n) then return Config.MaxPostingsPerPlayer end
+        return tonumber(n)
+    end
     local n = 0
     for _, p in pairs(Postings) do
         if p.poster_citizenid == citizenid and p.status == 'open' then n = n + 1 end
@@ -79,6 +193,37 @@ local function settlePosting(row, refundReason)
 end
 
 -- ---------------------------------------------------------------------------
+-- Client-supplied coordinate validation.
+--
+-- A posting's pickup/dropoff come straight off the client, and until this
+-- existed the ONLY check was `type(payload.pickup) ~= 'table'` - the x/y/z
+-- members themselves were never looked at. A table carrying NaN, +-inf, a
+-- string, or nil members sailed through, the escrow was charged, and then the
+-- INSERT either exploded (uncaught, money gone) or stored a coordinate no
+-- courier can ever reach (money locked until the abandoned sweep).
+--
+-- BOUNDS ONLY. We reject a bad coordinate, we never substitute one: silently
+-- moving another player's delivery to 0,0,0 would be worse than refusing the
+-- post, because the poster paid for a run to somewhere they picked. The
+-- envelope matches palm6_mapeditor's cleanPlacement (server/live.lua:86-97)
+-- so both agree on what "inside the world" means.
+--
+-- Returns the three numbers on success (normalised via tonumber so the INSERT
+-- binds numerics, not whatever type the client sent), or nil on rejection.
+-- NaN fails every comparison so it is tested explicitly; +-inf is caught by
+-- the range checks.
+local function cleanCoords(c)
+    if type(c) ~= 'table' then return nil end
+    local x, y, z = tonumber(c.x), tonumber(c.y), tonumber(c.z)
+    if not x or not y or not z then return nil end
+    if x ~= x or y ~= y or z ~= z then return nil end
+    if x < -20000.0 or x > 20000.0 then return nil end
+    if y < -20000.0 or y > 20000.0 then return nil end
+    if z < -2000.0 or z > 5000.0 then return nil end
+    return x, y, z
+end
+
+-- ---------------------------------------------------------------------------
 -- Net events
 -- ---------------------------------------------------------------------------
 
@@ -99,23 +244,101 @@ RegisterNetEvent('palm6_courier:post', function(payload)
     if countActiveByCitizen(citizenid) >= Config.MaxPostingsPerPlayer then
         return Bridge.Notify(src, 'Courier', 'Too many active postings', 'error')
     end
-    if type(payload.pickup) ~= 'table' or type(payload.dropoff) ~= 'table' then
+    -- Validate the coordinates BEFORE the escrow is charged. Order matters: the
+    -- charge below is real money, so every reason to refuse the post has to be
+    -- known first, or we take the money for a posting we then cannot store.
+    local pux, puy, puz = cleanCoords(payload and payload.pickup)
+    local dox, doy, doz = cleanCoords(payload and payload.dropoff)
+    if not pux or not dox then
         return Bridge.Notify(src, 'Courier', 'Invalid pickup/dropoff', 'error')
+    end
+    -- `label` lands in a VARCHAR(100) column (sql/0006_courier.sql). Uncapped, a
+    -- long client string makes the INSERT fail outright under strict mode - and
+    -- the INSERT now happens after the charge, so an avoidable failure there is
+    -- an avoidable refund.
+    --
+    -- :sub() counts BYTES, not characters. Under utf8mb4 a blind 100-byte cut
+    -- can slice a multi-byte sequence in half and MySQL then rejects the row
+    -- with "Incorrect string value" anyway, landing us in the failure path
+    -- below for a post we could have accepted. So: reject a label that is not
+    -- valid UTF-8 outright (before the charge, per the ordering note above),
+    -- and when we do cut, walk the tail back to a whole character. The walk is
+    -- at most 3 bytes and only runs on input that WAS valid, so it can never
+    -- eat a label down to nothing.
+    local label = tostring(payload.label or 'Package')
+    if not utf8.len(label) then
+        return Bridge.Notify(src, 'Courier', 'Invalid label', 'error')
+    end
+    if #label > 100 then
+        label = label:sub(1, 100)
+        while #label > 0 and not utf8.len(label) do label = label:sub(1, #label - 1) end
     end
 
     if not Bridge.ChargeBank(src, b, 'courier-escrow') then
         return Bridge.Notify(src, 'Courier', 'Insufficient bank balance for escrow', 'error')
     end
 
-    local id = MySQL.insert.await(
-        "INSERT INTO courier_postings (poster_citizenid, bounty, pickup_x, pickup_y, pickup_z, dropoff_x, dropoff_y, dropoff_z, label, status, created_at) VALUES (?,?,?,?,?,?,?,?,?, 'open', NOW())",
-        {
-            citizenid, b,
-            payload.pickup.x, payload.pickup.y, payload.pickup.z,
-            payload.dropoff.x, payload.dropoff.y, payload.dropoff.z,
-            tostring(payload.label or 'Package'),
-        }
-    )
+    -- The escrow is already gone by this line. An unguarded INSERT that throws
+    -- (DB pool down, courier_postings missing on a fresh box, column drift)
+    -- would eat the poster's money with no row to ever refund it from, and no
+    -- boot reconcile can recover what was never written. pcall it, and on
+    -- failure hand the escrow back through the same CreditBankByCitizenId path
+    -- settlePosting uses, with its own money-log reason so a support ticket can
+    -- tell a failed post from a cancelled one - but ONLY once we have proved
+    -- the row is not there. See the confirm step below.
+    local ok, id = pcall(function()
+        return MySQL.insert.await(
+            "INSERT INTO courier_postings (poster_citizenid, bounty, pickup_x, pickup_y, pickup_z, dropoff_x, dropoff_y, dropoff_z, label, status, created_at) VALUES (?,?,?,?,?,?,?,?,?, 'open', NOW())",
+            {
+                citizenid, b,
+                pux, puy, puz,
+                dox, doy, doz,
+                label,
+            }
+        )
+    end)
+    if not ok or not tonumber(id) then
+        -- A throw does NOT prove the INSERT did not land. An oxmysql query
+        -- timeout or a connection drop raises just as readily AFTER the
+        -- statement executed, and refunding on that path is a MINT: the escrow
+        -- goes back to the poster while a live status='open' row with their
+        -- citizenid sits on the board, and one /cancel later settlePosting
+        -- credits the same bounty a second time. That inverts this file's
+        -- stated money bias (see the settlePosting note above: "a rare
+        -- self-inflicted shortfall, never a mint").
+        --
+        -- So: refund only when we can prove no row landed. The confirm looks
+        -- for a still-open posting of ours with the same bounty and label from
+        -- the last two minutes. Two ways it declines to refund, both on the
+        -- safe side of the bias:
+        --   * a matching row IS there  -> the INSERT actually succeeded, the
+        --     escrow is correctly attached to a real posting, and the poster
+        --     can /cancel it for the normal single refund.
+        --   * the confirm itself fails -> we cannot tell, so we keep the money
+        --     where it is and print a line an operator can settle by hand.
+        -- The one false negative (the poster already had an identical open
+        -- posting from the last two minutes) costs that poster their escrow
+        -- until staff settle it. A shortfall, never a mint.
+        local confirmed, orphan = pcall(function()
+            return MySQL.scalar.await(
+                "SELECT id FROM courier_postings WHERE poster_citizenid = ? AND bounty = ? AND label = ? AND status = 'open' AND created_at >= (NOW() - INTERVAL 2 MINUTE) ORDER BY id DESC LIMIT 1",
+                { citizenid, b, label })
+        end)
+        if confirmed and not orphan then
+            Bridge.CreditBankByCitizenId(citizenid, b, 'courier-refund-postfailed')
+            print(('[palm6_courier] post INSERT failed for %s with no row written, escrow $%d refunded: %s')
+                :format(citizenid, b, tostring(id)))
+            return Bridge.Notify(src, 'Courier', 'Could not save the posting. Your escrow was refunded.', 'error')
+        end
+        -- Either the row landed or we cannot tell. Refresh the cache so a row
+        -- that DID land appears on the board and stays cancellable (:cancel
+        -- reads Postings, so an unloaded row is an unrefundable one).
+        pcall(loadPostings)
+        print(('^1[palm6_courier] post INSERT for %s ($%d) reported failure but a matching open row may exist (confirm ok=%s, existing id=%s) - escrow NOT auto-refunded, settle by hand: %s^0')
+            :format(citizenid, b, tostring(confirmed), tostring(orphan), tostring(id)))
+        return Bridge.Notify(src, 'Courier',
+            'Could not confirm your posting. Check the board before posting again - if it is there, cancel it to get your escrow back.', 'error')
+    end
     loadPostings()
     Bridge.Notify(src, 'Courier', ('Posted #%d for $%d'):format(id, b), 'success')
 end)
@@ -378,13 +601,31 @@ end
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    loadPostings()
     -- Recover any terminal posting whose payout/refund was interrupted by the
     -- last restart. Delayed so palm6_dbmigrate's 0056 ALTER (the `settled`
     -- column) has landed first — before that the WHERE settled=0 query errors
     -- (pcall-swallowed) and recovers nothing. Non-time-critical, so wait it out.
+    --
+    -- The whole boot sequence now runs on this thread because ensureSchema has
+    -- to Wait for oxmysql's connection before any query, and loadPostings must
+    -- not run before the table is guaranteed to exist.
     CreateThread(function()
-        Wait(8000)
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- table is absent, and with loadPostings() called unguarded ahead of
+        -- it that was the ONE case it could not report: the SELECT raised,
+        -- killed this thread, and took both the banner and the reconcile with
+        -- it. Same ordering as palm6_evidence and palm6_staff. loadPostings is
+        -- now pcall'd for the second half of that: a boot-time DB failure must
+        -- not cost us reconcileUnsettled(), which is what pays out the money a
+        -- crash left owing.
+        if not SchemaReady then
+            print('^1[palm6_courier] schema MISSING - the delivery board is INERT on this box.^0')
+        end
+        pcall(loadPostings)
+        Wait(5000)
         reconcileUnsettled()
     end)
 end)
