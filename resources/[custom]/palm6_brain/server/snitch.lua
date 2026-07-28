@@ -13,7 +13,9 @@
 -- It subscribes to the SAME Social.OnEvent seam every other social module uses,
 -- so it never edits witness/gossip/etc. It reuses the Director's exact dispatch
 -- discipline: never report to an empty PD (CountOnDutyPolice >= 1) and a global
--- rate limit between reports, so a crowd of witnesses can't flood dispatch.
+-- rate limit between reports, so a crowd of witnesses can't flood dispatch. On top
+-- of that there is a PER-PERP cooldown, so one player farming crimes cannot hold
+-- the global cooldown down and starve everybody else's real dispatches.
 --
 -- Dark by default (Config.Social.Enabled). Every Bridge call is pcall-isolated —
 -- a missing/broken Bridge must never error a witness event — and the handler
@@ -42,10 +44,28 @@ local function crimeLabel(kind)
     return CRIME_LABELS[tostring(kind or ''):lower()] or 'Suspicious activity'
 end
 
--- ── RATE LIMIT + METER STATE (bounded — two scalars) ─────────────────────────
-local GLOBAL_COOLDOWN_SEC = 30   -- server-wide floor between ANY two snitch reports
-local lastSnitch = 0             -- epoch of the last dispatch we fired (0 = never)
-local snitchCount = 0            -- total reports fired this session (meter)
+-- ── RATE LIMIT + METER STATE ─────────────────────────────────────────────────
+-- TWO cooldowns, because they defend against different things:
+--   • GLOBAL_COOLDOWN_SEC - the crowd floor. Twenty witnesses to one shooting must
+--     not become twenty dispatches. Kept exactly as shipped.
+--   • PER_REPORTER_COOLDOWN_SEC - the abuse floor. With only the global scalar, ONE
+--     player farming crimes owned the dispatch bus and starved everybody else's
+--     real reports; now their own reports are throttled harder than the bus is, so
+--     the gaps they leave are usable by other players.
+local GLOBAL_COOLDOWN_SEC = 30        -- server-wide floor between ANY two snitch reports
+local PER_REPORTER_COOLDOWN_SEC = 90  -- floor between two reports about the SAME perp
+local lastSnitch = 0                  -- epoch of the last dispatch we fired (0 = never)
+local snitchCount = 0                 -- total reports fired this session (meter)
+
+-- cid -> epoch of that perp's last dispatch. BOUNDED: pruned on every write, so it
+-- can only ever hold cids seen inside the last PER_REPORTER_COOLDOWN_SEC window.
+local lastByCid = {}
+
+local function pruneByCid(now)
+    for cid, at in pairs(lastByCid) do
+        if (now - at) >= PER_REPORTER_COOLDOWN_SEC then lastByCid[cid] = nil end
+    end
+end
 
 -- Pure decision: given witness count + disguise, how likely is a report? Base
 -- chance nudged UP by extra witnesses (more eyes = more likely someone talks),
@@ -81,6 +101,14 @@ local function tryReport(evt)
     local now = os.time()
     if (now - lastSnitch) < GLOBAL_COOLDOWN_SEC then return false end
 
+    -- 3b) GATE: per-perp rate limit so ONE player farming crimes cannot occupy the
+    --     dispatch bus and starve everybody else's real reports.
+    local cid = evt.cid and tostring(evt.cid) or nil
+    if cid and cid ~= '' then
+        local prev = lastByCid[cid]
+        if prev and (now - prev) < PER_REPORTER_COOLDOWN_SEC then return false end
+    end
+
     -- FIRE — a 911 blip + notify to on-duty cops, then record the cooldown.
     local label = ('%s reported nearby'):format(crimeLabel(evt.crimeKind))
     local okFire = pcall(function()
@@ -90,6 +118,10 @@ local function tryReport(evt)
     if not okFire then return false end
 
     lastSnitch = now
+    if cid and cid ~= '' then
+        pruneByCid(now)
+        lastByCid[cid] = now
+    end
     snitchCount = snitchCount + 1
     if CFG.Debug then
         print(('[palm6_brain:snitch] informant reported: %s (%d witness(es)%s)')
@@ -110,7 +142,10 @@ end
 -- ── METER ────────────────────────────────────────────────────────────────────
 -- Last snitch time + running count, for observability (David's "ship the meter").
 exports('GetSnitchSummary', function()
-    return { lastSnitch = lastSnitch, count = snitchCount, cooldownSec = GLOBAL_COOLDOWN_SEC }
+    local n = 0
+    for _ in pairs(lastByCid) do n = n + 1 end
+    return { lastSnitch = lastSnitch, count = snitchCount, cooldownSec = GLOBAL_COOLDOWN_SEC,
+             perReporterCooldownSec = PER_REPORTER_COOLDOWN_SEC, cooledPerps = n }
 end)
 
 -- ── DEV COMMAND (ACE: command.snitchtest) ────────────────────────────────────

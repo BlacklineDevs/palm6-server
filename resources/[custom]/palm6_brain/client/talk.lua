@@ -154,6 +154,14 @@ RegisterNetEvent('palm6_brain:talk:reply', function(pedKey, text)
     startSpeechThread()
 end)
 
+-- ── ALIBI (no client seam yet - see server/alibi.lua) ────────────────────────
+-- A `palm6_brain:alibi:result` handler briefly lived here. Its counterpart,
+-- `palm6_brain:alibi:request`, was never triggered by ANY client code, so the pair
+-- was a registered-but-unreachable net-event round trip with no proximity gate and
+-- no eventguard budget. Both halves are gone. server/alibi.lua carries the full
+-- checklist for wiring it properly (client trigger + server proximity check + rate
+-- limit + eventguard budget); the alibi store itself is live and untouched.
+
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     speechThread = false

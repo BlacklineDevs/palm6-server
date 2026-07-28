@@ -141,23 +141,28 @@ if Social and Social.RegisterDialogueContext then
     end)
 end
 
--- ── CLIENT REQUEST SEAM ──────────────────────────────────────────────────────
--- A UI/keybind fires this so a player can ask the nearby static NPC to vouch.
--- Source is validated and the citizenid resolved server-side (never trusted from
--- the client). Everything is pcall-isolated so a bad payload can't crash the net.
-RegisterNetEvent('palm6_brain:alibi:request', function(pedKey, coords, durationSec)
-    if not enabled() then return end
-    local src = source
-    if not src or src <= 0 then return end
-    local ok, cid = pcall(function()
-        local p = exports.qbx_core:GetPlayer(src)
-        return p and p.PlayerData and p.PlayerData.citizenid
-    end)
-    if not ok or not cid then return end
-    local agreed = establish(cid, pedKey, coords, durationSec)
-    -- Tell the requesting client whether the NPC agreed (UI feedback).
-    TriggerClientEvent('palm6_brain:alibi:result', src, agreed, tostring(pedKey or ''))
-end)
+-- ── CLIENT REQUEST SEAM (NOT WIRED - deliberately) ───────────────────────────
+-- There used to be a `RegisterNetEvent('palm6_brain:alibi:request', …)` here plus a
+-- `palm6_brain:alibi:result` handler in client/talk.lua. NOTHING ever triggered the
+-- request: no keybind, no UI, no command. It was a registered, client-addressable
+-- net event that only an attacker had any reason to call, and it was NOT in the
+-- palm6_eventguard allowlist, and `establish()` does no proximity check and no "did
+-- you actually talk to this ped" check on pedKey. Dead in normal play, a live hole
+-- the moment anything consumes HasAlibi. Both halves are removed rather than left
+-- registered; the store, the exports and the dialogue hook below are untouched.
+--
+-- To wire it for real, ALL of the following are required, not just the net event:
+--   1. a client trigger (keybind / ox_lib target option) that picks a ped the player
+--      is actually standing next to, reusing client/talk.lua's pedKeyFor();
+--   2. a SERVER-side proximity check here - re-derive the requester's position with
+--      GetEntityCoords(GetPlayerPed(src)) and reject a pedKey that is not near it,
+--      the same fail-closed pattern as server/crimewatch.lua's claimNearReporter();
+--   3. a per-src rate limit (alibis are cheap to ask for and permanent-ish);
+--   4. a budget line in palm6_eventguard/config.lua next to `palm6_brain:talk:say`,
+--      whose comment currently calls talk:say and crime:report "the two remaining
+--      client-addressable brain events" - which is true again as of this removal.
+-- Until then the store is driven by exports('EstablishAlibi') from server code and
+-- by /alibitest below, neither of which is client-addressable.
 
 -- ── DEV COMMAND (ACE-gated) ──────────────────────────────────────────────────
 -- /alibitest — establish a 5-min alibi for the caller near a synthetic ped, to

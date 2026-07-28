@@ -31,9 +31,32 @@ local GLM_MODEL = GetConvar('palm6:glm_model', 'glm-4-flash')
 local function glmKey() return GetConvar('palm6:glm_key', '') end
 
 -- Short per-(src|pedKey) memory so a given ped remembers the last few turns of
--- THIS conversation with THIS player (continuity). Bounded + cleared on drop.
+-- THIS conversation with THIS player (continuity).
+--
+-- Bounded on BOTH axes, because only one of them used to be:
+--   • depth  - CONVO_MAX messages inside one conversation (was already here).
+--   • COUNT  - MAX_CONVOS distinct (src|pedKey) slots server-wide. A player can mint
+--     an unbounded number of DISTINCT pedKeys ('net:1', 'net:2', … all pass the
+--     charset clamp in the entrypoint below), and every accepted one used to allocate
+--     a permanent slot that only `playerDropped` ever freed. At the eventguard bound
+--     of 40/min that is ~2400 live slots per hour per player. FIFO eviction, the same
+--     idiom as personaCache in server/social.lua; evicting only loses continuity on
+--     the least-recently-STARTED conversation, which is session flavour.
 local convo = {}
-local CONVO_MAX = 6   -- last 6 messages (3 exchanges)
+local convoOrder = {}   -- insertion order of live ckeys (FIFO eviction)
+local CONVO_MAX  = 6    -- last 6 messages (3 exchanges) inside one conversation
+local MAX_CONVOS = 512  -- hard ceiling on live conversation slots (NEVER unbounded)
+
+-- Track a ckey the first time it is written. Only ever called on a real reply, so a
+-- rejected/failed call cannot grow the table at all.
+local function rememberConvoKey(ckey)
+    if convo[ckey] then return end   -- already tracked; do not double-list it
+    convoOrder[#convoOrder + 1] = ckey
+    -- We only ever exceed the cap by one, so this loop runs at most once.
+    while #convoOrder > MAX_CONVOS do
+        convo[table.remove(convoOrder, 1)] = nil
+    end
+end
 
 -- Canned fallbacks when GLM is unwired or fails — generic street one-liners so an
 -- anonymous ped still says *something* in character.
@@ -55,6 +78,10 @@ end
 local function askBrain(src, pedKey, cid, playerText, cb)
     local key = glmKey()
     if key == '' then return cb(nil) end   -- not wired yet -> canned fallback
+    -- GLM is failing hard (see the BrainMeter block in server/main.lua): skip the
+    -- paid call and take the canned street line, which is exactly what a failed
+    -- call already produces. Guarded so load order can never break dialogue.
+    if BrainMeter and BrainMeter.BackingOff and BrainMeter.BackingOff('dialogue') then return cb(nil) end
 
     -- The Social foundation builds the persona + reputation + witness/gossip/alibi
     -- context; we PREPEND it, then bolt on the strict output contract.
@@ -77,8 +104,10 @@ local function askBrain(src, pedKey, cid, playerText, cb)
         max_tokens = 100, temperature = 0.85,
     })
 
+    if BrainMeter and BrainMeter.Attempt then BrainMeter.Attempt('dialogue') end
     PerformHttpRequest(GLM_URL, function(status, resp)
         if status ~= 200 or not resp then
+            if BrainMeter and BrainMeter.Result then BrainMeter.Result('dialogue', false, status) end
             if Config.Debug then print(('[palm6_brain:talk] GLM http %s: %s'):format(status, tostring(resp):sub(1, 200))) end
             return cb(nil)
         end
@@ -86,11 +115,20 @@ local function askBrain(src, pedKey, cid, playerText, cb)
         local reply = ok2 and data and data.choices and data.choices[1]
             and data.choices[1].message and data.choices[1].message.content
         reply = reply and cleanReply(reply) or nil
+        -- A 200 with no usable line is still a wasted paid call, so it is metered -
+        -- but through Wasted(), which does NOT arm the backoff. The 'dialogue' lane is
+        -- shared with the named-NPC path in server/main.lua and this entrypoint is
+        -- player-triggerable, so counting empty replies as an outage would let anyone
+        -- mute every ped in the city for 5 minutes. See the header block in main.lua.
         if reply and reply ~= '' then
+            if BrainMeter and BrainMeter.Result then BrainMeter.Result('dialogue', true, 200) end
+            rememberConvoKey(ckey)
             hist[#hist + 1] = { role = 'user', content = playerText }
             hist[#hist + 1] = { role = 'assistant', content = reply }
             while #hist > CONVO_MAX do table.remove(hist, 1) end
             convo[ckey] = hist
+        elseif BrainMeter and BrainMeter.Wasted then
+            BrainMeter.Wasted('dialogue', 'empty-reply')
         end
         cb(reply)
     end, 'POST', body, {
@@ -156,6 +194,19 @@ RegisterNetEvent('palm6_brain:talk:say', function(pedKey, text)
 
     pedKey = tostring(pedKey or '')
     if pedKey == '' then return end
+    -- CLAMP the ped key before it becomes a cache/convo table key. The client only
+    -- ever sends 'net:<netid>' or 'loc:<model>:<x>:<y>:<z>' (client/talk.lua:29-39),
+    -- both well under 64 chars and both inside this charset, so this cannot reject a
+    -- real ped.
+    --
+    -- What this bounds is key SIZE and CHARSET, not key CARDINALITY: 'net:1' through
+    -- 'net:999999999' all pass it. It stops a single 100KB key from being stuffed into
+    -- a table key / a log line / an LLM prompt, and keeps the key printable. The
+    -- unbounded-growth threat is handled where growth actually happens - the FIFO caps
+    -- on `convo` above and on personaCache in server/social.lua - and the paid-call
+    -- rate is handled by the eventguard budget plus the per-src gap above. Same clamp
+    -- discipline as palm6_mapeditor/server/thumbs.lua on model names.
+    if #pedKey > 64 or not pedKey:match('^[%w_:%-]+$') then return end
     text = tostring(text or ''):sub(1, 200)
     if text == '' then return end
 
@@ -175,6 +226,14 @@ AddEventHandler('playerDropped', function()
     for k in pairs(convo) do
         if k:sub(1, #prefix) == prefix then convo[k] = nil end
     end
+    -- Compact the FIFO in the same pass, so a dropped player's keys give their slots
+    -- back instead of sitting in convoOrder as dead weight until they age out.
+    local kept = {}
+    for i = 1, #convoOrder do
+        local k = convoOrder[i]
+        if convo[k] then kept[#kept + 1] = k end
+    end
+    convoOrder = kept
 end)
 
 print(('[palm6_brain:talk] talk-to-any-ped ready (%s) — GLM-voiced personas via the Social seam.')

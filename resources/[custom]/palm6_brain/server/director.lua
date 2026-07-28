@@ -302,8 +302,14 @@ Reply with ONLY a JSON array, one object per character, no prose, no code fences
         max_tokens = 400, temperature = 0.7,
     })
 
+    -- METER (A27): every one of these POSTs costs real money and the loop below
+    -- fires one a minute unattended, so each call site records into BrainMeter
+    -- (server/main.lua) and /brainstatus prints it. Guarded so load order can never
+    -- hard-error the Director.
+    if BrainMeter and BrainMeter.Attempt then BrainMeter.Attempt('director') end
     PerformHttpRequest(G_URL, function(status, resp)
         if status ~= 200 or not resp then
+            if BrainMeter and BrainMeter.Result then BrainMeter.Result('director', false, status) end
             return cb({ accepted = {}, blocked = {}, error = ('http-%s'):format(tostring(status)) })
         end
         local ok, data = pcall(json.decode, resp)
@@ -311,8 +317,15 @@ Reply with ONLY a JSON array, one object per character, no prose, no code fences
             and data.choices[1].message and data.choices[1].message.content
         local actions = extractActions(content)
         if not actions then
+            -- A 200 we cannot parse is a paid call that produced nothing, so it counts
+            -- in the meter - but as WASTED, not as a transport failure. The endpoint
+            -- answered; the model just wrote a plan we could not read. Pausing the
+            -- Director for 5 minutes over three unparseable plans would silence the
+            -- whole loop for a model-side quirk, not an outage.
+            if BrainMeter and BrainMeter.Wasted then BrainMeter.Wasted('director', 'unparseable-plan') end
             return cb({ accepted = {}, blocked = {}, error = 'unparseable-plan' })
         end
+        if BrainMeter and BrainMeter.Result then BrainMeter.Result('director', true, status) end
 
         local accepted, blocked, seen = {}, {}, {}
         for _, a in ipairs(actions) do
@@ -562,10 +575,17 @@ CreateThread(function()
         end
 
         local players = #GetPlayers()
+        -- BACKOFF (A27): after N consecutive GLM failures the lane pauses, so a
+        -- dead/revoked/rate-limited key is not POSTed to every 60s forever. Goal
+        -- expiry above still runs every iteration, so NPCs degrade to the reflex
+        -- tier on schedule exactly as they do during any other GLM outage. The
+        -- manual /braindirector probe deliberately ignores the backoff so David can
+        -- always test the pipeline by hand.
+        local paused = BrainMeter and BrainMeter.BackingOff and BrainMeter.BackingOff('director')
         -- Skip firing while a prior tick's GLM call is still outstanding, so two
         -- ticks can never commit in the same window (keeps PerTickMax meaningful
         -- if a GLM call ever runs longer than TickSeconds — audit L1).
-        if players >= (d.MinPlayers or 0) and not inFlight then
+        if players >= (d.MinPlayers or 0) and not inFlight and not paused then
             inFlight = true
             runTick({ players = players }, function(res)
                 inFlight = false
@@ -774,6 +794,18 @@ RegisterCommand('brainstatus', function(src)
         :format(#(Config.Movers or {}), #(Config.NamedNpcs or {}), #(Config.Scenes or {})))
     print(('  live: %d active goal(s); GLM key %s; %d player(s) online')
         :format(ng, gKey() ~= '' and 'SET' or 'MISSING', #GetPlayers()))
+    -- LLM CALL METER (A27) - the paid layer. "key SET" only proves a convar is
+    -- populated; these lines prove the calls are actually landing.
+    if BrainMeter and BrainMeter.Line then
+        print('  LLM calls (this session):')
+        print('    ' .. BrainMeter.Line('director'))
+        print('    ' .. BrainMeter.Line('dialogue'))
+    end
+    -- CRIME CLAIM GATE (server/crimewatch.lua) - the position gate drops claims
+    -- SILENTLY in production, so its counters live here. A climbing `rejected far`
+    -- next to a flat `accepted` means the gate is eating real reports, not forgeries.
+    local okCW, cwLine = pcall(function() return exports[GetCurrentResourceName()]:GetCrimeWatchSummary() end)
+    if okCW and cwLine then print('  crime claims: ' .. tostring(cwLine)) end
     print('  note: passive money needs BOTH Director.MoneyEnabled AND palm6_business Config.NpcPassiveIncome')
     print('  note: factions + chatter each have their OWN local CFG.Enabled (server/factions.lua, client/chatter.lua)')
     print('  meters: /brainvalidate /braincrime /braindirector /braingoals /brainmemory')

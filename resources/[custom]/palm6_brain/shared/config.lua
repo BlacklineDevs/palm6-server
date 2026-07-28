@@ -27,6 +27,20 @@ Config.Enabled = true
 -- Debug: print each scene spawn/despawn to the client console.
 Config.Debug = false
 
+-- LLM CALL METER + BACKOFF (server/main.lua `BrainMeter`, read by every GLM call
+-- site). Counters are ALWAYS on and surface in /brainstatus; the backoff is what
+-- stops a dead/revoked/rate-limited GLM key being POSTed to every 60s forever.
+--   BackoffAfter   = consecutive TRANSPORT failures before a lane pauses. Set 0 to
+--                    disable the pause and keep only the counters. Only a non-200 /
+--                    nil-body counts here: a 200 that carried an empty or unparseable
+--                    answer is metered as `wasted` and deliberately does NOT count,
+--                    because the 'dialogue' lane is shared by every ped in the city
+--                    and is reachable from a player-triggered event.
+--   BackoffSeconds = how long a paused lane stays paused. A single success clears
+--                    it early and logs the recovery.
+-- BackoffSeconds is math.floor'd on ingest (it is printed with %d).
+Config.LlmMeter = { BackoffAfter = 3, BackoffSeconds = 300 }
+
 -- Distances (metres) from the player to a scene's anchor. Despawn > Spawn gives a
 -- hysteresis band so peds don't flicker in/out at the boundary as you walk the edge.
 Config.SpawnDist   = 90.0
@@ -382,4 +396,27 @@ Config.Social = {
 
     -- TALK-TO-ANY-PED — interaction distance for the "talk" prompt on any ped.
     TalkRange = 2.5,
+
+    -- CRIME REPORT TRUST BOUND - how far a client-claimed crime position may sit
+    -- from where the SERVER says the reporting player actually is before the report
+    -- is REJECTED (server/crimewatch.lua re-derives the position; it never rewrites
+    -- the claim). The client only reports crimes within its own NEAR_CRIME bound of
+    -- 45.0m (client/crimewatch.lua), so 50.0 leaves ~5m over that bound. That 5m is
+    -- slack for SERVER-POSITION LAG, not for distance error: the client already
+    -- measured the distance itself and passed, but the server re-reads the reporter's
+    -- ped a round trip later. It is ample for the common case (knifing a ped a few
+    -- metres away leaves ~48m of headroom) and it can pinch on the far edge of the
+    -- 45m bound while the reporter is moving fast - a drive-by at 40 m/s covers 5m in
+    -- ~125ms, so a legitimate long-range report CAN be dropped. Rejections are
+    -- counted and printed in /brainstatus, so that shows up instead of vanishing.
+    -- Raising this widens the forged-blip window; lowering it drops more real reports.
+    CrimeClaimMaxM = 50.0,
+
+    -- CRIME SCAN CADENCE (client/crimewatch.lua) - the detector walks the ped pool
+    -- on a timer. ScanMs is the "hot" cadence used while the player is shooting, in
+    -- melee, or has just been detected committing something; IdleMs is the cheaper
+    -- cadence used the rest of the time. Detection is never MISSED by the slower
+    -- cadence (the engine's damage flag persists until we clear it), only delayed by
+    -- at most IdleMs. Set IdleMs = ScanMs to restore the old fixed 500ms cadence.
+    CrimeScanMs = 500, CrimeScanIdleMs = 1000,
 }
