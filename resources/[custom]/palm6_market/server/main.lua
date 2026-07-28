@@ -29,6 +29,66 @@ local lastRefine = {}    -- [src] = ts  (atomic refine cooldown)
 -- refined goods.
 local refineEnabled = false
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+-- Flipped true once seedState() has run. seedState now lives behind the boot
+-- thread's Wait(3000) (ensureSchema has to create the table before it reads
+-- from it), and until it runs the `commodity` lookup is EMPTY, which makes
+-- currentPrice() return 0 for every item. Selling in that window would tell a
+-- player holding a full stack that they have nothing to sell, and the board
+-- would price everything at $0. Both are gated on this flag instead.
+local bootReady = false
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no
+-- palm6_market_* tables. persist() and logTrade() are both pcall-wrapped and
+-- both only dbg() on failure, so with Config.Debug off a missing table is
+-- completely SILENT: every price permanently resets to base on restart (an
+-- infinite-value dump exploit) and the trade ledger records nothing. On the
+-- live box these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0046_market.sql (trailing semicolons dropped,
+-- same as the other resources that carry their own DDL).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS palm6_market_state (
+    commodity   VARCHAR(64)  NOT NULL PRIMARY KEY,
+    price       DOUBLE       NOT NULL,
+    last_ts     BIGINT       NOT NULL
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS palm6_market_trades (
+    id          INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid   VARCHAR(64)  NOT NULL,
+    commodity   VARCHAR(64)  NOT NULL,
+    qty         INT          NOT NULL,
+    total       INT          NOT NULL,
+    ts          BIGINT       NOT NULL,
+    INDEX idx_palm6_market_trades_cid (citizenid),
+    INDEX idx_palm6_market_trades_commodity (commodity)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_market] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -99,6 +159,13 @@ end
 -- ---------------------------------------------------------------------------
 RegisterNetEvent('palm6_market:sell', function()
     local src = source
+
+    -- Prices are not seeded yet (see bootReady): selling now would price every
+    -- commodity at 0 and silently eat the attempt. Refuse and say so.
+    if not bootReady then
+        Bridge.Notify(src, Config.Exchange.label, 'The exchange is still opening. Try again in a moment.', 'error')
+        return
+    end
 
     -- Atomic cooldown set BEFORE any yield: two same-tick fires can't both pass.
     local t = now()
@@ -233,6 +300,12 @@ end)
 local function boardLines()
     local L = {}
     L[#L + 1] = '=== Palm6 Commodity Exchange ==='
+    -- Same reason as the sell gate: before seedState() the lookup is empty and
+    -- every price would render as $0, which reads as a crashed market.
+    if not bootReady then
+        L[#L + 1] = 'The exchange is still opening. Try again in a moment.'
+        return L
+    end
     L[#L + 1] = 'Live buy prices. Sell at the exchange counter (E). Prices fall as goods flood the market and recover over time.'
     for _, c in ipairs(Config.Commodities) do
         local base = math.floor(currentPrice(c.item))
@@ -315,11 +388,22 @@ end
 
 AddEventHandler('onResourceStart', function(res)
     if res ~= GetCurrentResourceName() then return end
-    seedState()
-    checkRefine()
-    print(('[palm6_market] commodity exchange online — %d commodities, /%s for live prices%s'):format(
-        #Config.Commodities, Config.Command,
-        refineEnabled and (' | refinery online (%d recipes)'):format(#Config.Refine) or ' | refinery OFF'))
+    checkRefine()  -- no DB access, so it stays synchronous exactly as before
+    -- seedState reads palm6_market_state, so it must run after ensureSchema,
+    -- which in turn has to Wait for oxmysql's connection. Sell + board are
+    -- gated on bootReady for the length of that window.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        seedState()
+        bootReady = true
+        print(('[palm6_market] commodity exchange online — %d commodities, /%s for live prices%s'):format(
+            #Config.Commodities, Config.Command,
+            refineEnabled and (' | refinery online (%d recipes)'):format(#Config.Refine) or ' | refinery OFF'))
+        if not SchemaReady then
+            print('^1[palm6_market] schema MISSING - prices will NOT persist across restarts and no trade is logged.^0')
+        end
+    end)
 end)
 
 AddEventHandler('playerDropped', function()

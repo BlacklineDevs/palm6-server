@@ -33,6 +33,89 @@ local lastKidnapBy = {}  -- [kidnapperCid] = { victimCid, victimName, ts } — v
 -- (see the wire below for why).
 local HEAT_ON_DEMAND = 45
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- CREATE ... IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_ransom_cases table at all. Every query in this file is pcall-wrapped,
+-- so a missing table is SILENT: /demandransom answers "could not open a case",
+-- /payransom answers "no active ransom with that number", and the boot banner
+-- honestly reports 0 active cases. Nothing in the console says the table is
+-- gone. Worse, the boot reconcile that recovers an interrupted kidnapper
+-- payout finds nothing and reports nothing. On the live box (0029 + 0058
+-- already applied by hand) these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0029_ransom.sql.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- The table THIS resource owns and can answer for. Only these feed SchemaReady.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_ransom_cases` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    kidnapper_citizenid VARCHAR(64) NOT NULL,
+    kidnapper_name VARCHAR(100) NOT NULL DEFAULT '',
+    victim_citizenid VARCHAR(64) NOT NULL,
+    victim_name VARCHAR(100) NOT NULL DEFAULT '',
+    amount INT UNSIGNED NOT NULL,
+    instructions VARCHAR(140) NOT NULL DEFAULT '',
+    status ENUM('active','paid','expired') NOT NULL DEFAULT 'active',
+    evidence_case_id INT UNSIGNED DEFAULT NULL,
+    paid_by_citizenid VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_ransom_cases_status (status),
+    INDEX idx_palm6_ransom_cases_victim (victim_citizenid),
+    INDEX idx_palm6_ransom_cases_kidnapper (kidnapper_citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists, so folding it into SchemaReady would make a healthy
+    -- MySQL box print `schema MISSING` on every boot and train operators to
+    -- ignore the banner. Same split as palm6_courier and palm6_mdt.
+    --
+    -- Copied VERBATIM from sql/0058_ransom_settlement.sql. DEFAULT 1 is
+    -- load-bearing and must NOT be changed to 0: read the FIRST-BOOT SAFETY
+    -- note in 0058. DEFAULT 0 would backfill every pre-existing 'paid' case as
+    -- uncredited and make reconcileUncredited re-pay the whole payment history
+    -- exactly once. It is also repeated here (it also lives in palm6_dbmigrate)
+    -- because dbmigrate and this resource boot on independent threads: whichever
+    -- runs second is a no-op and neither can lose the race.
+    local alters = {
+        [[
+ALTER TABLE `palm6_ransom_cases`
+    ADD COLUMN IF NOT EXISTS `payout_credited` TINYINT NOT NULL DEFAULT 1
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_ransom] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_ransom] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -397,21 +480,35 @@ Bridge.RegisterCommand('payransom', function(source, args) cmdPayRansom(source, 
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local activeN, totalAmount = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM palm6_ransom_cases WHERE status = 'active'")
-        activeN = r and tonumber(r.n) or 0
-        totalAmount = r and tonumber(r.total) or 0
-    end)
-    print(('[palm6_ransom] ledger open — %d active case(s) ($%d demanded); mdt escalation %s')
-        :format(activeN, totalAmount, Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline'))
-    -- Recover any kidnapper payout interrupted by the last restart, once oxmysql
-    -- + palm6_dbmigrate (0058 payout_credited column) are up. Non-time-critical,
-    -- so wait it out — before the column exists the WHERE payout_credited=0 query
-    -- would error (pcall-swallowed) and recover nothing.
+    -- The whole boot sequence runs on this thread because ensureSchema has to
+    -- Wait for oxmysql's connection before it can issue any query, and the
+    -- summary count must not run before the table is guaranteed to exist.
     CreateThread(function()
-        Wait(8000)
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). Without this line the fresh-box case is exactly the
+        -- one the old banner could not report: every query is pcall'd, so it
+        -- printed a perfectly plausible "0 active case(s)".
+        if not SchemaReady then
+            print('^1[palm6_ransom] schema MISSING - the ransom ledger is INERT on this box.^0')
+        end
+        local activeN, totalAmount = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM palm6_ransom_cases WHERE status = 'active'")
+            activeN = r and tonumber(r.n) or 0
+            totalAmount = r and tonumber(r.total) or 0
+        end)
+        print(('[palm6_ransom] ledger open — %d active case(s) ($%d demanded); mdt escalation %s')
+            :format(activeN, totalAmount, Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline'))
+        -- Recover any kidnapper payout interrupted by the last restart, once
+        -- oxmysql + the payout_credited column are up (ensureSchema above adds
+        -- it if palm6_dbmigrate has not). Non-time-critical, so wait it out:
+        -- without the column the WHERE payout_credited=0 query would error
+        -- (pcall-swallowed) and recover nothing. Total delay is unchanged at
+        -- ~8s from resource start.
+        Wait(5000)
         reconcileUncredited()
     end)
 end)

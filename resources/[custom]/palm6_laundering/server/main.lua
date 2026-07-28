@@ -22,6 +22,52 @@ local frontHeat = 0.0   -- single-front heat accumulator (server-only, decays)
 
 math.randomseed(os.time())
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier and palm6_ems:
+-- Wait-for-oxmysql on the caller's thread, per-statement pcall, IF NOT EXISTS
+-- so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_laundering_runs at all. The failure is SILENT and it costs players
+-- money twice over: dirtyWashedToday() is pcall'd and returns 0, so the daily
+-- ceiling stops existing, and the run INSERT is pcall'd too, so the wash is
+-- never recorded. On the live box this statement is a pure no-op.
+--
+-- The DDL is copied VERBATIM from sql/0033_laundering.sql. There are no
+-- additive ALTERs for this table.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_laundering_runs` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    dirty_in INT UNSIGNED NOT NULL,
+    clean_out INT UNSIGNED NOT NULL,
+    fee_bps SMALLINT UNSIGNED NOT NULL,
+    flagged TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_laundering_citizen_day (citizenid, created_at)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_laundering] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -314,15 +360,32 @@ AddEventHandler('onResourceStart', function(resource)
             .. 'laundering disabled. Nothing to wash.^0'):format(Config.DirtyItem))
         return
     end
-    local runs, washed = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(dirty_in),0) AS s FROM palm6_laundering_runs')
-        runs = r and tonumber(r.c) or 0
-        washed = r and tonumber(r.s) or 0
+    -- Runs on its own thread because ensureSchema has to Wait for oxmysql's
+    -- connection before any query, and the totals below must not run before
+    -- the table is guaranteed to exist. Kept AFTER the dirty-item gate above
+    -- so a disabled laundromat still short-circuits exactly as it did before.
+    -- Nothing is cached at boot (frontHeat starts at 0 by design and every
+    -- read is per-command), so no command needs a bootReady gate.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- table is absent, which is otherwise completely silent: the daily
+        -- ceiling quietly stops applying and no wash is ever recorded.
+        if not SchemaReady then
+            print('^1[palm6_laundering] schema MISSING - the daily wash ceiling is NOT enforced on this box.^0')
+        end
+        local runs, washed = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(dirty_in),0) AS s FROM palm6_laundering_runs')
+            runs = r and tonumber(r.c) or 0
+            washed = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_laundering] laundromat open — $%d washed all-time across %d run(s); fee %d%%'):format(
+            washed, runs, math.floor(Config.Cut * 100 + 0.5)))
     end)
-    print(('[palm6_laundering] laundromat open — $%d washed all-time across %d run(s); fee %d%%'):format(
-        washed, runs, math.floor(Config.Cut * 100 + 0.5)))
 end)
 
 --- Totals for devtest and future consumers.

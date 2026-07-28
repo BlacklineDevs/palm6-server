@@ -19,6 +19,52 @@
 local lastAction = {} -- [src] = { [key] = ts } — chat-command spam guard
 local SERIAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' -- no 0/O/1/I ambiguity
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier and palm6_ems:
+-- Wait-for-oxmysql on the caller's thread, per-statement pcall, IF NOT EXISTS
+-- so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_gunrunning_sales at all. The failure is SILENT: the INSERT is pcall'd,
+-- so a purchase still charges and still hands over a weapon while the serial
+-- is never registered, and every later trace comes back "not in the registry"
+-- with nothing in the console saying why. On the live box this statement is a
+-- pure no-op.
+--
+-- The DDL is copied VERBATIM from sql/0031_gunrunning.sql. There are no
+-- additive ALTERs for this table.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_gunrunning_sales` (
+    id               INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    serial           VARCHAR(32)  NOT NULL,
+    buyer_citizenid  VARCHAR(64)  NOT NULL,
+    weapon           VARCHAR(64)  NOT NULL,
+    price            INT UNSIGNED NOT NULL,
+    purchased_at     TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_palm6_gunrunning_sales_serial (serial),
+    INDEX idx_palm6_gunrunning_sales_citizenid (buyer_citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_gunrunning] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -189,14 +235,28 @@ end)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local n, total = 0, 0
-    pcall(function()
-        local r = MySQL.single.await('SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS total FROM palm6_gunrunning_sales')
-        n = r and tonumber(r.n) or 0
-        total = r and tonumber(r.total) or 0
+    -- Runs on its own thread because ensureSchema has to Wait for oxmysql's
+    -- connection before any query, and the totals below must not run before
+    -- the table is guaranteed to exist. Nothing is cached at boot (every read
+    -- is per-command), so no command needs a bootReady gate.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- table is absent, which is otherwise completely silent.
+        if not SchemaReady then
+            print('^1[palm6_gunrunning] schema MISSING - serials are NOT being registered on this box.^0')
+        end
+        local n, total = 0, 0
+        pcall(function()
+            local r = MySQL.single.await('SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS total FROM palm6_gunrunning_sales')
+            n = r and tonumber(r.n) or 0
+            total = r and tonumber(r.total) or 0
+        end)
+        print(('[palm6_gunrunning] dealer open — %d sale(s) all-time ($%d), ballistics tracing %s')
+            :format(n, total, Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline'))
     end)
-    print(('[palm6_gunrunning] dealer open — %d sale(s) all-time ($%d), ballistics tracing %s')
-        :format(n, total, Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline'))
 end)
 
 ---Sale counts for devtest and future consumers.

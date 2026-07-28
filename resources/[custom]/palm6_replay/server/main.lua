@@ -46,6 +46,78 @@ local function dbg(msg)
     if Config.Debug then print('[palm6_replay] ' .. msg) end
 end
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- every statement IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with neither
+-- replay table. Every query in this file sits inside a pcall, so the failure
+-- is SILENT: scenes appear to record (the capture pipeline reports success to
+-- the flagging officer), /replayscenes returns "no scenes nearby" forever, and
+-- the boot banner still prints "black-box online". The whole evidentiary
+-- record of the city vanishes with nothing in the console. On the live box
+-- (0015 already applied by hand) these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0015_replay.sql. The inline `--` column
+-- comments are carried across with it. NOTE: this resource also writes a row
+-- into `palm6_evidence` on /replayattach; that table is NOT created here
+-- because palm6_evidence owns it and self-creates it in its own ensureSchema.
+-- That write is already soft (pcall + a "evidence log unavailable" fallback
+-- message), so duplicating its DDL would only add a second place to keep in
+-- sync with sql/0012 + sql/0018.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- The tables THIS resource owns and can answer for. Only these feed SchemaReady.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_replay_scenes` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    incident_type VARCHAR(32) NOT NULL,       -- shots | damage | downed | robbery | bodycam | manual
+    label VARCHAR(120) NOT NULL,
+    x DOUBLE NOT NULL,
+    y DOUBLE NOT NULL,
+    z DOUBLE NOT NULL,
+    flagged_by VARCHAR(64) DEFAULT NULL,      -- citizenid for officer-initiated scenes, NULL for automatic
+    participant_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    case_ref VARCHAR(120) DEFAULT NULL,       -- set by /replayattach (evidence-exhibit note)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_replay_scenes_created (created_at),
+    INDEX idx_palm6_replay_scenes_expires (expires_at),
+    INDEX idx_palm6_replay_scenes_xy (x, y)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_replay_participants` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    scene_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    player_name VARCHAR(100) NOT NULL,
+    ped_model VARCHAR(32) NOT NULL,           -- model hash as string (fallback applied at playback)
+    frame_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    frames MEDIUMTEXT NOT NULL,               -- sanitised JSON array of 4 Hz frames
+    INDEX idx_palm6_replay_participants_scene (scene_id),
+    INDEX idx_palm6_replay_participants_citizenid (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_replay] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 -- ---------------------------------------------------------------------------
 -- Gates / rate limits
 -- ---------------------------------------------------------------------------
@@ -697,9 +769,23 @@ end
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    pruneScenes()
-    print(('[palm6_replay] black-box online — %d Hz ring, %ds window, %dd retention'):format(
-        Config.Recording.FrameHz, Config.Recording.BufferSeconds, Config.Retention.Days))
+    -- The whole boot sequence runs on this thread because ensureSchema has to
+    -- Wait for oxmysql's connection before it can issue any query, and
+    -- pruneScenes must not run before the tables are guaranteed to exist.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). On a fresh box the old "black-box online" line was a
+        -- lie: every query here is pcall'd, so a missing table printed exactly
+        -- the same healthy banner.
+        if not SchemaReady then
+            print('^1[palm6_replay] schema MISSING - the black-box records NOTHING on this box.^0')
+        end
+        pruneScenes()
+        print(('[palm6_replay] black-box online — %d Hz ring, %ds window, %dd retention'):format(
+            Config.Recording.FrameHz, Config.Recording.BufferSeconds, Config.Retention.Days))
+    end)
 end)
 
 -- Hourly prune so a long-running server doesn't wait for a restart.

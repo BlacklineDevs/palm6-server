@@ -16,6 +16,58 @@
 
 local lastAction = {}   -- [src] = { [key] = ts }
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_citations table. Every query in this file is pcall-guarded, so that is
+-- not an error, it is SILENCE: /cite reports the system is down, /fines says
+-- "no outstanding fines" to everyone, the overdue sweep escalates nothing, and
+-- the boot banner reports 0 open / 0 settled as though the city were simply
+-- law-abiding. On the live box this statement is a pure no-op.
+--
+-- The DDL is copied VERBATIM from sql/0024_citations.sql (trailing `;` dropped
+-- so oxmysql sees a single statement).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_citations` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    citizen_name VARCHAR(100) NOT NULL DEFAULT '',
+    issued_by VARCHAR(64) NOT NULL,
+    officer_name VARCHAR(100) NOT NULL DEFAULT '',
+    amount INT UNSIGNED NOT NULL,
+    reason VARCHAR(160) NOT NULL,
+    status ENUM('unpaid','paid','escalated') NOT NULL DEFAULT 'unpaid',
+    warrant_id INT UNSIGNED DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    due_at TIMESTAMP NOT NULL,
+    paid_at TIMESTAMP NULL DEFAULT NULL,
+    escalated_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_citations_citizen (citizenid, status),
+    INDEX idx_palm6_citations_due (status, due_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_citations] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -283,10 +335,24 @@ Bridge.RegisterCommand('payfine', function(source, args) cmdPayFine(source, args
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    print(('[palm6_citations] ledger open — %d open, %d settled; escalation %s')
-        :format(unpaidCount(), paidCount(),
-            (Config.Escalation.Enabled and Bridge.ResourceStarted('palm6_mdt'))
-                and 'ONLINE (palm6_mdt warrants)' or 'off'))
+    -- The banner now runs on its own thread because ensureSchema has to Wait for
+    -- oxmysql's connection before it can issue any query, and the two counts
+    -- below must not run before the table is guaranteed to exist. Nothing here
+    -- populates a cache or a cap, so the delay only moves the printing.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        print(('[palm6_citations] ledger open — %d open, %d settled; escalation %s')
+            :format(unpaidCount(), paidCount(),
+                (Config.Escalation.Enabled and Bridge.ResourceStarted('palm6_mdt'))
+                    and 'ONLINE (palm6_mdt warrants)' or 'off'))
+        -- Said out loud so a fresh box cannot be mistaken for a law-abiding one:
+        -- with the table absent both counts above read 0 and every command
+        -- silently no-ops.
+        if not SchemaReady then
+            print('^1[palm6_citations] schema MISSING - the fine ledger is INERT on this box.^0')
+        end
+    end)
 end)
 
 ---Ledger counts for devtest and future consumers.

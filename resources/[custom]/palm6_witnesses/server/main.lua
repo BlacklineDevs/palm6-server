@@ -54,6 +54,96 @@ local function dbg(msg)
     if Config.Debug then print('[palm6_witnesses] ' .. msg) end
 end
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- every statement IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with neither
+-- witness table. persistIncident is fully pcall-wrapped and DELETEs its own
+-- incident row when the witness insert fails, so a missing table is SILENT and
+-- indistinguishable from "nobody was around to see it": crimes fire alerts,
+-- no markers ever appear, canvassing finds nothing, and the boot banner still
+-- prints "ready" with 0 reloaded. On the live box (0019 already applied by
+-- hand) these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0019_witnesses.sql, inline `--` column comments
+-- included. Note those comments are the SQL file's own text: they are reproduced
+-- unedited on purpose so this block can be diffed byte-for-byte against 0019.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- The tables THIS resource owns and can answer for. Only these feed SchemaReady.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_witnesses_incidents` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    -- Opaque incident token; feeds the palm6_evidence EnsureCase
+    -- incident_key ('palm6_witnesses:<uid>') so concurrent canvasses of
+    -- the same incident converge on one case.
+    uid CHAR(16) NOT NULL UNIQUE,
+    crime VARCHAR(32) NOT NULL,
+    label VARCHAR(64) NOT NULL,
+    suspect_citizenid VARCHAR(64) NOT NULL,
+    -- Crime location (marker anchor for the incident, not the witnesses).
+    x DOUBLE NOT NULL,
+    y DOUBLE NOT NULL,
+    z DOUBLE NOT NULL,
+    -- Everything the suspect exposed at crime time, captured server-side
+    -- (JSON array of { key, text }). Witnesses hold subsets of this.
+    fact_pool TEXT NOT NULL,
+    -- Set on first canvass via the palm6_evidence v2 EnsureCase export.
+    case_id INT UNSIGNED DEFAULT NULL,
+    created_at INT UNSIGNED NOT NULL,
+    expires_at INT UNSIGNED NOT NULL,
+    INDEX idx_palm6_witnesses_incidents_suspect (suspect_citizenid),
+    INDEX idx_palm6_witnesses_incidents_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_witnesses` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    incident_id INT UNSIGNED NOT NULL,
+    -- Street-corner position the witness was snapshotted at (the marker).
+    x DOUBLE NOT NULL,
+    y DOUBLE NOT NULL,
+    z DOUBLE NOT NULL,
+    -- The 1-2 facts this witness actually holds (JSON array of
+    -- { key, text }) — dealt from the incident's fact_pool at crime time.
+    facts TEXT NOT NULL,
+    -- Generated when the witness is pressed: same shape as `facts` but
+    -- wrong (wrong colour, flipped mask, scrambled plate). A canvass of a
+    -- pressed witness feeds these to the case file as if they were real.
+    corrupted_facts TEXT DEFAULT NULL,
+    -- active    -> marker live, canvass yields real facts
+    -- pressed   -> canvass yields corrupted facts or nothing
+    -- paid      -> canvass yields nothing ("never saw you")
+    -- canvassed -> spent; marker gone (each witness talks once)
+    status ENUM('active','pressed','paid','canvassed') NOT NULL DEFAULT 'active',
+    -- citizenid of whoever changed the status (canvassing officer,
+    -- pressing/paying suspect) — audit trail.
+    status_by VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_witnesses_incident (incident_id),
+    INDEX idx_palm6_witnesses_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_witnesses] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 -- Per-source rate limit (returns true when the call is allowed).
 local function rl(src, key)
     local window = Config.RateLimits[key] or 1
@@ -915,6 +1005,24 @@ AddEventHandler('onResourceStart', function(resource)
             .. '(v0.2.0+) is started before this resource.^0')
     end
 
+    -- The DB half of boot runs on its own thread because ensureSchema has to
+    -- Wait for oxmysql's connection before it can issue any query, and the
+    -- reload below must not run before the tables are guaranteed to exist.
+    -- Nothing gates on Incidents/Witnesses being populated (a canvass of an
+    -- unknown witness id is already refused), so no extra ready flag is needed;
+    -- the closing syncAll repairs any client that asked for a sync during the
+    -- wait and got an empty marker set.
+    CreateThread(function()
+    Wait(3000) -- let oxmysql establish its connection first
+    ensureSchema()
+    -- Banner FIRST, with nothing that can throw between it and ensureSchema().
+    -- It is the only line that can report the fresh-box case: the reload is
+    -- pcall'd, so a missing table prints the same "ready, 0 reloaded" line a
+    -- freshly restarted quiet server prints.
+    if not SchemaReady then
+        print('^1[palm6_witnesses] schema MISSING - no witness ever persists on this box.^0')
+    end
+
     local t = now()
     local loadedInc, loadedWit = 0, 0
     pcall(function()
@@ -961,4 +1069,6 @@ AddEventHandler('onResourceStart', function(resource)
 
     print(('[palm6_witnesses] ready — %d live incident(s), %d witness(es) reloaded; alerts %s')
         :format(loadedInc, loadedWit, Config.FirePoliceAlerts and 'OPT-IN ON' or 'off (default)'))
+    syncAll()
+    end)
 end)

@@ -10,6 +10,54 @@
 local Counts     = {}  -- [eventName][src] = { calls = {ts...}, breaches = 0 }
 local Violations = {}  -- [src] = total breaches this session
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same pattern as palm6_courier/palm6_mdt/
+-- palm6_ems: Wait(3000) for oxmysql on a thread, per-statement pcall, CREATE
+-- TABLE IF NOT EXISTS. sql/ files are applied BY HAND (deploy/README.md) and CI
+-- never touches the DB, so a restored backup or a fresh box can boot without
+-- event_violations. record()'s INSERT is pcall-wrapped, so that loss is SILENT:
+-- the guard still drops and kicks, but the forensics trail is simply gone with
+-- nothing in the console to say so. Re-running is a harmless no-op on the live
+-- box, which already has the table.
+--
+-- The statement is copied VERBATIM from sql/0008_security_events.sql (only the
+-- trailing semicolon dropped, since this is one MySQL.query call) so the two
+-- can never diverge. Do NOT hand-edit it: a divergence is invisible in
+-- production and only detonates on the fresh box this exists to protect.
+--
+-- There are no additive ALTERs for this table, so nothing is excluded from
+-- SchemaReady here.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `event_violations` (
+    `id`         INT AUTO_INCREMENT PRIMARY KEY,
+    `player_src` INT NOT NULL,
+    `identifier` VARCHAR(100) DEFAULT NULL,
+    `event_name` VARCHAR(100) NOT NULL,
+    `reason`     VARCHAR(255) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    KEY `idx_event_time` (`event_name`, `created_at`),
+    KEY `idx_identifier` (`identifier`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_eventguard] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function bucket(eventName, src)
@@ -213,6 +261,20 @@ AddEventHandler('onResourceStart', function(resource)
         print(('^1[palm6_eventguard] %d guarded resource(s) were already started: %s^0'):format(
             #late, table.concat(late, ', ')))
     end
+
+    -- Schema lands on its OWN thread so the 3s oxmysql wait can never delay
+    -- guard registration above. Registration order is the whole reason this
+    -- resource works (see the lateChainConsumers note), so nothing that drops
+    -- events may sit behind a yield. Nothing in the guard/kick path reads the
+    -- DB, so there is no in-memory state to gate on this thread completing:
+    -- the only consumer is record()'s forensics INSERT, which is already
+    -- pcall-guarded and best-effort by design.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        print(('[palm6_eventguard] schema %s'):format(
+            SchemaReady and 'OK' or '^1MISSING^0'))
+    end)
 end)
 
 AddEventHandler('playerDropped', function()

@@ -28,6 +28,59 @@ local function dbg(msg)
     if Config.Debug then print('[palm6_smuggling] ' .. msg) end
 end
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- CREATE ... IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_smuggling_runs table. Every query here is pcall-wrapped, so the
+-- failure is SILENT and, worse, ASYMMETRIC: /smuggle's INSERT throws and the
+-- run never exists, but the player was already told where to drive, and
+-- /deliver's guarded UPDATE then matches nothing so it pays nothing. The
+-- console says "routes open" with 0 runs delivered, which is exactly what a
+-- quiet day looks like. On the live box (0038 already applied by hand) this
+-- statement is a pure no-op.
+--
+-- DDL copied VERBATIM from sql/0038_smuggling.sql. That statement has no
+-- ENGINE/CHARSET clause, so this one does not either.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- The table THIS resource owns and can answer for. Only these feed SchemaReady.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_smuggling_runs` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    dropoff_id VARCHAR(50) NOT NULL,
+    mode ENUM('land', 'sea', 'air') NOT NULL,
+    payout INT UNSIGNED NOT NULL,
+    status ENUM('active', 'delivered', 'expired') NOT NULL DEFAULT 'active',
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    closed_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_smuggling_citizen_status (citizenid, status),
+    INDEX idx_palm6_smuggling_active (status, expires_at)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_smuggling] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function atPickup(src)
     local c = Bridge.GetCoords(src)
     if not c then return false end
@@ -223,19 +276,39 @@ end)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    if not Bridge.ItemExists(Config.DirtyItem) then
-        print(('^1[palm6_smuggling] FATAL: payout item "%s" is not registered in ox_inventory — smuggling disabled.^0'):format(Config.DirtyItem))
-        return
-    end
-    enabled = true
-    local delivered, dirty = 0, 0
-    pcall(function()
-        local r = MySQL.single.await("SELECT COUNT(*) AS c, COALESCE(SUM(payout),0) AS s FROM palm6_smuggling_runs WHERE status = 'delivered'")
-        delivered = r and tonumber(r.c) or 0
-        dirty = r and tonumber(r.s) or 0
+    -- The WHOLE boot sequence runs on this thread, not just the schema step.
+    -- ensureSchema has to Wait for oxmysql's connection before it can issue
+    -- any query, and `enabled` is this resource's existing boot gate: every
+    -- command and the expiry sweep check it. Flipping it only after the boot
+    -- work completes is what keeps the Wait from opening a window where
+    -- /smuggle runs against a table that has not been created yet. The cost is
+    -- that smuggling answers "No shipments right now" for the first ~3s after
+    -- an `ensure palm6_smuggling`, which is the same answer it already gives
+    -- when the payout item is missing.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        if not Bridge.ItemExists(Config.DirtyItem) then
+            print(('^1[palm6_smuggling] FATAL: payout item "%s" is not registered in ox_inventory — smuggling disabled.^0'):format(Config.DirtyItem))
+            return
+        end
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). Without it the fresh-box case is unreportable: every
+        -- query is pcall'd, so a missing table prints the same "routes open,
+        -- 0 run(s) delivered" line a genuinely quiet server prints.
+        if not SchemaReady then
+            print('^1[palm6_smuggling] schema MISSING - runs cannot be recorded or paid on this box.^0')
+        end
+        enabled = true
+        local delivered, dirty = 0, 0
+        pcall(function()
+            local r = MySQL.single.await("SELECT COUNT(*) AS c, COALESCE(SUM(payout),0) AS s FROM palm6_smuggling_runs WHERE status = 'delivered'")
+            delivered = r and tonumber(r.c) or 0
+            dirty = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_smuggling] routes open — %d drop site(s) (land/sea/air), %d run(s) delivered ($%d dirty all-time); evidence %s'):format(
+            #Config.Dropoffs, delivered, dirty, Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline'))
     end)
-    print(('[palm6_smuggling] routes open — %d drop site(s) (land/sea/air), %d run(s) delivered ($%d dirty all-time); evidence %s'):format(
-        #Config.Dropoffs, delivered, dirty, Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline'))
 end)
 
 --- Totals for devtest and future consumers.

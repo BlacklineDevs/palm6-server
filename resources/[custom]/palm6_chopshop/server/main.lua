@@ -25,6 +25,67 @@
 
 local lastAction = {} -- [src] = { [key] = ts } — chat-command spam guard
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with neither
+-- chop-shop table. Every query in this file is pcall-guarded, so that is not an
+-- error, it is SILENCE: /reportstolen answers "could not file the report",
+-- /sellstolen refuses every car with "this one's clean", the MDT's /runplate
+-- reports every plate as not stolen, and the boot banner reports 0/0 as though
+-- the shop were simply quiet. On the live box these statements are pure no-ops.
+--
+-- Both statements are copied VERBATIM from sql/0032_chopshop.sql (trailing `;`
+-- dropped so oxmysql sees a single statement each). Only these two tables are
+-- created here: `player_vehicles` is qbx_core's, owned by the framework, and
+-- this resource only ever reads/deletes rows in it.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_chopshop_stolen` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    plate VARCHAR(15) NOT NULL,
+    owner_citizenid VARCHAR(64) NOT NULL,
+    status ENUM('active', 'resolved', 'expired') NOT NULL DEFAULT 'active',
+    reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_chopshop_stolen_plate_status (plate, status),
+    INDEX idx_palm6_chopshop_stolen_owner (owner_citizenid)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_chopshop_sales` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    seller_citizenid VARCHAR(64) NOT NULL,
+    plate VARCHAR(15) NOT NULL,
+    vehicle_class TINYINT UNSIGNED NOT NULL,
+    payout INT UNSIGNED NOT NULL,
+    was_stolen TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    sold_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_chopshop_sales_seller (seller_citizenid)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_chopshop] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -272,17 +333,30 @@ Bridge.RegisterCommand('sellstolen', function(source) cmdSellStolen(source) end)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local activeReports, totalSales = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT COUNT(*) AS n FROM palm6_chopshop_stolen WHERE status = 'active' AND expires_at > NOW()")
-        activeReports = r and tonumber(r.n) or 0
+    -- The banner now runs on its own thread because ensureSchema has to Wait for
+    -- oxmysql's connection before it can issue any query, and the two counts
+    -- below must not run before the tables are guaranteed to exist. Nothing here
+    -- populates a cache or a cap, so the delay only moves the printing.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        local activeReports, totalSales = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT COUNT(*) AS n FROM palm6_chopshop_stolen WHERE status = 'active' AND expires_at > NOW()")
+            activeReports = r and tonumber(r.n) or 0
+        end)
+        pcall(function()
+            local r = MySQL.single.await('SELECT COUNT(*) AS n FROM palm6_chopshop_sales')
+            totalSales = r and tonumber(r.n) or 0
+        end)
+        print(('[palm6_chopshop] shop open — %d active stolen report(s), %d sale(s) all-time'):format(activeReports, totalSales))
+        -- Said out loud so a fresh box cannot be mistaken for a quiet shop: with
+        -- the tables absent both counts above read 0 and every command no-ops.
+        if not SchemaReady then
+            print('^1[palm6_chopshop] schema MISSING - the stolen registry and the shop are INERT on this box.^0')
+        end
     end)
-    pcall(function()
-        local r = MySQL.single.await('SELECT COUNT(*) AS n FROM palm6_chopshop_sales')
-        totalSales = r and tonumber(r.n) or 0
-    end)
-    print(('[palm6_chopshop] shop open — %d active stolen report(s), %d sale(s) all-time'):format(activeReports, totalSales))
 end)
 
 -- ADDITIVE export - the police side of the registry. Until now the stolen

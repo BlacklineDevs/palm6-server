@@ -20,6 +20,76 @@ local function dbg(m) if Config.Debug then print('[palm6_pulse] ' .. m) end end
 local active = nil          -- { id, kind, label, domain, modifier, target, blurb, startedAt, endsAt, reason, onlineStart }
 local lastCloseAt = 0       -- unix ts of the last window close (cooldown anchor)
 
+local SchemaReady = false   -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: runs on the director thread after its existing wait, with a
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no palm6_pulse_*
+-- tables. Every query here is pcall-wrapped, so the failure is near-silent: the
+-- director opens nothing (only a Config.Debug-gated dbg line says why), and the
+-- UNIQUE(window_id,citizenid) row that IS the check-in consume gate does not
+-- exist, so the participation reward loses its double-collect guard entirely.
+-- On the live box these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0048_pulse.sql, inline SQL comments included
+-- (trailing semicolons dropped, same as the other resources that carry their
+-- own DDL). The same statements are also embedded in palm6_dbmigrate, which
+-- 0048 itself notes; both are IF NOT EXISTS so whichever runs second no-ops.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pulse_windows` (
+    id            INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    kind          VARCHAR(32)  NOT NULL,           -- boomtown|hot_exchange|bounty_surge|crackdown|turf_war
+    domain        VARCHAR(16)  NOT NULL,           -- grind|market|bounty|police|gang
+    modifier      DOUBLE       NOT NULL,           -- capped payout scalar
+    target        VARCHAR(64)  NULL,               -- optional sub-key (e.g. spiked commodity)
+    reason        VARCHAR(128) NOT NULL,
+    online_start  INT          NOT NULL DEFAULT 0,
+    started_at    BIGINT       NOT NULL,
+    ends_at       BIGINT       NOT NULL,
+    INDEX idx_palm6_pulse_windows_ends (ends_at)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pulse_checkins` (
+    id          INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    window_id   INT          NOT NULL,
+    citizenid   VARCHAR(64)  NOT NULL,
+    ts          BIGINT       NOT NULL,
+    UNIQUE KEY uq_palm6_pulse_checkin (window_id, citizenid),  -- the consume/idempotency gate
+    INDEX idx_palm6_pulse_checkins_cid (citizenid)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pulse_streaks` (
+    citizenid       VARCHAR(64) NOT NULL PRIMARY KEY,
+    streak          INT         NOT NULL DEFAULT 0,
+    best_streak     INT         NOT NULL DEFAULT 0,
+    pulse_points    INT         NOT NULL DEFAULT 0,   -- lifetime; feeds the season scoreboard, no cash value
+    last_window_id  INT         NOT NULL DEFAULT 0,
+    updated_at      BIGINT      NOT NULL DEFAULT 0
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_pulse] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 -- ---------------------------------------------------------------------------
 -- DB helpers (all pcall-guarded — pulse boots + runs even if the table is
 -- absent; it just can't open/persist windows until the migration is applied).
@@ -166,10 +236,14 @@ end
 -- Director tick
 -- ---------------------------------------------------------------------------
 CreateThread(function()
-    Wait(5000)           -- let siblings finish booting
+    Wait(5000)           -- let siblings finish booting (also covers oxmysql's connect)
+    ensureSchema()       -- must precede rehydrate(): it reads palm6_pulse_windows
     rehydrate()
     print(('^5[palm6_pulse]^0 director online — tick=%ds window=%ds cooldown=%ds minOnline=%d')
         :format(Config.TickSeconds, Config.WindowSeconds, Config.CooldownSeconds, Config.MinOnline))
+    if not SchemaReady then
+        print('^1[palm6_pulse] schema MISSING - no window can open and check-ins are INERT on this box.^0')
+    end
     while true do
         Wait(Config.TickSeconds * 1000)
         -- Close an expired window FIRST (this is what sets the cooldown anchor).

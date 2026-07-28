@@ -20,6 +20,125 @@ local pendingInvites = {}   -- [targetCid] = { gangId, gangName, gangTag, invite
 local function now() return os.time() end
 local function dbg(m) if Config.Debug then print('[palm6_gangs] ' .. m) end end
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same shape as palm6_courier and
+-- palm6_ems: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no gang
+-- tables at all. Every read in this file is pcall-wrapped, so the failure is
+-- SILENT: /gang opens a menu that says you are in no gang, /gangcreate
+-- reports a generic failure, and a vault deposit charges the player before
+-- the write fails. On the live box these statements are pure no-ops.
+--
+-- The CREATE TABLEs are copied VERBATIM from sql/0041_gangs.sql and
+-- sql/0044_gang_web_tokens.sql. The additive ALTER/INDEX statements come from
+-- sql/0043_gang_web.sql and sql/0044_gang_web_tokens.sql; they are the web
+-- profile columns the Palm6 site writes, kept here so a fresh box this
+-- resource creates the table on is not missing them.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- Statements THIS resource owns and can answer for. Only these feed
+    -- SchemaReady. See the ALTER note below for why they are kept separate.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_gangs` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(32) NOT NULL,
+    tag VARCHAR(8) NOT NULL,
+    leader_cid VARCHAR(64) NOT NULL,
+    vault_balance BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    rep INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_palm6_gang_name (name),
+    UNIQUE KEY uniq_palm6_gang_tag (tag),
+    INDEX idx_palm6_gang_leader (leader_cid)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_gang_members` (
+    citizenid VARCHAR(64) NOT NULL PRIMARY KEY,
+    gang_id INT UNSIGNED NOT NULL,
+    rank TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    name VARCHAR(64) NULL DEFAULT NULL,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_gang_members_gang (gang_id)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_gang_vault_log` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    gang_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    action VARCHAR(16) NOT NULL,
+    amount BIGINT UNSIGNED NOT NULL,
+    balance_after BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_gang_vault_gang (gang_id, created_at)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_gang_web_tokens` (
+    token       VARCHAR(64)     NOT NULL PRIMARY KEY,
+    gang_id     INT UNSIGNED    NOT NULL,
+    created_at  BIGINT UNSIGNED NOT NULL,
+    expires_at  BIGINT UNSIGNED NOT NULL,
+    used_at     BIGINT UNSIGNED NULL,
+    created_at_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` and `CREATE INDEX IF NOT EXISTS` are MariaDB-only: on MySQL 8
+    -- they THROW even when the column/index already exists. Folding these into
+    -- SchemaReady would make a perfectly healthy MySQL box print `schema
+    -- MISSING` on every single boot, which is the permanent false alarm that
+    -- trains an operator to ignore the banner. The four CREATE TABLEs above
+    -- are what SchemaReady answers for; these are additive and their absence
+    -- is reported on its own line. Same pattern as palm6_courier and
+    -- palm6_mdt's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_gangs`
+    ADD COLUMN IF NOT EXISTS `logo_url`    VARCHAR(512) NULL AFTER `rep`,
+    ADD COLUMN IF NOT EXISTS `description` VARCHAR(500) NULL AFTER `logo_url`,
+    ADD COLUMN IF NOT EXISTS `color`       VARCHAR(9)   NULL AFTER `description`,
+    ADD COLUMN IF NOT EXISTS `updated_at`  TIMESTAMP    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`
+        ]],
+        [[
+CREATE INDEX IF NOT EXISTS `idx_palm6_gangs_rep`   ON `palm6_gangs` (`rep`)
+        ]],
+        [[
+CREATE INDEX IF NOT EXISTS `idx_palm6_gangs_vault` ON `palm6_gangs` (`vault_balance`)
+        ]],
+        [[
+CREATE INDEX IF NOT EXISTS `idx_palm6_gang_web_tokens_gang` ON `palm6_gang_web_tokens` (`gang_id`)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_gangs] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_gangs] additive ALTER/INDEX skipped (expected on MySQL 8, ' ..
+                  'harmless if it already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 -- /gangweb single-use token minting (see sql/0044_gang_web_tokens.sql).
 local webCooldown = {}    -- [src] = ts of last /gangweb (anti-spam)
 local inviteCooldown = {} -- [src] = ts of last invite (anti-spam; stops forcing
@@ -736,15 +855,31 @@ AddEventHandler('onResourceStart', function(resource)
         dbg(('%s minted a web token for gang %d'):format(cid, mr.gang_id))
     end)
 
-    local gangs, members = 0, 0
-    pcall(function()
-        local r = MySQL.single.await('SELECT COUNT(*) AS c FROM palm6_gangs')
-        gangs = r and tonumber(r.c) or 0
-        local m = MySQL.single.await('SELECT COUNT(*) AS c FROM palm6_gang_members')
-        members = m and tonumber(m.c) or 0
+    -- Schema + banner run on their own thread because ensureSchema has to Wait
+    -- for oxmysql's connection before any query, and the counts below must not
+    -- run before the tables are guaranteed to exist. The commands above stay
+    -- registered synchronously (they do their own DB reads per invocation and
+    -- hold no boot-populated cache), so nothing needs a bootReady gate.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- tables are absent, which is otherwise completely silent: every query
+        -- here is pcall'd, so the menu just says you have no gang forever.
+        if not SchemaReady then
+            print('^1[palm6_gangs] schema MISSING - gangs, vaults and rep are INERT on this box.^0')
+        end
+        local gangs, members = 0, 0
+        pcall(function()
+            local r = MySQL.single.await('SELECT COUNT(*) AS c FROM palm6_gangs')
+            gangs = r and tonumber(r.c) or 0
+            local m = MySQL.single.await('SELECT COUNT(*) AS c FROM palm6_gang_members')
+            members = m and tonumber(m.c) or 0
+        end)
+        print(('[palm6_gangs] online — /%s opens the gang menu; %d gang(s), %d member(s) loaded'):format(
+            Config.Command, gangs, members))
     end)
-    print(('[palm6_gangs] online — /%s opens the gang menu; %d gang(s), %d member(s) loaded'):format(
-        Config.Command, gangs, members))
 end)
 
 -- ---------------------------------------------------------------------------

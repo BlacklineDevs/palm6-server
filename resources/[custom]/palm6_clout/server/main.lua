@@ -42,6 +42,115 @@ local tickSec = math.max(1, math.floor(Config.TickIntervalMs / 1000))
 -- handler's closure capture it as an upvalue so the later assignment is seen.
 local reconcileUnpaidDeals
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with none of
+-- the palm6_clout_* tables. This resource already PRINTED a warning in that
+-- case, but printing was all it did: /golive still refused everyone with "DB
+-- error", milestones never persisted, VOD clips vanished, and a subpoena
+-- returned "no clips on record" - the police-facing lie this table exists to
+-- prevent. Creating the tables here means the warning is a fresh-box
+-- last-resort instead of the normal state. On the live box these statements are
+-- pure no-ops.
+--
+-- The three CREATEs are copied VERBATIM from sql/0016_clout.sql and the two
+-- ALTERs VERBATIM from sql/0060_clout_settlement.sql (trailing `;` dropped so
+-- oxmysql sees a single statement each). The ALTERs are repeated here even
+-- though palm6_dbmigrate also runs them: the two boot on independent threads,
+-- whichever runs second is a no-op, and neither can lose the race. `paid`
+-- DEFAULT 1 is load-bearing and must NOT be changed to 0 - see the WHY DEFAULT 1
+-- note in sql/0060: DEFAULT 0 would make the boot reconcile re-pay every brand
+-- deal ever claimed.
+--
+-- Only palm6_clout_* is created here. palm6_turf and palm6_evidence are soft
+-- cross-reads owned by their own resources; this file never creates them.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- Statements THIS resource owns and can answer for. Only these feed
+    -- SchemaReady. See the ALTER note below for why they are kept separate.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_clout_streamers` (
+    citizenid VARCHAR(64) NOT NULL PRIMARY KEY,
+    streamer_name VARCHAR(100) DEFAULT NULL,
+    total_streams INT UNSIGNED NOT NULL DEFAULT 0,
+    total_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+    peak_viewers INT UNSIGNED NOT NULL DEFAULT 0,
+    total_donations INT UNSIGNED NOT NULL DEFAULT 0,
+    last_live_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_clout_deals` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    milestone INT UNSIGNED NOT NULL,
+    payout INT UNSIGNED NOT NULL DEFAULT 0,
+    unlocked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    claimed_at TIMESTAMP NULL DEFAULT NULL,
+    UNIQUE KEY uq_clout_deal (citizenid, milestone)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_clout_vod` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    streamer_citizenid VARCHAR(64) NOT NULL,
+    streamer_name VARCHAR(100) DEFAULT NULL,
+    event_type VARCHAR(32) NOT NULL,
+    suspect_citizenid VARCHAR(64) DEFAULT NULL,
+    suspect_name VARCHAR(100) DEFAULT NULL,
+    detail VARCHAR(255) DEFAULT NULL,
+    coords TEXT DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_clout_vod_streamer (streamer_citizenid, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN/INDEX IF
+    -- NOT EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column or
+    -- index already exists. Folding these into SchemaReady would make a
+    -- perfectly healthy MySQL box print `schema MISSING` on every boot, which is
+    -- the permanent false alarm that trains an operator to ignore the banner.
+    -- The three palm6_clout_* tables are what SchemaReady answers for; these two
+    -- are additive and their absence is reported on its own line instead. Same
+    -- pattern as palm6_courier and palm6_mdt's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_clout_deals`
+    ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 1
+        ]],
+        [[
+ALTER TABLE `palm6_clout_deals`
+    ADD INDEX IF NOT EXISTS `idx_clout_deals_unpaid` (`paid`, `claimed_at`)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_clout] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_clout] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column/index already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 -- Soft dependency: going-live posts go out iff palm6_discord is running
@@ -198,14 +307,9 @@ end
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
 
-    local ok = pcall(function()
-        MySQL.scalar.await('SELECT 1 FROM palm6_clout_streamers LIMIT 1')
-    end)
-    if not ok then
-        print('[palm6_clout] ERROR: palm6_clout_* tables missing — is sql/0016_clout.sql applied?')
-    end
-
     -- Config sanity guards (mirrors the palm6_pumpcoin boot-warning pattern).
+    -- These read Config only, so they stay on the handler thread and print
+    -- immediately as they always did.
     local prev = 0
     for _, m in ipairs(Config.Milestones) do
         if m.viewers <= prev then
@@ -225,12 +329,23 @@ AddEventHandler('onResourceStart', function(resource)
     print(('[palm6_clout] on air — %d milestones, donations capped at $%d/hr')
         :format(#Config.Milestones, Config.DonationHourlyCap))
 
-    -- Recover any brand-deal payout interrupted by the last restart (claimed at
-    -- the broker but never credited). Delayed so oxmysql + palm6_dbmigrate's
-    -- 0060 `paid` column are up before the paid = 0 predicate runs. Idempotent —
-    -- re-crediting an already-paid deal is impossible (settleDeal claims first).
+    -- Everything DB-shaped runs on this thread because ensureSchema has to Wait
+    -- for oxmysql's connection before it can issue any query, and the reconcile
+    -- must not run before the tables are guaranteed to exist. The reconcile's
+    -- total delay is unchanged at 8s.
     CreateThread(function()
-        Wait(8000)
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Replaces the old SELECT 1 probe: same alarm, but now it only fires
+        -- when the tables could not even be CREATED, and it names what breaks.
+        if not SchemaReady then
+            print('^1[palm6_clout] schema MISSING - streams, brand deals and VOD subpoenas are INERT on this box.^0')
+        end
+        -- Recover any brand-deal payout interrupted by the last restart (claimed at
+        -- the broker but never credited). Delayed so oxmysql + palm6_dbmigrate's
+        -- 0060 `paid` column are up before the paid = 0 predicate runs. Idempotent —
+        -- re-crediting an already-paid deal is impossible (settleDeal claims first).
+        Wait(5000)
         reconcileUnpaidDeals()
     end)
 end)

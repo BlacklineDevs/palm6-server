@@ -23,6 +23,75 @@
 local lastAccept = {} -- [src] = ts — accept-event rate limit
 local lastCheck = {}  -- [src] = ts — checkStatus rate limit (it runs a DB query)
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no
+-- palm6_onboarding table. UNIQUE(citizenid) on that table is the ENTIRE
+-- double-grant guard for starter cash (see the file header), and every query
+-- here is pcall-wrapped: with the table absent, alreadyOnboarded() answers
+-- "no" for everyone, the rules prompt fires on every single load, and the
+-- accept INSERT fails silently so nobody is ever onboarded. On the live box
+-- these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0030_onboarding.sql, plus the additive ALTER
+-- from sql/0045_onboarding_starter_grants.sql (trailing semicolons dropped,
+-- same as the other resources that carry their own DDL).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_onboarding` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    accepted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    starter_cash_granted TINYINT(1) NOT NULL DEFAULT 0,
+    UNIQUE KEY uniq_palm6_onboarding_citizenid (citizenid)
+)
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists. Folding it into SchemaReady would make a perfectly
+    -- healthy MySQL box print `schema MISSING` on every boot, which is the
+    -- permanent-false-alarm failure that trains an operator to ignore the
+    -- banner. palm6_onboarding is the table this resource owns and is what
+    -- SchemaReady answers for; these two columns are additive audit markers
+    -- (sql/0045 says so itself) and their absence is reported on its own line.
+    -- Same pattern as palm6_mdt/server/main.lua's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_onboarding`
+    ADD COLUMN IF NOT EXISTS starter_vehicle_granted TINYINT(1) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS starter_outfit_granted  TINYINT(1) NOT NULL DEFAULT 0
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_onboarding] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_onboarding] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the columns already exist)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function alreadyOnboarded(citizenid)
@@ -141,12 +210,24 @@ end)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local total = 0
-    pcall(function()
-        local r = MySQL.single.await('SELECT COUNT(*) AS n FROM palm6_onboarding')
-        total = r and tonumber(r.n) or 0
+    -- The count has to run after ensureSchema, and ensureSchema has to Wait for
+    -- oxmysql's connection first, so the banner moves onto its own thread.
+    -- Nothing in this resource is cached in memory, so there is no boot window
+    -- to gate: the accept path was already a pure guarded write.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        local total = 0
+        pcall(function()
+            local r = MySQL.single.await('SELECT COUNT(*) AS n FROM palm6_onboarding')
+            total = r and tonumber(r.n) or 0
+        end)
+        print(('[palm6_onboarding] online — %d citizen(s) onboarded all-time'):format(total))
+        if not SchemaReady then
+            print('^1[palm6_onboarding] schema MISSING - nobody can be onboarded and the rules ' ..
+                  'prompt will refire on every load.^0')
+        end
     end)
-    print(('[palm6_onboarding] online — %d citizen(s) onboarded all-time'):format(total))
 end)
 
 ---Onboarded-citizen counts for devtest and future consumers.

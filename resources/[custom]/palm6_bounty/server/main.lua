@@ -25,6 +25,92 @@ local lastAction = {}    -- [src] = { [key] = ts } — chat-command spam guard
 local lastPost = {}      -- [citizenid] = ts — private-contract post cooldown
 local lastCapture = {}   -- [citizenid] = ts — per-hunter capture cooldown
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_bounty_contracts. EVERY query in this file is pcall-guarded, so a
+-- missing table is not an error, it is SILENCE: /bounties reports "no open
+-- contracts", the state sweep posts nothing, and worst of all /postbounty
+-- charges the poster's bank BEFORE the INSERT — the insert-failure path does
+-- refund, but the board looks permanently empty with nothing in the console
+-- saying why. On the live box these statements are pure no-ops.
+--
+-- The CREATE is copied VERBATIM from sql/0027_bounty.sql (trailing `;` dropped
+-- so oxmysql sees a single statement); the ALTER is copied VERBATIM from
+-- sql/0055_bounty_settlement.sql. The ALTER is repeated here even though
+-- palm6_dbmigrate also runs it: the two boot on independent threads, whichever
+-- runs second is a no-op, and neither can lose the race. `settled` DEFAULT 1 is
+-- load-bearing and must NOT be changed to 0 — see the FIRST-BOOT SAFETY note in
+-- sql/0055: DEFAULT 0 would make the boot reconcile re-pay the entire contract
+-- history exactly once.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- Statements THIS resource owns and can answer for. Only these feed
+    -- SchemaReady. See the ALTER note below for why they are kept separate.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_bounty_contracts` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    kind ENUM('state','private') NOT NULL,
+    target_citizenid VARCHAR(64) NOT NULL,
+    target_name VARCHAR(100) NOT NULL DEFAULT '',
+    poster_citizenid VARCHAR(64) DEFAULT NULL,
+    poster_name VARCHAR(100) DEFAULT NULL,
+    amount INT UNSIGNED NOT NULL,
+    reason VARCHAR(200) NOT NULL DEFAULT '',
+    status ENUM('active','claimed','cancelled','expired') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    claimed_by_citizenid VARCHAR(64) DEFAULT NULL,
+    claimed_by_name VARCHAR(100) DEFAULT NULL,
+    claimed_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_bounty_target (target_citizenid, kind, status),
+    INDEX idx_palm6_bounty_poster (poster_citizenid, status),
+    INDEX idx_palm6_bounty_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists. Folding it into SchemaReady would make a perfectly
+    -- healthy MySQL box print `schema MISSING` on every boot, which is the
+    -- permanent false alarm that trains an operator to ignore the banner.
+    -- palm6_bounty_contracts is the table this resource owns and is what
+    -- SchemaReady answers for; `settled` is additive and its absence is
+    -- reported on its own line instead. Same pattern as palm6_courier and
+    -- palm6_mdt's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_bounty_contracts`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_bounty] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_bounty] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 -- Free the src-keyed spam guard when a player disconnects so the table cannot
 -- grow without bound over the server's uptime (the citizenid-keyed cooldowns are
 -- naturally bounded by the player base and reused on reconnect).
@@ -604,27 +690,40 @@ Bridge.RegisterCommand('capture', function(source, args) cmdCapture(source, args
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local activeN, totalAmount = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM palm6_bounty_contracts WHERE status = 'active'")
-        activeN = r and tonumber(r.n) or 0
-        totalAmount = r and tonumber(r.total) or 0
-    end)
-    print(('[palm6_bounty] board open — %d contract(s) posted ($%d total); warrant sync %s')
-        :format(activeN, totalAmount,
-            (Config.State.Enabled and (not Config.State.RequireMdt or Bridge.ResourceStarted('palm6_mdt')))
-                and 'ONLINE' or 'off'))
-    -- Sync once on boot so a restart doesn't wait a full SweepSec for the
-    -- board to reflect the live warrant table.
-    SetTimeout(2000, syncStateContracts)
-    -- Recover any escrow payout interrupted by the last restart, once oxmysql +
-    -- palm6_dbmigrate (the 0055 `settled` column) are up. Non-time-critical, so
-    -- wait the 8s out — matching palm6_fightclub's reconcile delay. Before the
-    -- column lands the reconcile's WHERE settled=0 query errors (pcall-swallowed)
-    -- and recovers nothing, so the wait is load-bearing.
+    -- The whole boot sequence runs on this thread because ensureSchema has to
+    -- Wait for oxmysql's connection before it can issue any query, and neither
+    -- the banner count nor the warrant sync may run before the contracts table
+    -- is guaranteed to exist. Timings are preserved: the sync used to fire at
+    -- 2s and the reconcile at 8s; they now fire at 3s and 8s.
     CreateThread(function()
-        Wait(8000)
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        local activeN, totalAmount = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM palm6_bounty_contracts WHERE status = 'active'")
+            activeN = r and tonumber(r.n) or 0
+            totalAmount = r and tonumber(r.total) or 0
+        end)
+        print(('[palm6_bounty] board open — %d contract(s) posted ($%d total); warrant sync %s')
+            :format(activeN, totalAmount,
+                (Config.State.Enabled and (not Config.State.RequireMdt or Bridge.ResourceStarted('palm6_mdt')))
+                    and 'ONLINE' or 'off'))
+        -- Said out loud so the fresh-box case cannot be mistaken for a quiet
+        -- board: without the table every count above reads 0 and every command
+        -- silently no-ops.
+        if not SchemaReady then
+            print('^1[palm6_bounty] schema MISSING - the wanted board is INERT on this box.^0')
+        end
+        -- Sync once on boot so a restart doesn't wait a full SweepSec for the
+        -- board to reflect the live warrant table.
+        syncStateContracts()
+        -- Recover any escrow payout interrupted by the last restart, once oxmysql +
+        -- palm6_dbmigrate (the 0055 `settled` column) are up. Non-time-critical, so
+        -- wait the 8s out — matching palm6_fightclub's reconcile delay. Before the
+        -- column lands the reconcile's WHERE settled=0 query errors (pcall-swallowed)
+        -- and recovers nothing, so the wait is load-bearing.
+        Wait(5000)
         reconcileUnsettled()
     end)
 end)

@@ -40,7 +40,155 @@ local MintingTickers = {}   -- ticker -> true while its mint insert is in flight
 
 local DAY = 86400
 
+local SchemaReady = false   -- flipped by ensureSchema(); reported in the boot banner
+-- Flipped true once the coin board has been loaded from the DB. The load now
+-- sits behind the boot thread's Wait(3000) (ensureSchema has to create the
+-- tables before anything reads them), and until it runs `Coins` is EMPTY.
+-- An empty Coins does not just show an empty board: the mint handler derives
+-- ticker uniqueness, Config.MaxLiveCoins and Config.MaxCoinsPerCreator by
+-- scanning it, so minting in that window would bypass all three caps and could
+-- land a duplicate ticker on the board. The mint handler is gated on this flag.
+local bootReady = false
+
 local function now() return os.time() end
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no
+-- palm6_pumpcoin_* tables. Almost every write here is pcall-wrapped, so the
+-- damage is near-silent and financial: a mint charges $MintCost, the insert
+-- fails, and the refund path fires (fine) - but a BUY debits the bank inside
+-- the coin lock and persists the holding separately, and the boot reconcile
+-- that finishes an interrupted delist payout reads coins/holdings, so with the
+-- tables absent no holder is ever settled and nothing says why. On the live box
+-- these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0014_pumpcoin.sql (coins, holdings, trades) and
+-- sql/0053_pumpcoin_billboards.sql, plus the additive ALTERs from
+-- sql/0063_pumpcoin_delist_settlement.sql. Trailing semicolons dropped, same as
+-- the other resources that carry their own DDL. 0053 is also embedded in
+-- palm6_dbmigrate, which that file notes; both are IF NOT EXISTS so whichever
+-- runs second no-ops.
+--
+-- Only the tables this resource OWNS are created here. palm6_turf (read for the
+-- VERIFIED badge) and palm6_evidence (the rug-reveal fraud entry) belong to
+-- those resources and are created by their own boot DDL, the same way
+-- palm6_courier and palm6_evidence each create only their own.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_coins` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(32) NOT NULL,
+    ticker VARCHAR(8) NOT NULL,
+    emoji VARCHAR(16) NOT NULL,
+    creator_citizenid VARCHAR(64) NOT NULL,
+    creator_name VARCHAR(100) NOT NULL,
+    -- Bonding-curve parameters, frozen at mint time.
+    base_price DECIMAL(12,2) NOT NULL,
+    curve_k INT UNSIGNED NOT NULL,
+    -- Units currently on the curve (includes the dev premine). Total units
+    -- held across all holders always equals this number.
+    supply_sold INT UNSIGNED NOT NULL DEFAULT 0,
+    -- Units premined to the creator's hidden dev wallet at mint.
+    dev_allocation INT UNSIGNED NOT NULL DEFAULT 0,
+    -- 1 when the creator's gang held enough turf at mint (palm6_turf synergy).
+    verified TINYINT(1) NOT NULL DEFAULT 0,
+    status ENUM('live','rugged','delisted') NOT NULL DEFAULT 'live',
+    rugged_at TIMESTAMP NULL DEFAULT NULL,
+    -- 1 once the post-rug anonymity window has elapsed and the creator's
+    -- identity has been broadcast.
+    revealed TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    delisted_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_pumpcoin_coins_status (status),
+    INDEX idx_palm6_pumpcoin_coins_creator (creator_citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_holdings` (
+    coin_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    units INT UNSIGNED NOT NULL DEFAULT 0,
+    PRIMARY KEY (coin_id, citizenid),
+    INDEX idx_palm6_pumpcoin_holdings_citizenid (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_trades` (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    coin_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    side ENUM('mint','buy','sell','rug','delist') NOT NULL,
+    units INT UNSIGNED NOT NULL,
+    -- Average unit price for this fill (pre-fee), for the chart.
+    unit_price DECIMAL(12,2) NOT NULL,
+    -- What actually moved in/out of the player's bank (post-fee, whole $).
+    total INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_pumpcoin_trades_coin (coin_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_billboards` (
+    `id`         INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `coord_x`    DOUBLE      NOT NULL,
+    `coord_y`    DOUBLE      NOT NULL,
+    `coord_z`    DOUBLE      NOT NULL,
+    `label`      VARCHAR(64) NOT NULL,
+    `expires_at` BIGINT      NOT NULL,
+    INDEX `idx_palm6_pumpcoin_billboards_exp` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists. Folding these into SchemaReady would make a perfectly
+    -- healthy MySQL box print `schema MISSING` on every boot, which is the
+    -- permanent-false-alarm failure that trains an operator to ignore the
+    -- banner. The CREATE TABLEs above are what this resource owns and what
+    -- SchemaReady answers for; these three columns are the delist-settlement
+    -- markers from 0063 and their absence is reported on its own line. Same
+    -- pattern as palm6_mdt/server/main.lua's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_pumpcoin_holdings`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 0
+        ]],
+        [[
+ALTER TABLE `palm6_pumpcoin_coins`
+    ADD COLUMN IF NOT EXISTS `delist_pool` BIGINT NULL DEFAULT NULL
+        ]],
+        [[
+ALTER TABLE `palm6_pumpcoin_coins`
+    ADD COLUMN IF NOT EXISTS `delist_supply` INT UNSIGNED NULL DEFAULT NULL
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_pumpcoin] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_pumpcoin] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
 
 -- Soft dependency: exchange posts go out iff palm6_discord is running with
 -- the 'market' feed configured. Never blocks or errors exchange flows.
@@ -230,9 +378,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Boot: load live+rugged coins, sanity-check the premine economics
 -- ---------------------------------------------------------------------------
-AddEventHandler('onResourceStart', function(resource)
-    if resource ~= GetCurrentResourceName() then return end
-
+-- Loads the coin board + billboards into memory. Split out of onResourceStart
+-- because it must run AFTER ensureSchema, which has to Wait for oxmysql's
+-- connection first. Sets bootReady on the way out (see its declaration).
+local function loadBoard()
     local ok, rows = pcall(function()
         return MySQL.query.await([[
             SELECT id, name, ticker, emoji, creator_citizenid, creator_name,
@@ -245,6 +394,8 @@ AddEventHandler('onResourceStart', function(resource)
         ]])
     end)
     if not ok then
+        -- bootReady stays false: minting must NOT run against a board we
+        -- failed to load, or the live-coin and per-creator caps are bypassed.
         print('[palm6_pumpcoin] ERROR loading coins — is sql/0014_pumpcoin.sql applied?')
         return
     end
@@ -273,6 +424,29 @@ AddEventHandler('onResourceStart', function(resource)
         end
     end)
 
+    -- bootReady flips only HERE, below the billboard rehydrate, not above it.
+    -- The schema work put this whole function behind Wait(3000) plus several DB
+    -- round-trips, while client/main.lua fires requestBillboards exactly once at
+    -- its own t=3000 and never retries. Flipping the flag before the rehydrate
+    -- would leave requestBillboards answering from an empty Billboards table,
+    -- and billboardSync REMOVES every existing blip before adding, so a paid
+    -- $2,500 billboard would silently vanish for the rest of its window.
+    bootReady = true
+
+    -- Belt and braces: the single-shot client ask can still land before we get
+    -- here, so push the set once ourselves. Late joiners keep using the pull.
+    local out, t = {}, now()
+    for id, b in pairs(Billboards) do
+        if b.expires > t then
+            out[#out + 1] = { id = id, coords = b.coords, label = b.label }
+        end
+    end
+    TriggerClientEvent('palm6_pumpcoin:billboardSync', -1, out)
+end
+
+AddEventHandler('onResourceStart', function(resource)
+    if resource ~= GetCurrentResourceName() then return end
+
     -- Economics guard: the premine's curve value must stay under the mint
     -- cost, or delist settlements pay out more than minting cost (printer).
     local premineValue = Config.BasePrice * Config.CurveK / 3.0
@@ -295,10 +469,21 @@ AddEventHandler('onResourceStart', function(resource)
                 shillDiscount() * 100))
     end
 
-    -- Finish any delist payout the last restart interrupted, once oxmysql +
-    -- palm6_dbmigrate (0063 settled/delist_pool/delist_supply columns) are up.
+    -- The whole DB half of boot runs on this thread: ensureSchema has to Wait
+    -- for oxmysql's connection before any query, and loadBoard must not read
+    -- palm6_pumpcoin_coins before the table is guaranteed to exist.
     CreateThread(function()
-        Wait(8000)
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        if not SchemaReady then
+            print('^1[palm6_pumpcoin] schema MISSING - the exchange is INERT on this box and no ' ..
+                  'interrupted delist can be settled.^0')
+        end
+        loadBoard()
+        -- Finish any delist payout the last restart interrupted, once oxmysql +
+        -- palm6_dbmigrate (0063 settled/delist_pool/delist_supply columns) are
+        -- up. Total wait is unchanged at ~8s from resource start.
+        Wait(5000)
         reconcileDelists()
     end)
 end)
@@ -440,6 +625,13 @@ RegisterNetEvent('palm6_pumpcoin:mint', function(data)
     local src = source
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
+    -- The board is not loaded yet (see bootReady): the ticker-uniqueness scan
+    -- and both mint caps below read Coins, so minting now would bypass all
+    -- three. Refuse until loadBoard() has run.
+    if not bootReady then
+        Bridge.Notify(src, 'Exchange', 'The exchange is still opening. Try again in a moment.', 'error')
+        return
+    end
     if not nearExchange(src) then
         Bridge.Notify(src, 'Exchange', 'You need to be at an exchange terminal.', 'error')
         return
@@ -895,6 +1087,12 @@ local BillboardSyncLast = {}
 RegisterNetEvent('palm6_pumpcoin:requestBillboards', function()
     local src = source
     local t = now()
+    -- Refuse before the rehydrate has run rather than answering from an empty
+    -- table: billboardSync clears every blip client-side before it adds, so an
+    -- empty early reply is destructive. Returning BEFORE the throttle stamp is
+    -- deliberate, so a refused ask does not burn the caller's 5s window. The
+    -- broadcast at the end of loadBoard() covers anyone refused here.
+    if not bootReady then return end
     if BillboardSyncLast[src] and (t - BillboardSyncLast[src]) < 5 then return end
     BillboardSyncLast[src] = t
     local out = {}
