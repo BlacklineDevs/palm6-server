@@ -20,6 +20,10 @@ Config.LiveMaxProps   = 6000        -- max total props a single live map may hol
 Config.LiveMaxHides   = 2000        -- max total persisted world-erases (all maps)
 Config.LiveMaxLights  = 256         -- max total persisted live lights (all maps)
 Config.LiveLightDist  = 120.0       -- only draw a live light within this many m of you
+-- Snapshots/revisions: keep only the newest N per map. Every /maprestore also
+-- writes a "before restore" snapshot, so without a bound the LONGTEXT blobs grow
+-- forever. Set to 0 to disable pruning entirely (unbounded, the old behaviour).
+Config.RevisionsPerMap = 20
 
 -- Prefabs: named, reusable groups of props (a furnished room, a checkpoint…)
 -- saved relative to their centre so they can be stamped anywhere at any angle.

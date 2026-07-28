@@ -21,6 +21,9 @@ local canceled = {}    -- [id] = true if removed WHILE its spawn was mid-load
 local syncGen = 0
 local stopping = false
 local workMap = Config.LiveDefaultMap   -- map that /matped, /matveh place onto
+-- Declared up here (not at the carry loop below) because placeGate reads it and
+-- Lua locals are only visible after their declaration.
+local carrying = false
 
 local function finite(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
 
@@ -84,14 +87,32 @@ RegisterNetEvent('palm6_mapeditor:ent:removeBatch', function(ids)
     if Entities then Entities.push() end
 end)
 
+-- Server relabelled a map (rename or merge): update the streamed entities' map
+-- tags in place. Nothing respawns, but Entities.exportList selects on this
+-- field, so without the relabel every export after a rename or merge silently
+-- dropped that map's peds and vehicles.
+RegisterNetEvent('palm6_mapeditor:ent:mapRenamed', function(oldName, newName)
+    if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
+    for _, e in pairs(liveEnts) do if e.map == oldName then e.map = newName end end
+end)
+
 CreateThread(function()
     Wait(2500)
     TriggerServerEvent('palm6_mapeditor:ent:requestSync')
 end)
 
 -- ---- commands --------------------------------------------------------------
+-- Gate for every USER-initiated placement (/matped, /matveh, the NUI Peds and
+-- Vehicles tabs). The carry loop below does NOT go through here: it fires
+-- ent:place directly, which is how a carry resolves.
+-- The carry check matters because the server retires a carry's disconnect-backup
+-- by matching kind/model/map/extra on the row it just inserted, with no per-carry
+-- token, so placing a second entity with the same tuple onto the same work map
+-- mid-carry would retire the carried one's backup against the wrong row and leave
+-- the carried entity at the new coords instead of where it gets dropped.
 local function placeGate()
     if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return false end
+    if carrying then Game.Notify('drop the entity you are carrying first', 'error'); return false end
     return true
 end
 
@@ -220,9 +241,16 @@ end
 -- camera aim + player heading each frame, then re-place it via ent:place on
 -- Enter (drop at new spot) or Backspace (restore at the original spot). Reuses
 -- the mass-fill preview's control scheme; stands the editor loop down while up.
-local carrying = false
+-- `carrying` is declared at the top of this file (placeGate needs it).
+-- Exposed so every NUI-focus entry point can refuse to open mid-carry: NUI focus
+-- steals the Enter/Backspace the carry loop needs to resolve.
+function Entities.isCarrying() return carrying end
 RegisterNetEvent('palm6_mapeditor:ent:grabbed', function(rec)
-    if carrying then return end
+    -- Say so rather than returning silently: the server has already deleted the
+    -- row and handed us the only copy, so a silent drop here looks exactly like
+    -- the entity vanishing. (The server also refuses a second grab now, so this
+    -- is the belt to that braces.)
+    if carrying then Game.Notify('already carrying an entity, drop it first', 'error'); return end
     if type(rec) ~= 'table' or (rec.kind ~= 'ped' and rec.kind ~= 'veh') or type(rec.model) ~= 'string' then return end
     carrying = true
     if MapEd and MapEd.setPreview then MapEd.setPreview(true) end   -- editor loop stands down
@@ -260,7 +288,12 @@ RegisterNetEvent('palm6_mapeditor:ent:grabbed', function(rec)
         if not resolved then
             TriggerServerEvent('palm6_mapeditor:ent:place', rec.kind, rec.model, rec.x, rec.y, rec.z, rec.heading, rec.extra or '', rec.map)
         end
-        TriggerServerEvent('palm6_mapeditor:ent:grabResolved')
+        -- No "I'm done" event any more. Every exit from this loop re-places the
+        -- entity via ent:place, and the SERVER retires the disconnect-restore
+        -- backup inside that insert's write-lock when the row it wrote matches the
+        -- carried one. The old client-raised ent:grabResolved took no lock, did no
+        -- validation, and nil'd the whole pending list, so a failed re-place threw
+        -- away the only surviving copy of the entity.
         if MapEd and MapEd.setPreview then MapEd.setPreview(false) end
         carrying = false
     end)

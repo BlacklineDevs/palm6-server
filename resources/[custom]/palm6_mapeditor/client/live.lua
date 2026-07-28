@@ -139,7 +139,9 @@ RegisterNetEvent('palm6_mapeditor:live:revs', function(map, list)
 end)
 
 -- Server renamed a map: relabel the streamed props in place (no respawn) so the
--- outliner map-picker reflects the new name, then re-push the outliner.
+-- outliner map-picker reflects the new name, then re-push the outliner. The
+-- matching light relabel lives in the lights section below (liveLights is
+-- declared there, so it is not in scope for this closure).
 RegisterNetEvent('palm6_mapeditor:live:mapRenamed', function(oldName, newName)
     if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
     for _, r in pairs(liveObjs) do if r.map == oldName then r.map = newName end end
@@ -157,7 +159,7 @@ local function applyLight(rec)
     if type(rec) ~= 'table' or not rec.id then return end
     if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
     liveLights[rec.id] = {
-        x = rec.x, y = rec.y, z = rec.z,
+        map = rec.map, x = rec.x, y = rec.y, z = rec.z,
         r = rec.r or 255, g = rec.g or 200, b = rec.b or 140,
         range = rec.range or 8.0, intensity = rec.intensity or 5.0, kind = rec.kind or 'point',
     }
@@ -173,6 +175,16 @@ RegisterNetEvent('palm6_mapeditor:live:lightRemove', function(id) if id then liv
 RegisterNetEvent('palm6_mapeditor:live:lightRemoveBatch', function(ids)
     if type(ids) ~= 'table' then return end
     for _, id in ipairs(ids) do liveLights[tonumber(id)] = nil end
+end)
+
+-- Second handler on the rename/merge broadcast (the prop half is above): keep the
+-- streamed lights' map tags in step, because Live.lightsForMap selects on them
+-- and the live-map export would otherwise lose every light after a rename.
+-- AddEventHandler, not RegisterNetEvent: the name is already a registered net
+-- event, this just adds another local listener.
+AddEventHandler('palm6_mapeditor:live:mapRenamed', function(oldName, newName)
+    if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
+    for _, l in pairs(liveLights) do if l.map == oldName then l.map = newName end end
 end)
 
 CreateThread(function()
@@ -255,10 +267,14 @@ RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
     for id, r in pairs(liveObjs) do if want[id] then recs[#recs + 1] = r end end
     if #recs == 0 then Game.Notify('live map not streamed in yet — move nearer / retry', 'error'); return end
     local ents = (Entities and Entities.exportList) and Entities.exportList(mapName) or {}
-    local lua, js, ymap, py = MapEd.buildExports(recs, {}, mapName, ents)
+    -- Lights were hardcoded to {} here, which silently dropped every light from
+    -- every live-map export (and defeated buildLua/buildJson's own default,
+    -- because an empty table is truthy).
+    local lgs = (Live and Live.lightsForMap) and Live.lightsForMap(mapName) or {}
+    local lua, js, ymap, py = MapEd.buildExports(recs, lgs, mapName, ents)
     Game.SetClipboard(lua)
     TriggerServerEvent('palm6_mapeditor:save', mapName, lua, js, ymap, py)
-    Game.Notify(('exporting live map "%s" — %d props, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #ents), 'inform')
+    Game.Notify(('exporting live map "%s": %d props, %d lights, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #lgs, #ents), 'inform')
 end)
 
 RegisterCommand('mapwipe', function(_, args)
@@ -303,6 +319,23 @@ function Live.push()
     SendNUIMessage({ action = 'live', props = list })
 end
 
+-- Lights on a named live map, for /mapexportlive. The server tags every wired
+-- light with its map (wireLight in server/live.lua), so this mirrors the prop
+-- filter in live:exportIds. Without it the export hardcoded an empty light list,
+-- and because {} is truthy in Lua the `lg = lg or lightList()` default in
+-- client/main.lua never fired, so every exported live map shipped dark.
+function Live.lightsForMap(name)
+    local out = {}
+    if type(name) ~= 'string' then return out end
+    for _, l in pairs(liveLights) do
+        if l.map == name then
+            out[#out + 1] = { x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b,
+                range = l.range, intensity = l.intensity, kind = l.kind }
+        end
+    end
+    return out
+end
+
 -- Export a named live map to files from the NUI (same path as /mapexportlive):
 -- ask the server for the map's prop ids, then live:exportIds builds + saves.
 function Live.exportMap(name)
@@ -320,20 +353,23 @@ end
 function Live.revRestore(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revRestore', n) end end
 function Live.revDelete(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revDelete', n) end end
 
--- Rename a live map (props + lights via live.lua, entities via entities.lua).
+-- Rename a live map. ONE server event: server/live.lua relabels props + lights +
+-- snapshots, then raises the entity half itself once its guards pass. The client
+-- used to fire the entity rename as a second, independent server event, so a
+-- rename the prop half refused (name collision, DB not ready, no ACE) still
+-- relabelled the entity table.
 function Live.renameMap(oldName, newName)
     if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
     if oldName == '' or newName == '' or oldName == newName then return end
     TriggerServerEvent('palm6_mapeditor:live:renameMap', oldName, newName)
-    TriggerServerEvent('palm6_mapeditor:ent:renameMap', oldName, newName)
 end
 
--- Merge one live map into another (relabels props/lights/entities from -> into).
+-- Merge one live map into another. Same single-event shape as rename: the server
+-- relabels props/lights/snapshots and drives the entity half after its cap check.
 function Live.mergeMap(fromName, intoName)
     if type(fromName) ~= 'string' or type(intoName) ~= 'string' then return end
     if fromName == '' or intoName == '' or fromName == intoName then return end
     TriggerServerEvent('palm6_mapeditor:live:mergeMap', fromName, intoName)
-    TriggerServerEvent('palm6_mapeditor:ent:renameMap', fromName, intoName)   -- entity UPDATE allows any target
 end
 
 -- Counts for the Performance panel: props / lights / world-erases currently on

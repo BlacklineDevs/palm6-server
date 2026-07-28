@@ -130,8 +130,12 @@ local function fullHideBatch()
     local out = {}; for _, h in pairs(hides) do out[#out + 1] = wireHide(h) end; return out
 end
 
+-- `map` is included for the same reason wire() includes it: the client needs to
+-- know which named map a streamed light belongs to. Without it /mapexportlive
+-- had no way to select a map's lights and shipped every export with an empty
+-- light list. Additive; older clients ignore the extra field.
 local function wireLight(l)
-    return { id = l.id, x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind }
+    return { id = l.id, map = l.map, x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind }
 end
 local function fullLightBatch()
     local out = {}; for _, l in pairs(lights) do out[#out + 1] = wireLight(l) end; return out
@@ -436,15 +440,42 @@ RegisterNetEvent('palm6_mapeditor:live:grabProp', function(id)
     notify(src, 'grabbed prop into your session — edit it, then /mapcommit to republish', 'success')
 end)
 
--- If a grabber disconnects before re-committing, restore their checked-out props
--- to the live map (pre-edit state) so a grab never loses a prop. Cleared on a
--- successful commit (see the commit ack), so this only fires for abandoned grabs.
-AddEventHandler('playerDropped', function()
-    local src = source
+-- Re-insert one player's checked-out props into the live map (their pre-edit
+-- state) and drop the backup. A grab DELETES the row up front, so this table is
+-- the only copy in existence until the grabber re-commits, so losing it loses the
+-- prop for good.
+--
+-- `inline` is the TEARDOWN path (onResourceStop) and it must not yield even once.
+-- Two things yield here and both are removed on that path:
+--   * withWriteLock can Wait() up to ~3s, and a stopping resource must not sit on
+--     a lock that may never release;
+--   * MySQL.insert.await IS Citizen.Await. Under lua54 that yield propagates out
+--     through pcall and out of the onResourceStop handler, and teardown never
+--     ticks this resource again, so the handler would suspend on the FIRST row
+--     and every prop after it, plus every other player's pending grabs, would be
+--     silently dropped. That is precisely the multi-grab case this rescue exists
+--     for, so the inline path uses the non-await call form, which only hands the
+--     query to oxmysql (a separate, still-running resource) and returns.
+-- The inline path also skips the live[] mirror and the client broadcast: both are
+-- rebuilt from these rows by the boot hydrate when the resource comes back up.
+local function restorePending(src, why, inline)
     local pend = grabbedPending[src]
     grabbedPending[src] = nil
     if not pend or #pend == 0 then return end
-    withWriteLock(function()
+    if inline then
+        local queued = 0
+        for _, p in ipairs(pend) do
+            local ok = pcall(function()
+                MySQL.insert(
+                    'INSERT INTO palm6_mapeditor_props (map, model, x, y, z, rx, ry, rz, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    { p.map, p.model, p.x, p.y, p.z, p.rx, p.ry, p.rz, 'grab-restore' })
+            end)
+            if ok then queued = queued + 1 end
+        end
+        print(('[palm6_mapeditor] queued %d/%d abandoned grabbed prop(s) for restore after a %s'):format(queued, #pend, why))
+        return
+    end
+    local body = function()
         local restored = 0
         for _, p in ipairs(pend) do
             local id
@@ -459,8 +490,33 @@ AddEventHandler('playerDropped', function()
                 restored = restored + 1
             end
         end
-        if restored > 0 then print(('[palm6_mapeditor] restored %d abandoned grabbed prop(s) after a disconnect'):format(restored)) end
-    end)
+        if restored > 0 then print(('[palm6_mapeditor] restored %d abandoned grabbed prop(s) after a %s'):format(restored, why)) end
+    end
+    withWriteLock(body)
+end
+
+-- If a grabber disconnects before re-committing, restore their checked-out props
+-- to the live map (pre-edit state) so a grab never loses a prop. Cleared on a
+-- successful commit (see the commit ack), so this only fires for abandoned grabs.
+AddEventHandler('playerDropped', function()
+    restorePending(source, 'disconnect', false)
+end)
+
+-- The OTHER way a grab is abandoned, and the one that actually bites: the
+-- resource stopping underneath the grabber (a restart, or a deploy). The row was
+-- deleted at grab time and grabbedPending is plain memory, so without this a
+-- deploy landing while an admin holds a grabbed prop destroys it permanently.
+-- Runs inline and strictly non-yielding (no Wait, no write-lock, and no
+-- MySQL .await, which is Citizen.Await): teardown will not schedule us again, so
+-- ANY yield here abandons every row after the first. restorePending's inline path
+-- fire-and-forgets each INSERT so all of them leave this VM before we return.
+-- Nothing is broadcast; the DB rows are what matter, since every client re-syncs
+-- from them when the resource comes back up.
+AddEventHandler('onResourceStop', function(res)
+    if res ~= GetCurrentResourceName() then return end
+    -- Clearing the current key inside pairs() is explicitly allowed in Lua, and
+    -- restorePending nils exactly the key it is handed.
+    for src in pairs(grabbedPending) do restorePending(src, 'resource stop', true) end
 end)
 
 -- Remove one live light (the client picked it by aim and sent its id).
@@ -543,7 +599,11 @@ RegisterNetEvent('palm6_mapeditor:live:renameMap', function(oldName, newName)
         if ok1 then for _, r in pairs(live) do if r.map == oldName then r.map = newName; movedP = movedP + 1 end end end
         local ok2 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_lights SET map = ? WHERE map = ?', { newName, oldName }) end)
         if ok2 then for _, l in pairs(lights) do if l.map == oldName then l.map = newName; movedL = movedL + 1 end end end
-        dberr = not (ok1 and ok2)
+        -- Snapshots are keyed by map name too. Without this the whole revision
+        -- history of a renamed map becomes unreachable (revList queries by name),
+        -- so a rename would silently orphan every checkpoint of that build.
+        local ok3 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_revisions SET map = ? WHERE map = ?', { newName, oldName }) end)
+        dberr = not (ok1 and ok2 and ok3)
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
     if taken then notify(src, ('map "%s" already exists — pick a name not in use'):format(newName), 'error'); return end
@@ -551,6 +611,17 @@ RegisterNetEvent('palm6_mapeditor:live:renameMap', function(oldName, newName)
     -- wants the client mirror consistent). Clients update liveObjs[].map in place.
     TriggerClientEvent('palm6_mapeditor:live:mapRenamed', -1, oldName, newName)
     if dberr then notify(src, ('partial rename of "%s" — a DB update failed'):format(oldName), 'error'); return end
+    -- Entity half of the SAME rename, raised SERVER-side (server/entities.lua
+    -- listens with AddEventHandler). The client used to fire the entity rename as
+    -- its own independent net event, which meant the entity table could be
+    -- relabelled even when this handler's ACE / READY / collision guards refused.
+    -- Emitting it here is what makes the two halves share those guards, AND the
+    -- DB-failure guard: it sits BELOW the dberr return on purpose, because a
+    -- prop/light/revision UPDATE that threw while the entity UPDATE succeeded is
+    -- exactly the two-tables-disagree-about-the-map divergence this exists to
+    -- prevent. On a partial failure the entities stay on the old name and the
+    -- rename can simply be re-run once the DB is healthy.
+    TriggerEvent('palm6_mapeditor:internal:entRename', oldName, newName)
     if movedP == 0 and movedL == 0 then notify(src, ('no live props or lights on map "%s"'):format(oldName), 'inform'); return end
     notify(src, ('renamed map "%s" -> "%s" (%d prop(s), %d light(s))'):format(oldName, newName, movedP, movedL), 'success')
     print(('[palm6_mapeditor] %s renamed map "%s" -> "%s"'):format(GetPlayerName(src) or src, oldName, newName))
@@ -559,9 +630,11 @@ end)
 -- ---------------------------------------------------------------------------
 -- Merge one map into another: relabel every prop + light row from `fromName` to
 -- `intoName` (which is EXPECTED to already exist — that's the difference from a
--- rename). No new rows, so the per-map cap isn't "exceeded" by this — it just
--- consolidates two named builds into one. Clients relabel in place via the same
--- mapRenamed broadcast (nothing respawns); entities merge via entities.lua.
+-- rename). It inserts no new rows, but Config.LiveMaxProps is a PER-MAP cap, so
+-- landing one map's props onto another's tally absolutely CAN exceed it. The
+-- combined count is checked below and an over-cap merge is refused. Clients
+-- relabel in place via the same mapRenamed broadcast (nothing respawns);
+-- entities merge via the server-raised internal:entRename in entities.lua.
 -- ---------------------------------------------------------------------------
 RegisterNetEvent('palm6_mapeditor:live:mergeMap', function(fromName, intoName)
     local src = source
@@ -569,17 +642,35 @@ RegisterNetEvent('palm6_mapeditor:live:mergeMap', function(fromName, intoName)
     if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
     fromName = cleanMap(fromName); intoName = cleanMap(intoName)
     if fromName == intoName then notify(src, 'pick a different target map', 'error'); return end
-    local movedP, movedL, dberr = 0, 0, false
+    local movedP, movedL, dberr, overCap = 0, 0, false, false
     local acquired = withWriteLock(function()
+        -- Combined-count check INSIDE the lock, same reason renameMap's `taken`
+        -- check is here: a concurrent commit must not slip rows past it. An
+        -- over-cap merge succeeds silently today and then breaks the next restore
+        -- (which refuses to rebuild a map larger than the cap), so refuse up front.
+        if mapCount(fromName) + mapCount(intoName) > Config.LiveMaxProps then overCap = true; return end
         local ok1 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_props SET map = ? WHERE map = ?', { intoName, fromName }) end)
         if ok1 then for _, r in pairs(live) do if r.map == fromName then r.map = intoName; movedP = movedP + 1 end end end
         local ok2 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_lights SET map = ? WHERE map = ?', { intoName, fromName }) end)
         if ok2 then for _, l in pairs(lights) do if l.map == fromName then l.map = intoName; movedL = movedL + 1 end end end
-        dberr = not (ok1 and ok2)
+        -- Carry the snapshot history across too, so a merged-away map's checkpoints
+        -- stay reachable. Note the two histories keep their own rev numbers, so the
+        -- merged list can show duplicate #s; writeRevision takes MAX(rev)+1 from
+        -- here on, so new snapshots still number correctly.
+        local ok3 = pcall(function() MySQL.query.await('UPDATE palm6_mapeditor_revisions SET map = ? WHERE map = ?', { intoName, fromName }) end)
+        dberr = not (ok1 and ok2 and ok3)
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    if overCap then
+        notify(src, ('merge refused: "%s" + "%s" would exceed the %d-prop per-map cap'):format(fromName, intoName, Config.LiveMaxProps), 'error')
+        return
+    end
     TriggerClientEvent('palm6_mapeditor:live:mapRenamed', -1, fromName, intoName)
     if dberr then notify(src, ('partial merge of "%s" — a DB update failed'):format(fromName), 'error'); return end
+    -- Entity half of the SAME merge, server-raised for the same reason as rename,
+    -- and BELOW the dberr return for the same reason too (see renameMap's comment):
+    -- a failed prop/light/revision UPDATE must not still move the entity rows.
+    TriggerEvent('palm6_mapeditor:internal:entRename', fromName, intoName)
     if movedP == 0 and movedL == 0 then notify(src, ('no live props or lights on map "%s"'):format(fromName), 'inform'); return end
     notify(src, ('merged "%s" into "%s" (%d prop(s), %d light(s))'):format(fromName, intoName, movedP, movedL), 'success')
     print(('[palm6_mapeditor] %s merged map "%s" into "%s"'):format(GetPlayerName(src) or src, fromName, intoName))
@@ -623,8 +714,25 @@ local function writeRevision(map, label, props, lts, who)
             'INSERT INTO palm6_mapeditor_revisions (map, rev, label, props, lights, data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
             { map, nextRev, label, #props, #lts, blob, who })
     end)
-    if ok and id then return nextRev end
-    return nil
+    if not (ok and id) then return nil end
+    -- Prune to the newest N revisions for this map. Every restore writes another
+    -- full-map LONGTEXT blob ("before restore #N"), and nothing but the manual
+    -- per-row delete ever removed one, so an actively-rolled-back map grows the
+    -- table without bound. Two statements rather than a DELETE with a subquery,
+    -- because MySQL cannot delete from a table the same statement selects from.
+    -- Wrapped whole: a prune failure must never fail the snapshot that succeeded.
+    local keep = math.floor(tonumber(Config.RevisionsPerMap) or 0)
+    if keep > 0 then
+        pcall(function()
+            local old = MySQL.query.await(
+                'SELECT id FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC, id DESC LIMIT 1000 OFFSET ?',
+                { map, keep }) or {}
+            for _, row in ipairs(old) do
+                MySQL.query.await('DELETE FROM palm6_mapeditor_revisions WHERE id = ?', { row.id })
+            end
+        end)
+    end
+    return nextRev
 end
 
 RegisterNetEvent('palm6_mapeditor:live:snapshot', function(map, label)
@@ -645,7 +753,7 @@ RegisterNetEvent('palm6_mapeditor:live:snapshot', function(map, label)
     if not rev then notify(src, 'snapshot failed (DB write)', 'error'); return end
     notify(src, ('snapshot #%d of "%s" saved (%d props, %d lights)'):format(rev, map, np, nl), 'success')
     -- Refresh the requester's revision list if they're viewing it.
-    local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC', { map }) or {}
+    local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC, id DESC', { map }) or {}
     TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
 end)
 
@@ -653,7 +761,7 @@ RegisterNetEvent('palm6_mapeditor:live:revList', function(map)
     local src = source
     if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
     map = cleanMap(map)
-    local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC', { map }) or {}
+    local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC, id DESC', { map }) or {}
     TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
 end)
 
@@ -667,7 +775,7 @@ RegisterNetEvent('palm6_mapeditor:live:revDelete', function(revId)
     pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_revisions WHERE id = ?', { revId }) end)
     notify(src, 'deleted snapshot', 'success')
     if map then
-        local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC', { map }) or {}
+        local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC, id DESC', { map }) or {}
         TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
     end
 end)
@@ -692,19 +800,51 @@ RegisterNetEvent('palm6_mapeditor:live:revRestore', function(revId)
     local who = (GetPlayerName(src) or ('src' .. src)):sub(1, 96)
 
     local removedP, removedL, addedP, addedL, dberr = {}, {}, {}, {}, false
+    local overCap, snapFailed = false, false
+    local backupRev = nil   -- rev number of the auto "before restore" snapshot, if one was written
     local acquired = withWriteLock(function()
-        -- 1) auto-snapshot the CURRENT state so a restore can itself be undone.
+        -- 0) Cap-check BEFORE anything is deleted. The old code let the re-insert
+        -- loop break at the cap, which truncated the restore AFTER the map had
+        -- already been wiped, so a snapshot bigger than the cap silently became a
+        -- half-restored map. Refuse instead: at this point nothing has been touched.
+        -- Props: LiveMaxProps is per-map and this map's props are about to go, so the
+        -- room is the whole cap. Lights: LiveMaxLights is global, so only the OTHER
+        -- maps' lights survive the delete and count against it.
+        local otherLights = 0
+        for _, l in pairs(lights) do if l.map ~= map then otherLights = otherLights + 1 end end
+        if #snapProps > Config.LiveMaxProps or (#snapLights + otherLights) > Config.LiveMaxLights then
+            overCap = true; return
+        end
+        -- 1) auto-snapshot the CURRENT state so a restore can itself be undone. If
+        -- that write fails we must NOT continue: the delete below is what makes a
+        -- restore destructive, and without the pre-snapshot there is nothing left to
+        -- roll back to. writeRevision returns nil on a pcall'd DB failure.
         local curP, curL = gatherSnapshot(map)
-        if #curP > 0 or #curL > 0 then writeRevision(map, ('before restore #%d'):format(srcRev), curP, curL, who) end
+        if #curP > 0 or #curL > 0 then
+            backupRev = writeRevision(map, ('before restore #%d'):format(srcRev), curP, curL, who)
+            if not backupRev then snapFailed = true; return end
+        end
         -- 2) delete current props + lights for this map (memory reconciled per delete).
         local okp = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_props WHERE map = ?', { map }) end)
         if okp then for id, r in pairs(live) do if r.map == map then removedP[#removedP + 1] = id; live[id] = nil end end end
         local okl = pcall(function() MySQL.query.await('DELETE FROM palm6_mapeditor_lights WHERE map = ?', { map }) end)
         if okl then for id, l in pairs(lights) do if l.map == map then removedL[#removedL + 1] = id; lights[id] = nil end end end
         dberr = not (okp and okl)
-        -- 3) re-insert the snapshot props + lights (new ids), bounded by the caps.
+        -- A failed delete leaves rows the snapshot re-insert would DUPLICATE, so
+        -- stop here. The caller still broadcasts whichever half did delete, so the
+        -- clients stay consistent with the DB either way. Note what this trades:
+        -- the OLD behaviour was duplicated rows, the new one is DATA LOSS (the
+        -- half that did delete is gone and the snapshot is never applied), so the
+        -- notify below has to point the admin at the pre-restore snapshot.
+        if dberr then return end
+        -- 3) re-insert the snapshot props + lights (new ids). No per-loop cap
+        -- guard: step 0 above already refused the whole restore if the snapshot
+        -- does not fit, and it does that arithmetic correctly (props against the
+        -- per-map cap, lights against the GLOBAL cap minus the other maps'). A
+        -- second guard here would be dead code that a future editor could easily
+        -- mistake for the authority, and the lights one was counting per-restore
+        -- against a global cap.
         for i = 1, #snapProps do
-            if #addedP >= Config.LiveMaxProps then break end
             local p = cleanPlacement(snapProps[i])
             if p then
                 local id
@@ -716,7 +856,6 @@ RegisterNetEvent('palm6_mapeditor:live:revRestore', function(revId)
             end
         end
         for i = 1, #snapLights do
-            if #addedL >= Config.LiveMaxLights then break end
             local l = cleanLight(snapLights[i])
             if l then
                 local id
@@ -729,11 +868,30 @@ RegisterNetEvent('palm6_mapeditor:live:revRestore', function(revId)
         end
     end)
     if not acquired then notify(src, 'editor busy — try again', 'error'); return end
+    -- Both of these abort BEFORE the delete, so nothing was removed or added and
+    -- there is nothing to broadcast: the map is exactly as it was.
+    if overCap then
+        notify(src, ('restore refused: snapshot #%d does not fit the caps (%d props / %d lights)'):format(srcRev, Config.LiveMaxProps, Config.LiveMaxLights), 'error')
+        return
+    end
+    if snapFailed then notify(src, 'restore aborted: could not save the pre-restore snapshot', 'error'); return end
     if #removedP > 0 then TriggerClientEvent('palm6_mapeditor:live:removeBatch', -1, removedP) end
     if #removedL > 0 then TriggerClientEvent('palm6_mapeditor:live:lightRemoveBatch', -1, removedL) end
     if #addedP > 0 then TriggerClientEvent('palm6_mapeditor:live:addBatch', -1, addedP, false) end
     if #addedL > 0 then TriggerClientEvent('palm6_mapeditor:live:lightBatch', -1, addedL, false) end
-    if dberr then notify(src, ('partial restore of "%s" — a DB step failed'):format(map), 'error'); return end
+    -- NOT a "partial restore". A DB step failed AFTER the wipe and BEFORE the
+    -- re-insert, so this map lost content rather than gaining duplicates, and the
+    -- message has to say so and say where the old content still is.
+    if dberr then
+        if backupRev then
+            notify(src, ('restore of "%s" FAILED after the wipe: its live props/lights were deleted and snapshot #%d was NOT applied. Your previous content is safe as snapshot #%d ("before restore #%d") - restore that once the DB is healthy.'):format(map, srcRev, backupRev, srcRev), 'error')
+        else
+            notify(src, ('restore of "%s" FAILED after the wipe: its live props/lights were deleted and snapshot #%d was NOT applied. The map was empty beforehand, so there is no pre-restore snapshot and nothing was lost.'):format(map, srcRev), 'error')
+        end
+        print(('[palm6_mapeditor] restore of "%s" to #%d FAILED mid-way; pre-restore snapshot: %s')
+            :format(map, srcRev, backupRev and ('#' .. backupRev) or 'none (map was empty)'))
+        return
+    end
     notify(src, ('restored "%s" to snapshot #%d (%d props, %d lights)'):format(map, srcRev, #addedP, #addedL), 'success')
     print(('[palm6_mapeditor] %s restored map "%s" to snapshot #%d'):format(who, map, srcRev))
 end)
