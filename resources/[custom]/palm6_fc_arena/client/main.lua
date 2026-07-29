@@ -123,17 +123,24 @@ end, false)
 -- fires no server events. Ante is pulled from the fightclub money authority when
 -- that export is reachable (pcall-guarded), else the number is omitted.
 local function openPromoterInfo()
-    local stake
-    -- palm6_fightclub is NOT a declared dependency of this resource
-    -- (fxmanifest.lua lists ox_lib, qbx_core and palm6_fc_core only), so this is
-    -- a true soft dep: check the state before indexing the export, not just pcall.
-    if GetResourceState('palm6_fightclub') == 'started' then
-        local ok, v = pcall(function() return exports.palm6_fightclub:GetEntryStake() end)
-        if ok and type(v) == 'number' and v > 0 then stake = v end
-    end
-    local anteDesc = stake
-        and ('Both fighters ante $%d — winner takes the purse.'):format(stake)
-        or  'Both fighters ante the entry stake — winner takes the purse.'
+    -- The ante is deliberately NOT quoted as a number here.
+    --
+    -- This used to read the amount from exports.palm6_fightclub:GetEntryStake()
+    -- behind a GetResourceState check and a pcall. That call could never succeed:
+    -- palm6_fightclub registers GetEntryStake in server/main.lua and its
+    -- fxmanifest declares server_scripts ONLY, so the export does not exist on
+    -- the client realm at all. GetResourceState returned 'started' (the resource
+    -- IS running, just not here), the pcall then swallowed the failure, and the
+    -- generic wording below was used on every single open. The guard read like
+    -- working soft-dependency code while being unreachable by construction, which
+    -- is worse than not having it. Found by tools/audit/run.js export-graph.
+    --
+    -- To actually show the number, push it client-side rather than reaching for
+    -- a server export: palm6_fightclub would send its stake on player load (or
+    -- answer a request event) and this file would cache it. Not done here
+    -- because the generic wording is accurate and this menu is pure
+    -- discoverability, so the number is not worth a new network round trip.
+    local anteDesc = 'Both fighters ante the entry stake — winner takes the purse.'
 
     Game.OpenMenu('palm6_fc_promoter', 'Fight Club — how it works', {
         {

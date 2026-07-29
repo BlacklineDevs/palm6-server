@@ -265,7 +265,14 @@ local function applyLight(rec)
     }
 end
 
-RegisterNetEvent('palm6_mapeditor:live:light', function(rec) applyLight(rec) end)
+-- NOTE: there is deliberately no 'palm6_mapeditor:live:light' handler. A
+-- single-light variant existed and nothing in the repo ever raised it: every
+-- server path (server/live.lua's commit, wipe, rename, merge and restore) sends
+-- the batch form, even for one light. RegisterNetEvent opens the name to the
+-- network for every handler on the box, so a handler nobody raises is an open
+-- network name backed by dead code. Removed rather than kept "just in case";
+-- applyLight below is still the single entry point if a one-shot path is ever
+-- wanted. Found by tools/audit/run.js event-graph, which now fails on orphans.
 RegisterNetEvent('palm6_mapeditor:live:lightBatch', function(list, full)
     if type(list) ~= 'table' then return end
     if full then liveLights = {} end

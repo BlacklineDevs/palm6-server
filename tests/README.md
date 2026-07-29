@@ -31,10 +31,17 @@ Before this directory the only automated checks on this repo were `luacheck.py`
 (does the Lua *parse*) and a jsdom suite that exercises NUI **JavaScript**.
 Neither executed a single line of the Lua that decides how long a player is
 jailed, how much an insurance claim pays, how fast heat bleeds off, or when a
-turf zone changes hands. Roughly 17 commits of new gameplay landed in 24 hours
-with no in-game testing behind them. Everything ships behind a Config flag
-defaulting to current behaviour, so the risk today is low, but the moment a flag
-is flipped that safety net is gone.
+turf zone changes hands. Roughly 19 commits of new gameplay landed in 24 hours
+with no in-game testing behind them. Almost everything ships behind a Config
+flag defaulting to current behaviour, so the risk today is low, but the moment a
+flag is flipped that safety net is gone.
+
+The heat CONSEQUENCE layer is the largest body of value-deciding logic that
+arrived that way: a haircut on drug money, an extra bust roll, a fence's
+reduced payout, a bounty premium, and a laundering charge. Every one is pure
+arithmetic and therefore testable today, without a game client, which is what
+suites 06 through 10 do. One of the five (`palm6_laundering`) does **not** ship
+behind a flag: both its blocks are live right now.
 
 ## What is covered
 
@@ -46,8 +53,17 @@ is flipped that safety net is gone.
 | `03_turf_contest.lua` | `palm6_turf/server/main.lua` | Contest progress accounting: normal ticks, a delayed tick, a pathological stall (capped, and provably unable to bank a capture from one sample), attacker-only, defender-only, outnumbered, ties, an empty zone, the anti-lock stall clock, a backwards clock, and the presence ledger that decides who pays heat. |
 | `04_insurance_money.lua` | `palm6_insurance/server/main.lua` | Premium / coverage / deductible at every tier and both band edges, plus theft, total-loss and repairable-damage payouts. Includes a sweep over the whole value band proving a self-inflicted damage claim can never pay back its own premium. |
 | `05_legal_lookup_budget.lua` | `palm6_legal/server/main.lua` | The rolling `/sentence` lookup budget, its window boundary, per-source isolation, the audit de-dup that keeps a read command off the Discord webhook, and citizenid comparison. |
+| `06_drugs_heat_price.lua` | `palm6_drugs/server/main.lua` | The heat haircut on dirty-cash payouts: every tier from both sides (composed with `palm6_heat`'s own `tierOf`), both clamps against config typos, and the invariant that decides whether the flag is safe to flip: the risky street buyer must out-pay the safe corner-dealer stash at **every** tier and **every** unit price the engine can mint. Also pins the reachable price band (`$23`..`$477`) and that a discounted seller burns more product for the same dollar-denominated daily cap. |
+| `07_drugs_heat_bust.lua` | `palm6_drugs/server/main.lua` | The extra bust roll: bounded to `[0,1]` at every tier and every heat value, each gate's threshold recovered exactly out of the shipped code by bisection, and a **draw-counted** proof that the durable-heat roll only ever fires after the pre-existing `dealerHeat` model has already declined (no double-counting). Plus a full grid sweep proving no draw sequence can be flagged with the term off and clean with it on, and the composed rates (0.612 sale / 0.672 cook worst case) measured against a deterministic generator. |
+| `08_chopshop_heat_payout.lua` | `palm6_chopshop/server/main.lua` | The fence's payout reduction: every `Config.ClassPayout` class against every tier, both clamps, every soft-guard failure mode (stopped / booting / throwing / non-string `palm6_heat`), and a sweep from `$0` past the most expensive class proving a payout is never negative and never exceeds `max($1, base)`. |
+| `09_bounty_heat_premium.lua` | `palm6_bounty/server/main.lua` | The only heat effect that MINTS: the premium's `[0, Cap]` bound, the warrant-count ladder, the stored ceiling (`$6,200`) and the real payout ceiling once `palm6_pulse`'s modifier lands on top. Every dollar figure in the config's "SIZING THE FAUCET" comment is **recomputed from both resources' shipped config and then asserted to appear in the comment text**, so retuning either without updating the prose fails. Also covers the private-contract cancel fee and its boot-reconcile twin. |
+| `10_laundering_heat.lua` | `palm6_laundering/server/main.lua` | The amount-proportional `PlayerHeat` charge, the `HeatScrutiny` cut (the one heat effect that ships **ON**), the clean-payout clamp, the ledger's basis-point record, the front's own bust model, and the design-intent property the reshape existed to buy: minimum-size splitting must never be the cheap way to move a haul. Includes an adversary search over every haul the daily cap allows, and a self-falsification pass that zeroes `Base` and requires the sweep to break. |
 
-Total: **560 assertions**.
+Total: **1,080 assertions** across 11 suites.
+
+The five new suites cover the money math behind the three gameplay systems that
+landed dark in the same 24 hours. Four of the five effects ship behind a
+`Config` flag; `palm6_laundering`'s two blocks do not.
 
 ## How the pure logic is reached
 
@@ -92,6 +108,17 @@ here, and none of it should be described as tested.
   the expungement filing/fee/refund path.
 - `palm6_mdt` `priorsFor` and `RecommendForBooking` (which is `priorsFor` plus
   the calculator this suite covers).
+- `palm6_drugs` `dirtySoldToday` and `resolveDealer`'s persistence
+  (`saveDealer`, `loadDealer`), so the daily-cap ACCOUNTING is untested even
+  though the cap arithmetic that reads it is covered.
+- `palm6_chopshop` `cmdSellStolen` end to end (the ownership `SELECT`, the
+  stolen-report lookup, the sale `INSERT`, the `player_vehicles` retire and its
+  void-on-failure path, `Bridge.CreditBank`) and `cmdReportStolen`.
+- `palm6_bounty` `syncState`'s warrant `SELECT` and its guarded `UPDATE`/`INSERT`,
+  `claimSettled`, `reconcileUnsettled`, the private-contract escrow charge and
+  the expiry refund sweep.
+- `palm6_laundering` `dirtyWashedToday`, the runs `INSERT`, and
+  `Bridge.HasActiveWarrant`.
 
 **Needs the game (natives / server entity state):**
 
@@ -121,6 +148,19 @@ here, and none of it should be described as tested.
   flip) is not.
 - `palm6_legal` `sentenceGate` (four `Bridge` job/ace calls).
 - `palm6_mdt` `cmdSentence`, `/book`, `/warrant`, `/id`, `/runplate`.
+- `palm6_drugs` the sell handler and `resolveDealer` as whole functions. The
+  money LINES inside both are lifted and tested individually and the two are
+  proved to apply the identical haircut expression, but the surrounding item
+  removal, payout, ledger write and notification text are interleaved with
+  `Bridge` calls and cannot be driven end to end.
+- `palm6_drugs` `heatTierOf`, `palm6_chopshop` `heatPayoutMult`,
+  `palm6_bounty` `heatPremium` and `palm6_laundering` `heatScrutiny` all read
+  `GetResourceState` and `exports.palm6_heat:GetTier`. The last three are lifted
+  WITH those two calls stubbed, so their soft-guard branches are covered against
+  a stubbed export; the live cross-resource call itself is not, by definition.
+- `palm6_laundering` `cmdLaunder` and `cmdDirtyMoney` as whole functions. The
+  two are proved to compute the fee with the identical expression, but the
+  door refusals and the item/bank round-trips are not driven end to end.
 
 **Deliberately out of scope:** clients, NUI, `qbx_*` and `ox_*` resources, and
 anything under `[config_overrides]`.
@@ -169,6 +209,112 @@ behaviour, not defects.
    *Reachability:* requires the database clock to move backwards between a write
    and a read. Low, but not impossible.
 
+### OPEN: found by the heat-money suites, not fixed (this lane owns `tests/**` only)
+
+**A. `palm6_laundering`'s anti-splitting guarantee is not monotone. LIVE
+today.** `Config.PlayerHeat` was reshaped from a flat per-run charge to an
+amount-proportional one specifically so that splitting a haul into many small
+runs would stop being the cheap way to move it. In the direction the config
+comment states, the fix works and works well: the same $75,000 costs 39 heat as
+three $25,000 runs and 150 heat as 150 minimum-size runs, where the old flat
+model charged 15 and 750.
+
+But the charge is `math.floor`ed **per run**, and the discarded fraction is
+per run, so a run size just under a $2,000 boundary is more heat-efficient per
+dollar than a maximum-size run. "More runs" is therefore not always "more heat":
+
+    haul $60,000, playerHeatFor(amount, false):
+      3 runs of $20,000  -> floor(1 + 10.0)  = 11 each -> 33 heat   (fewest runs)
+      4 runs of $15,000  -> floor(1 +  7.5)  =  8 each -> 32 heat
+     16 runs of  $3,750  -> floor(1 +  1.875)=  2 each -> 32 heat
+
+    smallest hand-checkable witness, haul $4,500:
+      2 runs of  $2,250  -> floor(1 + 1.125) = 2 each  ->  4 heat
+      3 runs of  $1,500  -> floor(1 + 0.75)  = 1 each  ->  3 heat
+
+An adversary search over every haul the $75,000 daily cap allows (run sizes
+discovered by scanning the production function itself, then a shortest-path
+pass) puts the worst case at **7.1%**: a $25,001 haul costs 14 heat played the
+obvious way and 13 played the clever way. Over the full daily cap the leak is a
+single point of heat (39 vs 38).
+*Assessment:* real, bounded, and nothing like the 50x inversion the reshape
+removed. Also gated in practice by `Config.CooldownSec = 45` between runs. Left
+alone deliberately, but pinned by exact witnesses in `10_laundering_heat.lua` so
+it cannot grow unnoticed, along with a hard proof that no split can ever get
+below the per-thousand term. The config comment's own claim ("150 small runs
+total 150 heat against 39 for three big ones") is correct as written; it is the
+stronger reading of it that does not hold.
+
+**B. `palm6_laundering`'s `heatScrutiny` reads its sub-tables UNGUARDED, and it
+is the only one of the four heat consumers that ships ENABLED.** The three
+siblings all degrade safely:
+
+    palm6_drugs      local HeatPrice = Config.HeatStreetPrice or {}
+                     tonumber((HeatPrice.Mult or {})[tier])
+    palm6_chopshop   local HP = Config.HeatPayout or {}
+                     tonumber((HP.Mult or {})[tier])
+    palm6_bounty     tonumber((HB.PerTier or {})[tier])
+
+`palm6_laundering` does not:
+
+    if Config.HeatScrutiny.Refuse[tier] then return 0.0, tier, true end
+    return tonumber(Config.HeatScrutiny.ExtraCut[tier]) or 0.0, tier, false
+
+Deleting either sub-table raises `attempt to index a nil value` inside
+`heatScrutiny`, which is called from `cmdLaunder` before any item is removed and
+is not itself `pcall`-wrapped. `Config.HeatScrutiny.Enabled = false` is a safe
+way to turn the feature off; deleting the table is not, even though every other
+heat block in the repo tolerates exactly that. Pinned by two `T.raises`
+assertions.
+*Reachability:* a config edit only. No player input reaches it.
+
+**C. `palm6_chopshop` can mint $1 from a $0 class price.** The haircut line is
+`payout = math.max(1, math.floor(payout * hMult))`, so a class priced at $0
+pays **$1** once `Config.HeatPayout.Enabled` is on, and $0 while it is off. That
+is the one input at which "a payout never exceeds the base" is false, which is
+why the assertion in `08_chopshop_heat_payout.lua` is worded as `max($1, base)`.
+*Reachability:* none today. No `Config.ClassPayout` entry is zero and an
+unmapped class is refused outright before the line is reached. It becomes
+reachable the moment somebody adds a `[13] = 0` line, and a separate assertion
+fails if any shipped class price drops below $1.
+
+**D. Every `x 0.70` heat haircut quietly loses one extra dollar to binary
+floating point.** `2600 * 0.70` is `1819.9999999999998` in an IEEE double, not
+`1820`, so `math.floor` takes $1,819. The dollar goes to the house, the same
+direction every other truncation in these resources goes, and the player is told
+the true figure because the message prints `cleanPayout - payout` rather than
+recomputing. Not a defect; pinned in `08_chopshop_heat_payout.lua` so a future
+switch to rounding is a deliberate decision. The same shape appears in
+`palm6_laundering`'s 0.90 cut clamp (`1.0 - 0.90` is `0.09999999999999998`, so a
+$1,000 wash at the clamp returns $99). That clamp is unreachable at shipped
+values.
+
+**E. A NaN in a heat multiplier table survives both clamps.** In
+`palm6_drugs`'s `streetHeatMult` and `heatBustExtra`, every comparison against
+NaN is false, so `if m > 1.0` and `if m < floorMult` both miss and NaN is
+returned. Both call sites then gate on `hMult < 1.0` / `extra > 0.0`, which are
+also false for NaN, so the effect degrades to "no haircut" and "no extra roll"
+rather than to a wrong number. Recorded and pinned rather than reported as a
+bug: the failure mode is safe and only a config typo can produce it.
+
+**F. VERIFIED CORRECT: the bounty faucet-sizing comment.** An earlier review
+found `Config.State.HeatBonus`'s "SIZING THE FAUCET" comment understating the
+real mint. The CURRENT numbers were recomputed from the shipped config of BOTH
+`palm6_bounty` and `palm6_pulse` and all six agree:
+
+    stored ceiling            Cap 5000 + HeatBonus.Cap 1200        = $6,200
+    shipped surge, premium ON   6200 x 1.75                        = $10,850
+    structural ceiling, ON      6200 x 2.00 (Config.MaxModifier)   = $12,400
+    shipped surge, premium OFF  5000 x 1.75                        = $8,750
+    structural ceiling, OFF     5000 x 2.00                        = $10,000
+    increase from flipping the flag      $2,100 shipped / $2,400 ceiling
+
+`09_bounty_heat_premium.lua` asserts each recomputed figure appears verbatim in
+the comment text, so retuning `Cap`, `PerTier`, `MaxModifier` or the Bounty
+Surge modifier without updating the prose fails the suite. Note the trap the
+comment now warns about is real and tested: the increase is `Cap x 1.75`, not
+`Cap`.
+
 ### Recorded behaviour, not defects
 
 3. **A capped catch-up window credits presence a player may not have earned.**
@@ -194,6 +340,27 @@ Not findings, but worth knowing, and each pinned by an assertion:
   equal numbers, so an even 5v5 bleeds at the full `DefenderDecayMult` rate.
 - Heat sheds nothing for the first 80 seconds at the shipped 0.75/min rate,
   because the loss is floored to an integer.
+- The risky NPC street buyer strictly out-pays the risk-free corner-dealer stash
+  at every `palm6_heat` tier and at every unit price the drug price engine can
+  mint ($23 to $477), with the flag on and with it off. The two channels tie
+  only at a $1 unit, which the catalogue cannot produce.
+- `Config.MaxUnitPrice` ($500) is **unreachable** with the shipped drug
+  catalogue: the dearest possible unit is $477 (meth, Heavenly, the eight
+  highest-valued effects).
+- `palm6_laundering`'s `Config.PlayerHeat.MaxPerRun` (15) is a safety rail, not
+  an active guard. The largest legal wash ($25,000) scores 13, and the cap does
+  not bind until a $30,000 run, which the per-run dollar ceiling forbids. The
+  config says so; the suite checks it.
+- The two laundering heat models deliberately pull in opposite directions on
+  splitting: the durable per-run charge punishes many runs, while the front's
+  `BigRunAlways = 20000` makes every maximum-size run an automatic police alert.
+  Both directions are pinned so neither can change without the other being
+  reconsidered.
+- `palm6_bounty`'s `posted` amount is deliberately NOT re-clamped to
+  `Config.State.Cap`: the heat premium rides on top, which is why the faucet has
+  to be sized off $6,200 rather than $5,000.
+- A private bounty under $10 would cancel for free (`floor(amount * 0.10)` is
+  zero), which `Config.Private.MinAmount = 100` makes unreachable.
 
 ## Harness limitations
 
@@ -207,9 +374,24 @@ Not findings, but worth knowing, and each pinned by an assertion:
   Lua semantics (`string.format('%d', math.huge)` raises in real Lua too).
 - `fengari` does not ship the `io` library, so file access is handed in from
   JavaScript as `__readFile`.
-- No world coordinate is authored anywhere in this directory. `palm6_turf`'s
-  config calls `vector3`, which is stubbed to a plain table; nothing here reads
-  a coordinate.
+- `fengari`'s 64-bit integer and bitwise behaviour is **unreliable**: a
+  `splitmix64` and an `xorshift32` written the ordinary way both returned
+  degenerate values under it (measured, not assumed). The one suite that needs a
+  pseudo-random stream (`07_drugs_heat_bust.lua`) therefore uses a float-only
+  L'Ecuyer combined generator whose every intermediate product stays under 2^53
+  and is exact in a double. Fixed seed, so it is bit-identical on every run and
+  cannot go flaky. It was validated against known marginals before use.
+- No world coordinate is authored anywhere in this directory. `palm6_turf`'s and
+  `palm6_drugs`'/`palm6_laundering`'s configs call `vector3`, which is stubbed to
+  a plain table; nothing here reads a coordinate.
+- Where a suite needs a resource that is not its own (`palm6_heat`'s tier
+  thresholds, `palm6_pulse`'s modifier ceiling), the other config is loaded
+  FIRST, captured into a local, and the `Config` global is then handed to the
+  resource under test. Two configs never share a global in one state.
+- Cross-resource exports (`exports.palm6_heat:GetTier`) and
+  `GetResourceState` are stubbed as locals inside the lifted chunk. Those stubs
+  are the only non-production code in the call path, and they exist so the
+  soft-guard branches (stopped / booting / throwing / non-string) are reachable.
 
 ## Adding a suite
 
@@ -225,3 +407,14 @@ Keep two rules:
   number the model is supposed to produce, and show the arithmetic in a comment.
 - **Never refactor a resource to make it testable.** Lift the text, or write the
   case down in "What could NOT be tested" above.
+- **Name the property, not the number.** A failure that reads `street pays
+  better than stash at WANTED` tells the reader what broke; `expected 0.7` does
+  not.
+- **Prove the suite can fail.** The cheapest way is a temporary mutated copy:
+  duplicate the suite as `zz_probe_<name>.lua`, inject one config mutation right
+  after the `T.loadFile` of the resource config, run `node run.js zz_probe`, and
+  confirm the assertions go red before deleting the copies. All five heat-money
+  suites were verified this way (86 assertions failed across five one-line
+  mutations). `10_laundering_heat.lua` also carries a permanent in-suite
+  falsification: it zeroes `Config.PlayerHeat.Base` and REQUIRES the splitting
+  sweep to break.
