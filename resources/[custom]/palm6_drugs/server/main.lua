@@ -234,6 +234,64 @@ local function addPlayerHeat(cid, amount, reason)
     end)
 end
 
+-- ---------------------------------------------------------------------------
+-- Durable police attention (palm6_heat): the READ side. addPlayerHeat above is
+-- the WRITE side; this is what the crime paths now PAY for having written.
+--
+-- ONLY ever through the frozen GetTier export. palm6_heat stores heat next to an
+-- updated_at and settles the decay on READ, so querying palm6_heat_state
+-- directly would report a stale, too-HIGH tier. Soft-guard (GetResourceState +
+-- pcall) exactly like every other cross-resource call here: a stopped, booting
+-- or throwing palm6_heat returns nil and every caller below falls back to
+-- today's behaviour.
+--
+-- Callers read this ONCE per action and pass the tier down, so a sale costs at
+-- most one extra DB round-trip and only while a flag is on.
+-- ---------------------------------------------------------------------------
+-- Both flag tables are read through a load-time alias with an empty-table
+-- fallback, so deleting either block from shared/config.lua degrades to
+-- "disabled" instead of throwing a nil-index inside a sell handler that is not
+-- itself pcall-wrapped. shared/config.lua is loaded before this file
+-- (fxmanifest order), the same assumption the Config.StrainOrder loops below
+-- already make.
+local HeatPrice = Config.HeatStreetPrice or {}
+local HeatBust  = Config.HeatBust or {}
+
+local function heatTierOf(cid)
+    if type(cid) ~= 'string' or cid == '' then return nil end
+    if GetResourceState('palm6_heat') ~= 'started' then return nil end
+    local tier
+    pcall(function() tier = exports.palm6_heat:GetTier(cid) end)
+    if type(tier) ~= 'string' then return nil end
+    return tier
+end
+
+-- Street-buyer price multiplier for an already-read tier. Returns 1.0 (a
+-- no-op multiply) whenever the flag is off, heat is unavailable, or the tier
+-- carries no entry. Clamped to [Floor, 1.0]: a value above 1.0 is refused by
+-- construction, so no config edit can turn "you are hot" into a pay RISE.
+local function streetHeatMult(tier)
+    if not HeatPrice.Enabled then return 1.0 end
+    if type(tier) ~= 'string' then return 1.0 end
+    local m = tonumber((HeatPrice.Mult or {})[tier])
+    if not m then return 1.0 end
+    local floorMult = tonumber(HeatPrice.Floor) or 0.60
+    if m > 1.0 then m = 1.0 end
+    if m < floorMult then m = floorMult end
+    return m
+end
+
+-- Extra bust chance for an already-read tier, clamped to [0, 1]. Zero whenever
+-- the flag is off, heat is unavailable, or the tier carries no entry.
+local function heatBustExtra(tier)
+    if not HeatBust.Enabled then return 0.0 end
+    if type(tier) ~= 'string' then return 0.0 end
+    local c = tonumber((HeatBust.ExtraChance or {})[tier]) or 0.0
+    if c < 0.0 then c = 0.0 end
+    if c > 1.0 then c = 1.0 end
+    return c
+end
+
 local function normQuality(q)
     q = tonumber(q)
     if not q then return Config.DefaultQuality end
@@ -346,7 +404,12 @@ end
 
 -- Warm the dealer and decide whether THIS sale trips police. Heat is added
 -- regardless; the roll (plus a flat witness chance) only decides the alert.
-local function assessSaleHeat(cid)
+--
+-- `heatTier` is palm6_heat's DURABLE tier for this citizen, already read by the
+-- caller, or nil. It is LAYERED ON: the dealerHeat model above is untouched and
+-- still gets first say, and the durable-heat roll only happens when that model
+-- did NOT already flag, so this can raise the bust rate and never lower it.
+local function assessSaleHeat(cid, heatTier)
     dealerHeat[cid] = (dealerHeat[cid] or 0.0) + Config.Heat.PerSale
     if math.random() < Config.Heat.WitnessBaseChance then return true end
     if dealerHeat[cid] >= Config.Heat.AlertThreshold then
@@ -355,6 +418,8 @@ local function assessSaleHeat(cid)
             (over / Config.Heat.AlertThreshold) * Config.Heat.AlertChanceMax)
         if math.random() < chance then return true end
     end
+    local extra = heatBustExtra(heatTier)
+    if extra > 0.0 and math.random() < extra then return true end
     return false
 end
 
@@ -988,11 +1053,30 @@ RegisterNetEvent('palm6_drugs:sellMenu', function()
         return
     end
 
+    -- Quote what this seller would be paid AT THIS INSTANT, heat haircut
+    -- included. Read ONCE for the whole menu (one DB round-trip, and only while
+    -- the flag is on). Quoting the clean price to a hot seller and then paying
+    -- them less at the buyer reads as a bug rather than a consequence, which is
+    -- exactly the mistake palm6_laundering's /dirtymoney quote exists to avoid.
+    --
+    -- NOT a locked quote, and deliberately not one. The palm6_drugs:sell handler
+    -- re-reads the tier for itself, so a tier that crosses a threshold between
+    -- opening this menu and clicking an offer pays the tier that is true AT THE
+    -- SALE, not the one that was true here. The window is bounded by Config.Sell.cooldownSec,
+    -- the gap can only be one tier step, and the sale notify names both the
+    -- shortfall and the tier that caused it, so a moved price explains itself. A
+    -- locked quote would be worse: it would have to be either client-supplied
+    -- (never trusted) or server-cached per citizen, and a cache is a heat figure
+    -- that lies for as long as its TTL.
+    local menuTier = HeatPrice.Enabled and heatTierOf(cid) or nil
+    local menuMult = streetHeatMult(menuTier)
+
     local offers = {}
     local function addOffers(itemName)
         for _, s in ipairs(Bridge.ListItemSlots(src, itemName)) do
             local unit, baseId, quality, brand = priceOfSlot(itemName, s.metadata)
             if unit then
+                if menuMult < 1.0 then unit = math.max(1, math.floor(unit * menuMult)) end
                 local d = Config.Drugs[baseId]
                 offers[#offers + 1] = {
                     slot = s.slot, item = itemName, count = s.count,
@@ -1044,6 +1128,25 @@ RegisterNetEvent('palm6_drugs:sell', function(slot, item)
         return
     end
 
+    -- Durable police attention, read ONCE for this sale and used by BOTH the
+    -- price haircut and the extra bust roll below, so a sale costs at most one
+    -- extra DB round-trip (and none at all while both flags are off).
+    --
+    -- Read here, AFTER the buyer has agreed to touch the item and BEFORE any
+    -- item is removed, so a slow heat read costs a seller nothing but time.
+    local saleTier = (HeatPrice.Enabled or HeatBust.Enabled) and heatTierOf(cid) or nil
+
+    -- Heat haircut on the street price. Applied HERE at the point of sale and
+    -- never inside priceOfSlot: priceOfSlot also prices the mix station and the
+    -- stash-stocking preview, and a haircut in there would bake the seller's
+    -- momentary heat permanently into an item's metadata. The OTHER cash-out
+    -- channel, the NPC corner dealer, applies the same multiplier at its own
+    -- point of sale (resolveDealer), read against the owner's tier at resolve
+    -- time. Both consumption points, one multiplier, nothing baked into an item.
+    local cleanUnit = unit
+    local hMult = streetHeatMult(saleTier)
+    if hMult < 1.0 then unit = math.max(1, math.floor(unit * hMult)) end
+
     -- Daily NPC faucet cap: sell only up to the remaining budget (spec §12).
     local remaining = math.max(0, Config.Sell.dailyDirtyCap - dirtySoldToday(cid))
     if remaining < unit then
@@ -1067,7 +1170,7 @@ RegisterNetEvent('palm6_drugs:sell', function(slot, item)
 
     addXp(cid, Config.Sell.xp)
 
-    local flagged = assessSaleHeat(cid)
+    local flagged = assessSaleHeat(cid, saleTier)
     local caseId
     if flagged then
         Bridge.PoliceAlert(src, 'Suspected drug dealing reported')
@@ -1098,7 +1201,15 @@ RegisterNetEvent('palm6_drugs:sell', function(slot, item)
     if units < s.count then
         msg = msg .. ' (Daily buyer limit hit — the rest keeps.)'
     end
-    Bridge.Notify(src, Config.Sell.label, msg, flagged and 'warning' or 'success')
+    -- Say the cost out loud. A silently worse price nobody can perceive is not a
+    -- consequence, it is a bug report waiting to happen. Name the shortfall and
+    -- name the tier that caused it so the seller can connect it to /myheat.
+    if hMult < 1.0 then
+        msg = msg .. (' He shorted you $%d, you are too hot right now (%s).')
+            :format((cleanUnit - unit) * units, tostring(saleTier))
+    end
+    Bridge.Notify(src, Config.Sell.label, msg,
+        (flagged or hMult < 1.0) and 'warning' or 'success')
 
     -- Persistent police attention: street dealing is a crime. Keyed to the
     -- seller (cid) so it follows them after they log. Fires only after the
@@ -1402,7 +1513,10 @@ end
 -- Warm cook heat and decide whether THIS cook trips police. Flat CookAlertChance
 -- (loud) plus the same accumulated-heat escalation as sales; heat is added
 -- regardless of the roll (mirrors assessSaleHeat).
-local function assessCookHeat(cid)
+-- `heatTier` is palm6_heat's durable tier, already read by the caller, or nil.
+-- Same layering rule as assessSaleHeat: the dealerHeat model gets first say and
+-- the durable-heat roll only fires if it did not already flag.
+local function assessCookHeat(cid, heatTier)
     dealerHeat[cid] = (dealerHeat[cid] or 0.0) + Config.Heat.PerCook
     if math.random() < Config.Heat.CookAlertChance then return true end
     if dealerHeat[cid] >= Config.Heat.AlertThreshold then
@@ -1411,6 +1525,8 @@ local function assessCookHeat(cid)
             (over / Config.Heat.AlertThreshold) * Config.Heat.AlertChanceMax)
         if math.random() < chance then return true end
     end
+    local extra = heatBustExtra(heatTier)
+    if extra > 0.0 and math.random() < extra then return true end
     return false
 end
 
@@ -1582,7 +1698,12 @@ RegisterNetEvent('palm6_drugs:cookStart', function(stationId, pseudoSlot)
     end
 
     -- Cooking is loud: warm heat and maybe trip police AT START (not just on sale).
-    if assessCookHeat(cid) then
+    -- The durable-heat tier is read here, AFTER the burner row committed and the
+    -- refund ladder above is out of scope, so this extra round-trip can never
+    -- sit between a consumed precursor and its refund. Only read while the flag
+    -- (and its cook sub-flag) are on.
+    local cookTier = (HeatBust.Enabled and HeatBust.ApplyToCook) and heatTierOf(cid) or nil
+    if assessCookHeat(cid, cookTier) then
         Bridge.PoliceAlert(src, 'Possible clandestine drug lab reported')
         fileEvidence(cid, 'cook', { grade = grade })
     end
@@ -1755,6 +1876,27 @@ end
 -- same second is a no-op). The read-only dealerMenu MUST pass persist=false: if
 -- the menu persisted a stale snapshot it could clobber a concurrent dealerCollect
 -- that just zeroed + paid dirty_owed, resurrecting already-paid cash (dupe).
+--
+-- NO-BYPASS (Config.HeatStreetPrice). The corner dealer is the OTHER way a unit
+-- of product turns into dirty cash, and he is the SAFER way: he rolls no
+-- assessSaleHeat, files no palm6_evidence case and calls no addPlayerHeat. If
+-- the haircut only applied at the street buyer, then at WANTED the street would
+-- pay 0.70 while the stash paid 0.80 of the same priceOfSlot figure, so the
+-- no-risk channel would also be the BETTER-paying one and turning the flag on
+-- would push a hot dealer AWAY from the risky channel and INTO the invisible
+-- one. That is the opposite of the intended consequence, so the same multiplier
+-- is applied here. Both channels move together: the street still pays strictly
+-- more per unit than the stash at every tier (1.00 vs playerCut of the same
+-- haircut price), so the risk/reward ordering the dealer was built on is
+-- unchanged, and heat is a real cost on every route out of the supply chain.
+--
+-- The tier is read ONCE per resolve and only AFTER the sub-tick early return
+-- above, so an idle menu open spends nothing, and nothing at all is spent while
+-- the flag is off. It is the owner's tier AT RESOLVE TIME, not at the instant
+-- each unit notionally moved: the whole dealer is a lazily-resolved wall-clock
+-- model with no per-unit timestamps, so resolve time is the only tier that
+-- exists. That means laying low until the heat decays and THEN collecting does
+-- pay full price, which is exactly the behaviour this lane is trying to buy.
 local function resolveDealer(row, persist)
     local t = now()
     local elapsed = t - row.last_tick_at
@@ -1766,6 +1908,16 @@ local function resolveDealer(row, persist)
     if row.day_key ~= dayKey then row.day_key = dayKey; row.day_dirty = 0 end
     local dailyRemaining = math.max(0, Config.Dealer.dailyDirtyCap - row.day_dirty)
 
+    -- Identity (1.0, zero DB round-trips) whenever the flag is off, so the
+    -- disabled path is exactly the arithmetic this function has always run.
+    -- Placed after the stash/headroom test so the common "empty dealer, owner
+    -- just opened the menu" case spends nothing even while the flag is on.
+    local dealerTier, dMult = nil, 1.0
+    if HeatPrice.Enabled and #row.stash > 0 and dailyRemaining > 0 then
+        dealerTier = heatTierOf(row.owner_cid)
+        dMult      = streetHeatMult(dealerTier)
+    end
+
     local toSell  = ticks * Config.Dealer.unitsPerTick
     local accrued = 0
     for _, lot in ipairs(row.stash) do
@@ -1776,6 +1928,10 @@ local function resolveDealer(row, persist)
         if not unit then
             lot.u = 0  -- config drifted under this lot — drop it, don't wedge the queue
         else
+            -- Same haircut and the same order of operations the street buyer in
+            -- palm6_drugs:sell uses: discount the unit price first, and only
+            -- then take the dealer's cut of the discounted figure.
+            if dMult < 1.0 then unit = math.max(1, math.floor(unit * dMult)) end
             local playerUnit = math.floor(unit * Config.Dealer.playerCut)
             if playerUnit < 1 then playerUnit = 1 end
             while lot.u > 0 and toSell > 0 and dailyRemaining >= playerUnit do
@@ -1805,7 +1961,11 @@ local function resolveDealer(row, persist)
         row.last_tick_at = row.last_tick_at + ticks * Config.Dealer.tickSeconds
     end
     if persist ~= false then saveDealer(row) end
-    return accrued
+    -- Second return: the tier that actually cost this owner money on THIS
+    -- resolve, or nil. nil whenever the flag is off, so no caller can print a
+    -- heat line on the disabled path. Callers may ignore it (all four did
+    -- before this returned anything but `accrued`).
+    return accrued, (dMult < 1.0 and accrued > 0) and dealerTier or nil
 end
 
 local function dealerProx(src)
@@ -1926,7 +2086,10 @@ RegisterNetEvent('palm6_drugs:dealerCollect', function()
     end
     local row = loadDealer(cid)
     if not row then Bridge.Notify(src, Config.Dealer.label, 'You have no dealer.', 'error'); return end
-    resolveDealer(row)
+    -- heatTier is non-nil only when the batch just resolved was actually
+    -- discounted, so the collect line can say so instead of the cut silently
+    -- shrinking (the same rule the street buyer's sale notify follows).
+    local _, heatTier = resolveDealer(row)
     local owed = row.dirty_owed
     if owed < 1 then Bridge.Notify(src, Config.Dealer.label, 'Nothing to collect yet.', 'inform'); return end
     if not Bridge.CanCarry(src, Config.Items.dirty, owed) then
@@ -1961,7 +2124,12 @@ RegisterNetEvent('palm6_drugs:dealerCollect', function()
     if not logged then
         print(('^3[palm6_drugs] WARN: dealer-collect ledger INSERT failed for %s ($%d) — economy under-count^0'):format(cid, owed))
     end
-    Bridge.Notify(src, Config.Dealer.label, ('Collected $%d dirty from the dealer.'):format(owed), 'success')
+    local collectMsg = ('Collected $%d dirty from the dealer.'):format(owed)
+    if heatTier then
+        collectMsg = collectMsg .. (' He is moving your product at a discount while you are %s.')
+            :format(tostring(heatTier))
+    end
+    Bridge.Notify(src, Config.Dealer.label, collectMsg, heatTier and 'warning' or 'success')
 end)
 
 RegisterNetEvent('palm6_drugs:dealerFire', function()

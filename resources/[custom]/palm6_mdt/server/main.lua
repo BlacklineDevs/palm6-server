@@ -726,6 +726,66 @@ local function cmdRunPlate(src, args)
 end
 
 -- ---------------------------------------------------------------------------
+-- Charge catalogue (v0.4.0). SHIPS OFF (Config.Charges.Enabled=false).
+--
+-- /charges [class] prints the catalogue so an officer can learn the codes that
+-- /sentence (palm6_legal) consumes. Read-only: it prints Config and touches
+-- nothing else, so it cannot fail a booking or write a record.
+-- ---------------------------------------------------------------------------
+local function cmdCharges(src, args)
+    if not gate(src, 'charges') then return end
+    local want = tostring(args[1] or ''):lower():gsub('%s+', '')
+    local lines = {}
+    local shown = 0
+    for _, class in ipairs(Config.Charges.ClassOrder) do
+        if want == '' or want == class then
+            local head = false
+            for _, e in ipairs(Config.Charges.Catalogue) do
+                if e.class == class then
+                    if not head then
+                        head = true
+                        lines[#lines + 1] = ('--- %s ---'):format(class)
+                    end
+                    shown = shown + 1
+                    lines[#lines + 1] = ('%-14s %s — %d %s, $%d'):format(
+                        e.code, e.label, e.sentence, Config.Charges.SentenceUnit, e.fine)
+                end
+            end
+        end
+    end
+    if shown == 0 then
+        Bridge.Reply(src, {
+            ('no charges in class %q'):format(want),
+            ('classes: %s'):format(table.concat(Config.Charges.ClassOrder, ', ')),
+        })
+        return
+    end
+    -- Say plainly what these numbers are and are not. An officer reading a
+    -- base sentence should not think it is what the suspect will serve.
+    lines[#lines + 1] = 'these are BASE values; the recommendation applies concurrency and priors'
+    -- The review command lives in palm6_legal, behind its OWN flag and its OWN
+    -- configurable name. Hardcoding "/sentence" here advertised a command that
+    -- does not exist whenever this catalogue is on and palm6_legal's sentencing
+    -- is off, and drifted the moment an operator renamed it (which the configs
+    -- themselves argue for: last RegisterCommand of a name wins on a ~157
+    -- resource box). Ask the owning resource instead; soft, so a stopped
+    -- palm6_legal, a palm6_legal with sentencing switched off (the export is
+    -- registered only when the command is), or a broken call all degrade to one
+    -- honest line rather than a lie.
+    local reviewCmd
+    if Bridge.ResourceStarted('palm6_legal') then
+        pcall(function() reviewCmd = exports.palm6_legal:GetSentenceCommand() end)
+    end
+    if type(reviewCmd) == 'string' and reviewCmd ~= '' then
+        lines[#lines + 1] = ('/%s [citizenid] [booking#] [code...] for a full recommendation and its arithmetic')
+            :format(reviewCmd)
+    else
+        lines[#lines + 1] = 'the sentencing review command is not available on this box'
+    end
+    Bridge.Reply(src, lines)
+end
+
+-- ---------------------------------------------------------------------------
 -- /mdtreport <caseId|0> <text...> — written paperwork; case-linked reports
 -- also land in the evidence file via the frozen AppendEntry export
 -- ---------------------------------------------------------------------------
@@ -1079,6 +1139,11 @@ AddEventHandler('onResourceStart', function(resource)
     if Config.RunPlate.Enabled then
         Bridge.RegisterCommand('runplate', function(source, args) cmdRunPlate(source, args) end)
     end
+    -- Charge catalogue reader. Registered only when the catalogue is switched
+    -- on, so with the flag off the command name is not claimed at all.
+    if Config.Charges.Enabled then
+        Bridge.RegisterCommand(Config.Charges.Command, function(source, args) cmdCharges(source, args) end)
+    end
 
     -- Net-event registration is a pure native and must NOT sit behind the
     -- oxmysql-connect wait, or a `restart palm6_mdt` would miss every alert
@@ -1095,12 +1160,30 @@ AddEventHandler('onResourceStart', function(resource)
         ensureSchema()
         if Config.Calls.Enabled then pruneCalls() end
 
-        print(('[palm6_mdt] desk online - %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s), %d call(s)/24h; contract %s, case system %s, call log %s, schema %s')
+        print(('[palm6_mdt] desk online - %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s), %d call(s)/24h; contract %s, case system %s, call log %s, charge catalogue %s, schema %s')
             :format(activeBoloCount(), activeWarrantCount(), reportCount(), bookingCount(), calls24h(),
                 Bridge.GetMDTContract() and 'qbx_police_overrides' or 'built-in defaults',
                 Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline',
                 Config.Calls.Enabled and 'ON' or 'off',
+                Config.Charges.Enabled and ('ON (%d codes)'):format(#Config.Charges.Catalogue) or 'off',
                 schemaOk and 'OK' or '^1MISSING^0'))
+
+        -- Sentencing reads `sealed_at`, which is NOT in the inline CREATE above
+        -- and arrives only via sql/0026_legal.sql's `ADD COLUMN IF NOT EXISTS`.
+        -- That is MariaDB-only syntax, so on MySQL 8 the migration throws and,
+        -- since sql/ is applied by hand, an operator can easily end up with the
+        -- flag on and the column absent. Every sentencing query then fails and
+        -- the command answers "no recommendation available" forever, with no
+        -- clue why. One probe at boot, only when the flag is on, turns a silent
+        -- dead feature into one line in the console.
+        if Config.Charges.Enabled then
+            local ok = pcall(function()
+                MySQL.single.await('SELECT sealed_at FROM palm6_mdt_bookings LIMIT 1')
+            end)
+            if not ok then
+                print('^1[palm6_mdt] charge catalogue is ON but palm6_mdt_bookings has no sealed_at column - apply sql/0026_legal.sql by hand (its ADD COLUMN IF NOT EXISTS is MariaDB-only). Sentencing recommendations will find nothing until you do.^0')
+            end
+        end
     end)
 end)
 
@@ -1222,6 +1305,164 @@ exports('ResolveTarget', function(arg)
     local citizenid, name = Bridge.ResolveTarget(arg)
     if not citizenid then return nil end
     return { citizenid = citizenid, name = name }
+end)
+
+-- ---------------------------------------------------------------------------
+-- Sentencing exports (v0.4.0). ALL of these return nil while
+-- Config.Charges.Enabled is false, so a consumer that ships before the flag is
+-- flipped degrades to "sentencing is switched off" rather than half-working.
+--
+-- Read-only, every one of them: they SELECT, they compute, they return. None
+-- writes a row, moves money, or jails anybody — this repo cannot jail anybody
+-- (see the qbx_police handoff note in README.md). Same never-change-signature
+-- rule as the exports above.
+-- ---------------------------------------------------------------------------
+
+-- Prior UNSEALED bookings for a citizen, counted STRICTLY BEFORE `beforeId`.
+-- Two deliberate choices:
+--   * `id < beforeId` — the arrest being sentenced is not its own prior.
+--   * `sealed_at IS NULL` — an expunged booking stops counting, which is what
+--     makes palm6_legal's expungement petitions mean something mechanically.
+-- Ids are auto-increment so `id <` is a stable stand-in for "filed earlier"
+-- and, unlike a timestamp compare, cannot tie.
+--
+-- Returns nil, NOT 0, when the query fails. The two are completely different
+-- claims and only one of them is safe to print: 0 means "verified first
+-- offence" and goes into a breakdown sold as reproducible on paper. The
+-- `sealed_at` column arrives only via sql/0026_legal.sql's ADD COLUMN IF NOT
+-- EXISTS, which is MariaDB-only syntax (the same hazard this file documents at
+-- the schema notes below), so on a MySQL 8 box that nobody patched by hand this
+-- query throws every single time. Swallowing that into 0 would tell every
+-- citizen on the server, in writing, that they have a clean record. The caller
+-- refuses to compute instead.
+local function priorsFor(citizenid, beforeId)
+    local n
+    local ok = pcall(function()
+        local r = MySQL.single.await([[
+            SELECT COUNT(*) AS n FROM palm6_mdt_bookings
+            WHERE citizenid = ? AND sealed_at IS NULL AND id < ?
+        ]], { citizenid, beforeId })
+        n = r and tonumber(r.n) or nil
+    end)
+    if not ok then return nil end
+    return n
+end
+
+-- GetChargeCatalogue() -> { {code,label,class,sentence,fine}, ... } | nil
+-- A COPY. Handing out the live Config table across an export boundary would
+-- let any consumer mutate this resource's config in place.
+exports('GetChargeCatalogue', function()
+    if not Config.Charges.Enabled then return nil end
+    local out = {}
+    for _, e in ipairs(Config.Charges.Catalogue) do
+        out[#out + 1] = {
+            code = e.code, label = e.label, class = e.class,
+            sentence = e.sentence, fine = e.fine,
+        }
+    end
+    return out
+end)
+
+-- CalculateSentence(codes: string[], priors: number) -> result | nil
+-- The raw calculator, for a caller that already knows the priors count.
+-- See shared/sentencing.lua for the result shape and the arithmetic.
+exports('CalculateSentence', function(codes, priors)
+    if not Config.Charges.Enabled then return nil end
+    return Sentencing.Calculate(codes, priors)
+end)
+
+-- RecommendForBooking(bookingId: number, codes: string[]|nil, opts: table|nil)
+--   -> table | nil
+-- The whole review in one call: resolve the booking, derive priors from this
+-- resource's own bookings table, and calculate.
+--
+-- SEALED BOOKINGS ARE INVISIBLE HERE. A sealed row is an EXPUNGED row: the
+-- player paid the court fee and won the petition, and every other read surface
+-- in this stack already drops it (GetBookingsFor above filters `sealed_at IS
+-- NULL`, palm6_rapsheet does the same, palm6_legal's /expunge refuses one).
+-- Returning the citizenid, the name and the original charge text from here
+-- would have handed the whole sealed record back to any on-duty officer who
+-- typed the booking number, which makes expungement cosmetic. `opts.allowSealed`
+-- exists ONLY for the console/ace audit path in palm6_legal; without it a sealed
+-- booking is indistinguishable from a booking that never existed, which is the
+-- point (an "it exists but you may not see it" answer is still a disclosure).
+--
+-- INFERENCE NO LONGER PRODUCES A NUMBER. When `codes` is empty the booking's
+-- free text is still scanned (Sentencing.CodesInText, strictly literal), but the
+-- hits come back as `suggested` and the result is a refusal. The scan cannot
+-- see any compound code, and on the shipped catalogue the compound codes are
+-- the severe ones, so a number derived from it is biased low by construction:
+-- "assault on a peace officer during a bank robbery" scans to `assault` alone,
+-- 8 months and $3000 instead of 55 months and $35,000. A confident, itemised,
+-- systematically-too-lenient recommendation is worse than no recommendation.
+-- Free-text charges are never rewritten or replaced.
+--
+-- nil when: sentencing is off, no such booking, or the booking is sealed and
+-- the caller did not pass opts.allowSealed. `.ok` is false when no code was
+-- given, when nothing resolved to a real charge code, or when the prior-record
+-- lookup failed (see priorsFor: it refuses rather than guessing zero).
+exports('RecommendForBooking', function(bookingId, codes, opts)
+    if not Config.Charges.Enabled then return nil end
+    bookingId = tonumber(bookingId)
+    if not bookingId then return nil end
+    local allowSealed = type(opts) == 'table' and opts.allowSealed == true
+
+    local row
+    pcall(function()
+        row = MySQL.single.await([[
+            SELECT id, citizenid, citizen_name, charges, case_id,
+                   (sealed_at IS NOT NULL) AS sealed
+            FROM palm6_mdt_bookings WHERE id = ?
+        ]], { bookingId })
+    end)
+    if not row then return nil end
+
+    local sealed = (tonumber(row.sealed) or 0) == 1
+    if sealed and not allowSealed then return nil end
+
+    local given = {}
+    for _, c in ipairs(type(codes) == 'table' and codes or {}) do
+        local k = tostring(c or ''):lower():gsub('%s+', '')
+        if k ~= '' then given[#given + 1] = k end
+    end
+
+    -- Suggestions only, and only when the caller gave nothing to work with.
+    -- `unmatchable` ships alongside them so the caller can name the codes the
+    -- scan structurally cannot find. It is derived from the live catalogue
+    -- rather than hardcoded, so renaming a charge cannot make the warning lie.
+    local suggested, unmatchable = {}, {}
+    if #given == 0 then
+        suggested = Sentencing.CodesInText(row.charges)
+        unmatchable = Sentencing.CompoundCodes()
+    end
+
+    local base = {
+        bookingId    = tonumber(row.id),
+        citizenid    = row.citizenid,
+        citizenName  = row.citizen_name,
+        charges      = row.charges,
+        caseId       = row.case_id and tonumber(row.case_id) or nil,
+        sealed       = sealed,
+        codes        = given,
+        suggested    = suggested,
+        unmatchable  = unmatchable,
+        priors       = nil,
+    }
+
+    if #given == 0 then
+        base.result = Sentencing.Failure('no charge codes given')
+        return base
+    end
+
+    local priors = priorsFor(row.citizenid, bookingId)
+    if priors == nil then
+        base.result = Sentencing.Failure('prior-record lookup failed - refusing to compute')
+        return base
+    end
+
+    base.priors = priors
+    base.result = Sentencing.Calculate(given, priors)
+    return base
 end)
 
 ---Desk counts for devtest and future consumers.

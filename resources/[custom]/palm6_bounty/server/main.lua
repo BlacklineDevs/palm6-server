@@ -24,6 +24,13 @@
 local lastAction = {}    -- [src] = { [key] = ts } — chat-command spam guard
 local lastPost = {}      -- [citizenid] = ts — private-contract post cooldown
 local lastCapture = {}   -- [citizenid] = ts — per-hunter capture cooldown
+-- [citizenid] = last heat premium applied to their LIVE state contract. Used
+-- only to fire the "the city raised the price on your head" notify on an
+-- INCREASE, so a premium decaying tier by tier cannot spam the target every
+-- sweep. Rebuilt against the live warrant set at the end of every sync, so it
+-- can never hold more entries than there are open state contracts; a restart
+-- clears it, which costs at most one repeated notify per target.
+local stateHeatBonus = {}
 
 local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
 
@@ -182,6 +189,49 @@ local function claimSettled(id, terminalStatus)
             { id, terminalStatus }) == 1
     end)
     return claimed
+end
+
+-- ---------------------------------------------------------------------------
+-- Durable police-attention premium on a STATE contract. Returns (bonus, tier),
+-- (0, nil) whenever the flag is off, palm6_heat is not started, the export
+-- throws or returns a non-string, or the tier carries no entry, so every
+-- failure mode lands on exactly today's warrant-count-only amount.
+--
+-- Read through GetTier ONLY. palm6_heat stores heat alongside an updated_at and
+-- settles the decay on READ, so a direct palm6_heat_state query would keep
+-- pricing a citizen who cooled off hours ago as WANTED.
+--
+-- Never negative, hard-capped, and only ever called from inside the loop over
+-- LIVE warrant rows, so it can only ADD to a contract the warrant table already
+-- justified and can never mint one on its own. See Config.State.HeatBonus for
+-- the full anti-farm argument.
+-- ---------------------------------------------------------------------------
+local function heatPremium(cid)
+    local HB = Config.State.HeatBonus
+    if not HB or not HB.Enabled then return 0, nil end
+    if type(cid) ~= 'string' or cid == '' then return 0, nil end
+    if GetResourceState('palm6_heat') ~= 'started' then return 0, nil end
+    local tier
+    pcall(function() tier = exports.palm6_heat:GetTier(cid) end)
+    if type(tier) ~= 'string' then return 0, nil end
+    local bonus = math.floor(tonumber((HB.PerTier or {})[tier]) or 0)
+    if bonus < 0 then bonus = 0 end
+    local cap = math.floor(tonumber(HB.Cap) or 0)
+    if cap < 0 then cap = 0 end
+    if bonus > cap then bonus = cap end
+    return bonus, tier
+end
+
+-- The board line for a state contract. With no premium applied this returns the
+-- EXACT literal the INSERT has always written, so a flag-off board is unchanged
+-- character for character. With a premium applied it names the tier, so
+-- /bounties explains WHY the price on that head is higher instead of the number
+-- silently moving.
+local function stateReason(bonus, tier)
+    if bonus > 0 and type(tier) == 'string' then
+        return ('Active warrant(s) on file · %s heat'):format(tier)
+    end
+    return 'Active warrant(s) on file'
 end
 
 -- ---------------------------------------------------------------------------
@@ -352,6 +402,19 @@ local function cmdBounties(src)
                 (exp and exp >= 0) and ('expires %dh'):format(exp) or 'expiring soon')
         end
     end
+    -- Say the pricing rule out loud, but ONLY while the premium is on: with the
+    -- flag off a state price is a pure function of warrant count and does not
+    -- drift, so this line would be noise, and the reply is byte-identical to
+    -- today's. With the flag on the amount above tracks the target's live heat
+    -- and is re-read from the row at /capture, so a hunter who reads the board
+    -- and then spends twenty minutes hunting can be paid less than the figure
+    -- printed here. Quoting a number and paying another without a word is how a
+    -- consequence gets mistaken for a bug.
+    local HB = Config.State.HeatBonus
+    if Config.State.Enabled and HB and HB.Enabled then
+        lines[#lines + 1] = ('State prices track the target\'s heat and are re-checked every %ds. You are paid what the contract is worth when you capture, not what it says now.')
+            :format(Config.State.SweepSec)
+    end
     lines[#lines + 1] = 'Get close and beat them down, then /capture [#].'
     Bridge.Reply(src, lines)
 end
@@ -518,28 +581,116 @@ local function syncStateContracts()
         local n = tonumber(w.n) or 1
         local amount = math.min(S.Cap, S.BaseAmount + S.PerWarrantExtra * math.max(0, n - 1))
 
+        -- The existing-contract lookup runs FIRST so the premium read can be
+        -- skipped where it cannot change anything. `status` is selected because
+        -- that decision needs it; nothing else reads the column, and with the
+        -- premium off the rows matched and the writes performed below are
+        -- exactly what this sync has always matched and performed.
         local existing
         pcall(function()
             existing = MySQL.single.await(
-                "SELECT id FROM palm6_bounty_contracts WHERE target_citizenid = ? AND kind = 'state' AND status IN ('active','claimed')",
+                "SELECT id, status FROM palm6_bounty_contracts WHERE target_citizenid = ? AND kind = 'state' AND status IN ('active','claimed')",
                 { cid })
         end)
+
+        -- heatPremium is a DB round-trip, so only spend it where the answer can
+        -- be written. A 'claimed' state contract is TERMINAL: the refresh below
+        -- is pinned to status='active' so it could only ever match zero rows,
+        -- and Config.State.HeatBonus rule 3 means the row is never re-opened.
+        -- Both warrants and claimed state rows persist indefinitely, so without
+        -- this test every citizen who was ever captured while still carrying a
+        -- warrant would cost one wasted GetTier round-trip per sweep, forever,
+        -- and that set only grows. Off-path: heatPremium returns (0, nil)
+        -- unconditionally while the flag is false, so skipping it changes
+        -- nothing at all with the flag off.
+        local repriceable = (existing == nil) or (existing.status == 'active')
+        local bonus, tier = 0, nil
+        if repriceable then bonus, tier = heatPremium(cid) end
+        local posted = amount + bonus
+
         if existing then
-            pcall(function()
-                MySQL.update.await(
-                    "UPDATE palm6_bounty_contracts SET amount = ?, target_name = ? WHERE id = ?",
-                    { amount, w.citizen_name, existing.id })
-            end)
+            if not (S.HeatBonus and S.HeatBonus.Enabled) then
+                -- Premium OFF: verbatim the statement this sync has always run,
+                -- with the same unguarded WHERE and the same values (bonus is 0
+                -- on this path, so `posted` is the warrant-count amount).
+                pcall(function()
+                    MySQL.update.await(
+                        "UPDATE palm6_bounty_contracts SET amount = ?, target_name = ? WHERE id = ?",
+                        { posted, w.citizen_name, existing.id })
+                end)
+            elseif repriceable then
+                -- Premium ON, contract still ACTIVE: re-price it. The UPDATE
+                -- stays GUARDED to status='active' anyway, because status can
+                -- change between the SELECT above and this write (a hunter can
+                -- /capture in that gap). reconcileUnsettled re-pays a crashed
+                -- capture from THIS column and heat decays continuously, so an
+                -- unguarded refresh could hand the boot reconcile a number
+                -- neither the hunter nor the board ever saw. `reason` is written
+                -- too, so the board line keeps naming the tier as it changes.
+                --
+                -- What this DOES freeze is the amount from the moment of CLAIM
+                -- onward, not from the moment a hunter read /bounties. While a
+                -- contract is active its price tracks the target's live tier and
+                -- can fall between sweeps, so a hunter who read the board and
+                -- then took twenty minutes to find the target can be paid less
+                -- than the board said. /bounties says so out loud while this
+                -- flag is on (cmdBounties) rather than the number just moving.
+                local refreshed = 0
+                pcall(function()
+                    refreshed = MySQL.update.await(
+                        "UPDATE palm6_bounty_contracts SET amount = ?, target_name = ?, reason = ? WHERE id = ? AND status = 'active'",
+                        { posted, w.citizen_name, stateReason(bonus, tier), existing.id }) or 0
+                end)
+                -- Legibility: tell the target, but ONLY when the premium they
+                -- carry goes UP, so a decaying premium does not notify them
+                -- every SweepSec. An offline target is simply skipped: the
+                -- board still shows it, and /myheat still explains it.
+                --
+                -- Gated on `refreshed`, not just on the bonus rising: the row may
+                -- have been claimed between the SELECT above and this UPDATE, in
+                -- which case the guarded write matched nothing and "the city
+                -- raised the price on your head" would be a flat lie about a
+                -- contract that is already settled.
+                if refreshed == 1 and bonus > (stateHeatBonus[cid] or 0) then
+                    local s = Bridge.GetSourceByCitizenId(cid)
+                    if s then
+                        Bridge.Notify(s, 'Bounty Board',
+                            ('The city raised the price on your head to $%d. You are %s.')
+                                :format(posted, tostring(tier)), 'error')
+                    end
+                end
+                stateHeatBonus[cid] = bonus
+            end
+            -- Remaining case: premium ON and the found row is already 'claimed'.
+            -- Nothing to do and nothing skipped. The only write this branch has
+            -- while the premium is on is the status='active'-guarded UPDATE
+            -- above, which cannot match a claimed row, so running it would spend
+            -- a round-trip to change zero rows. stateHeatBonus is deliberately
+            -- left alone here: it only gates the notify, that notify is gated on
+            -- `refreshed == 1` which a claimed row can never reach, and the
+            -- sweep's prune below still clears the key when the warrant clears.
         else
+            -- `reason` moved from an inline literal to a placeholder. With the
+            -- premium off stateReason returns that exact literal, so the value
+            -- written is unchanged.
             pcall(function()
                 MySQL.insert.await([[
                     INSERT INTO palm6_bounty_contracts
                         (kind, target_citizenid, target_name, amount, reason)
-                    VALUES ('state', ?, ?, ?, 'Active warrant(s) on file')
-                ]], { cid, w.citizen_name, amount })
+                    VALUES ('state', ?, ?, ?, ?)
+                ]], { cid, w.citizen_name, posted, stateReason(bonus, tier) })
             end)
-            dbg(('state contract opened on %s ($%d, %d warrant(s))'):format(cid, amount, n))
+            stateHeatBonus[cid] = bonus
+            dbg(('state contract opened on %s ($%d = $%d warrant + $%d heat[%s], %d warrant(s))')
+                :format(cid, posted, amount, bonus, tostring(tier), n))
         end
+    end
+
+    -- Bound the notify ledger: an entry for a citizen with no live warrant can
+    -- no longer gate anything. Assigning nil to the CURRENT key inside pairs()
+    -- is the one table mutation Lua explicitly permits during traversal.
+    for known in pairs(stateHeatBonus) do
+        if not liveTargets[known] then stateHeatBonus[known] = nil end
     end
 
     -- Expire state contracts for anyone whose warrants all cleared without

@@ -505,6 +505,9 @@ Config.Dealer = {
     tickSeconds    = 300,           -- one sell batch per 5 min of wall-clock
     unitsPerTick   = 3,             -- units sold per elapsed tick (bounded throughput)
     maxTicksPerResolve = 24,        -- cap catch-up after a long absence (≤2h of ticks)
+    -- NOTE: this cut is taken from a price that Config.HeatStreetPrice may
+    -- already have discounted (see resolveDealer). Keep it BELOW 1.0 or the
+    -- risk-free stash starts out-paying the street buyer even with heat off.
     playerCut      = 0.80,          -- player gets 80% dirty; dealer keeps 20% (sink)
     dailyDirtyCap  = 30000,         -- per-character dealer-faucet ceiling per calendar day
     xpPerCollect   = 10,            -- palm6_drugs_progression XP per collect (dealer-deal)
@@ -538,6 +541,79 @@ Config.Heat = {
     HarvestAlertChance = 0.05,  -- flat chance a harvest is spotted
     CookAlertChance   = 0.18,   -- flat chance a cook is called in (cooking is LOUD)
     SweepSec          = 30,
+}
+
+-- ---------------------------------------------------------------------------
+-- DURABLE POLICE ATTENTION (palm6_heat): TWO SEPARATE, SEPARATELY-FLAGGED
+-- CONSEQUENCES. Read this block against Config.Heat DIRECTLY ABOVE, which is a
+-- COMPLETELY DIFFERENT AND UNRELATED MODEL:
+--
+--   Config.Heat  -> this resource's own `dealerHeat` accumulator. Transient,
+--                   server-memory only, decays on a 30s sweep, dies on restart,
+--                   and decides whether a given sale/cook trips a police alert.
+--   the two below -> palm6_heat's DURABLE per-citizen score. Lives in
+--                   palm6_heat_state, survives a relog and a restart, decays on
+--                   wall-clock, and is what /heat and /myheat display.
+--
+-- Neither model feeds the other. `dealerHeat` is NOT palm6_heat and palm6_heat
+-- is NOT `dealerHeat`; the blocks below LAYER ON TOP of the dealerHeat model and
+-- never replace, rewrite or read it.
+--
+-- BOTH SHIP DISABLED. With Enabled = false no export is called, not one extra DB
+-- round-trip is spent, and the sell / cook paths behave exactly as they do
+-- today, byte for byte. Flip them independently so each can be judged alone.
+--
+-- Heat is ALWAYS read through the frozen exports.palm6_heat:GetTier export and
+-- never by querying palm6_heat_state: stored heat is settled lazily against
+-- updated_at, so a direct table read reports a stale, too-HIGH number.
+-- ---------------------------------------------------------------------------
+
+-- Anyone buying from a seller the city is already hunting lowballs him. They are
+-- taking on the risk of handling a marked man's product and they price
+-- accordingly.
+--
+-- BOTH CASH-OUT CHANNELS, ONE MULTIPLIER. Product turns into dirty cash in
+-- exactly two places, and this multiplier is applied at both:
+--   1. the NPC street buyer  (server/main.lua sell handler)
+--   2. the NPC corner dealer (server/main.lua resolveDealer)
+-- Covering only the street buyer would have INVERTED the whole point of this
+-- flag. The corner dealer is already the safer channel (no bust roll, no
+-- palm6_evidence case, no addPlayerHeat), and he pays Config.Dealer.playerCut =
+-- 0.80 of the same price. Discount only the street and at WANTED the street pays
+-- 0.70 while the risk-free stash pays 0.80, so switching the flag on would have
+-- PUSHED a hot dealer out of the channel police can see and into the one they
+-- cannot, for more money. Applying the same multiplier to both keeps the street
+-- strictly better-paying than the stash at every tier (1.00 vs 0.80 of the same
+-- haircut price), so risk still buys reward and heat is a real cost either way.
+--
+-- ANTI-FARM: every multiplier is <= 1.0 and the code clamps anything above 1.0
+-- back down, so there is NO tier and no config typo that can make being hotter
+-- pay BETTER on either channel. Heat here can only ever subtract. Note also that
+-- BOTH daily faucets (Config.Sell.dailyDirtyCap and Config.Dealer.dailyDirtyCap)
+-- are denominated in DOLLARS, so a hot dealer selling at a discount burns MORE
+-- product for the SAME daily ceiling: strictly worse for them on both axes,
+-- never a route to a bigger day.
+Config.HeatStreetPrice = {
+    Enabled = false,
+    -- Per-unit price multiplier by palm6_heat tier. Tiers absent from this table
+    -- (CLEAN, COOL) are treated as 1.0, i.e. no change.
+    Mult    = { WARM = 1.00, HOT = 0.85, WANTED = 0.70 },
+    Floor   = 0.60,   -- hard floor on the multiplier, whatever Mult says
+}
+
+-- A dealer the city is already hunting gets called in more often. This is an
+-- EXTRA roll ADDED to the existing Config.Heat / dealerHeat model: it is only
+-- rolled when that model did NOT already flag the event, so the durable-heat
+-- term can push the bust rate UP and can never pull it down.
+--
+-- ANTI-FARM: a higher bust chance is a pure cost (police alert + a
+-- palm6_evidence case linking the actor). There is no outcome a player could
+-- want more of by getting hotter.
+Config.HeatBust = {
+    Enabled     = false,
+    -- Flat extra chance the event is called in, by tier. Absent tiers = 0.0.
+    ExtraChance = { WARM = 0.04, HOT = 0.10, WANTED = 0.20 },
+    ApplyToCook = true,   -- false = street sales only, labs unaffected
 }
 
 -- palm6_evidence v2 frozen exports. A flagged event opens/updates a case

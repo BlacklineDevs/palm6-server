@@ -100,6 +100,39 @@ local function rl(src, key, window)
     return true
 end
 
+-- ---------------------------------------------------------------------------
+-- The fence's heat haircut. Returns (multiplier, tier): 1.0 and nil whenever
+-- the flag is off, palm6_heat is not started, the export throws or returns a
+-- non-string, or the tier carries no entry, so every failure mode lands on
+-- exactly today's flat class payout.
+--
+-- Read through GetTier ONLY. palm6_heat stores heat alongside an updated_at and
+-- settles the decay on READ, so a direct palm6_heat_state query would report a
+-- citizen who has long since cooled off as still WANTED.
+--
+-- Clamped to [Floor, 1.0]. The upper clamp is the anti-farm guarantee in code
+-- rather than in a comment: whatever Config.HeatPayout.Mult says, this function
+-- cannot return a number that pays a hot chopper MORE than a clean one.
+-- ---------------------------------------------------------------------------
+local function heatPayoutMult(cid)
+    -- Every key is read guarded (`or {}`, `tonumber(...) or default`) so
+    -- deleting the whole Config.HeatPayout block degrades to "disabled" rather
+    -- than throwing a nil-index inside a command that is not pcall-wrapped.
+    local HP = Config.HeatPayout or {}
+    if not HP.Enabled then return 1.0, nil end
+    if type(cid) ~= 'string' or cid == '' then return 1.0, nil end
+    if GetResourceState('palm6_heat') ~= 'started' then return 1.0, nil end
+    local tier
+    pcall(function() tier = exports.palm6_heat:GetTier(cid) end)
+    if type(tier) ~= 'string' then return 1.0, nil end
+    local m = tonumber((HP.Mult or {})[tier])
+    if not m then return 1.0, tier end
+    local floorMult = tonumber(HP.Floor) or 0.50
+    if m > 1.0 then m = 1.0 end
+    if m < floorMult then m = floorMult end
+    return m, tier
+end
+
 local function atDropPoint(src)
     local c = Bridge.GetCoords(src)
     if not c then return false end
@@ -217,6 +250,21 @@ local function cmdSellStolen(src)
         return
     end
 
+    -- Heat haircut. Read HERE: after the last refusal (so a car the shop was
+    -- never going to buy costs no round-trip) and BEFORE the sale row is
+    -- written, so the ledger, the bank credit and the number the seller reads
+    -- are all the same figure. Doing it after the INSERT would leave a recorded
+    -- sale disagreeing with what was actually paid.
+    --
+    -- This yield sits in the same stretch of the command as the three ownership
+    -- and stolen-report reads above it, and the per-source rate limit was
+    -- check-and-set before any of them, so it opens no new double-fire window.
+    local cleanPayout = payout
+    local hMult, hTier = heatPayoutMult(cid)
+    if hMult < 1.0 then
+        payout = math.max(1, math.floor(payout * hMult))
+    end
+
     -- Record the sale FIRST (durable audit trail), THEN retire the asset, THEN
     -- pay. Ordering matters: if we destroyed the victim's registration before the
     -- sale row existed and the INSERT then failed, an innocent owner's car would be
@@ -307,7 +355,16 @@ local function cmdSellStolen(src)
         end
     end
 
-    Bridge.Notify(src, 'Chop Shop', ('Sold for $%d.'):format(payout), 'success')
+    -- Say the cost out loud. A quietly smaller number is not a consequence the
+    -- player can learn from; naming the shortfall and the tier lets them tie it
+    -- back to /myheat and decide to lie low instead of filing a bug.
+    if hMult < 1.0 then
+        Bridge.Notify(src, 'Chop Shop',
+            ('Sold for $%d. The fence held back $%d, you are too hot right now (%s).')
+                :format(payout, cleanPayout - payout, tostring(hTier)), 'warning')
+    else
+        Bridge.Notify(src, 'Chop Shop', ('Sold for $%d.'):format(payout), 'success')
+    end
 
     -- Persistent police attention: fencing a car is a crime, and fencing one
     -- that was reported STOLEN is hotter than dumping your own. Keyed to the
@@ -322,7 +379,8 @@ local function cmdSellStolen(src)
         end)
     end
 
-    dbg(('%s sold %s (class %d) for $%d, stolen=%s'):format(cid, plate, class, payout, tostring(stolenRow ~= nil)))
+    dbg(('%s sold %s (class %d) for $%d (base $%d, heat tier %s), stolen=%s'):format(
+        cid, plate, class, payout, cleanPayout, tostring(hTier), tostring(stolenRow ~= nil)))
 end
 
 -- ---------------------------------------------------------------------------

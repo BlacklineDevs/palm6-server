@@ -99,6 +99,98 @@ running and falls back to identical built-in defaults when it isn't.
   dropped text. Turning it on will silence the four qbx robberies above in
   `/calls`; that is the trade, and it is why it ships off.
 
+## Charge catalogue + sentence calculator (v0.4.0, SHIPS OFF)
+
+`Config.Charges.Enabled = false`. With the flag off `/charges` is not
+registered, the three exports below return `nil`, and nothing else changes.
+
+**Free-text charges are untouched and always will be.** `/book` still takes
+prose bounded only by `ChargesMin`/`ChargesMax`. The catalogue is an
+*additional* vocabulary an officer may optionally use, never a replacement,
+and nothing rewrites a filed charge string.
+
+- `/charges [class]`: the catalogue, grouped under a `--- class ---` header,
+  one line per charge: code, label, base sentence + unit, base fine. Read-only;
+  it prints `Config` and touches nothing. The footer names the review command
+  by asking `palm6_legal` for it (`GetSentenceCommand()`), so it can never
+  advertise a command that is switched off or has been renamed.
+
+The calculator lives in `shared/sentencing.lua`, deliberately alone in its own
+file so "pure and deterministic" is checkable by reading one short file. It
+calls no native, no framework export, no MySQL, and no `Bridge` function.
+
+**The model.** The most serious charge is served in full; every other charge
+in the same booking is served at `ConcurrentPct` of its base. That is what
+stops nine petty charges out-sentencing one murder (verified: 26 vs 90).
+Fines are the opposite — cumulative at full value, never touched by the priors
+multiplier — so the money side stays a published schedule a player can predict
+exactly. Priors are prior **unsealed** bookings filed before this one; each
+adds `PriorsStepPct`, capped at `PriorsCap`. Because sealed bookings do not
+count, winning an expungement petition in `palm6_legal` genuinely lowers your
+next recommended sentence.
+
+**No floating point.** Base sentences are integers, the concurrency factor and
+priors step are integer *percentages*, the subtotal is kept in hundredths, the
+multiplier leaves it in ten-thousandths, and exactly one rounding happens at
+the end as integer division. There is no platform-dependent rounding and no
+accumulated error. Charges are sorted by severity with a tiebreak chain ending
+on the unique code, and the charge-count cap cuts from the *bottom* of that
+sorted list, so the result never depends on the order the codes were typed.
+
+Worked example — `gta` + `evade`, 3 priors:
+
+```
+gta   [felony]      Grand Theft Auto            15 x 100% = 15.00  (most serious)
+evade [misdemeanor] Evading a Peace Officer      5 x  50% =  2.50  (concurrent)
+subtotal 17.50, fine $10000 (cumulative)
+priors 3 -> multiplier 130% (time only)
+17.50 x 130% = 22.7500 -> rounded half up = 23
+```
+
+**The ceiling makes concurrency invisible above it.** `MaxSentence = 120` is a
+hard clamp applied last. Re-run against the real catalogue: `murder_1` with 5
+priors is 135 raw, `murder_1 + murder_2` with 5 priors is 180 raw, all 17 codes
+with 5 priors is 321 raw, and all three print **120**. So "concurrency stops
+charges stacking" is only observable *below* the ceiling; at or above it, an
+extra charge changes the fine and nothing else. The breakdown says so out loud
+when it fires, and `result.capped` / `cappedHigh` / `cappedLow` report it.
+
+**Inference never produces a number, on purpose.** Omit the codes and the
+booking text is still scanned (literal whole-token matching, never fuzzy), but
+the hits come back as `suggested` and the result is a refusal. The scan cannot
+see a compound code, and on this catalogue the compound codes are the severe
+ones (`leo_assault` 20, `bank_robbery` 45, `murder_1` 90) while the single-word
+ones are the mild ones (`trespass` 1, `assault` 8). Scanning *"assault on a
+peace officer during a bank robbery"* finds `assault` alone: 8 months and
+$3000, against the correct sheet's 55 months and $35,000. A confident, itemised
+recommendation that is systematically too lenient is worse than no
+recommendation, so a human has to type the codes.
+
+**Sealed bookings are invisible here.** `RecommendForBooking` returns `nil` for
+a booking with `sealed_at` set unless the caller passes
+`opts.allowSealed`, which `palm6_legal` only does on its console/ace tier.
+Anything else would have handed the citizenid, name and original charge text of
+an *expunged* record to any on-duty officer who typed the booking number, which
+is the whole expungement mechanic undone. Priors already count unsealed rows
+only, so the printed prior count cannot betray a sealed booking either.
+
+**A failed prior-record lookup refuses rather than guessing zero.** `sealed_at`
+arrives only via `sql/0026_legal.sql`'s MariaDB-only `ADD COLUMN IF NOT EXISTS`,
+so on an unpatched MySQL 8 box the priors query throws. Reporting that as "0
+priors counted" inside a breakdown sold as reproducible-on-paper would tell
+every citizen on the server, in writing, that they are a first offender.
+
+Exports (additive, all `nil` while the flag is off):
+`GetChargeCatalogue()`, `CalculateSentence(codes, priors)`,
+`RecommendForBooking(bookingId, codes, opts)`. `opts.allowSealed` is the only
+argument added since v0.4.0 and is optional, so existing callers are unaffected.
+
+**This resource still cannot jail anybody.** `qbx_police` owns `/cuff` and
+`/jail` and is not in this repo. `Config.Charges.SentenceUnit` is a display
+label only — nothing here converts it to game time, because nothing here knows
+what unit that command takes. The full handoff note is in
+`palm6_legal/README.md`.
+
 ## Design notes
 
 - **Server-only** — no client script at all. Every command reads server

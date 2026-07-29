@@ -62,6 +62,107 @@ Config.Warrants = {
     PresenceRadius  = 12.0,
 }
 
+-- ---------------------------------------------------------------------------
+-- Charge catalogue + sentence calculator (v0.4.0). SHIPS OFF (Enabled=false).
+--
+-- SCOPE, STATED HONESTLY: this repo cannot jail anybody. qbx_police owns the
+-- PHYSICAL side (/cuff, /jail) and is NOT in this repo — it lives on the game
+-- box. What IS ownable here is the PAPERWORK: a structured charge list, a
+-- deterministic recommendation derived from it, and a review step a human can
+-- read. Nothing below puts a player in a cell, moves money, or changes a
+-- booking. It is a read-only advisory layer that a human then acts on.
+--
+-- Free-text charges are UNCHANGED. /book still takes prose bounded only by
+-- ChargesMin/ChargesMax above, and always will: the catalogue is an ADDITIONAL
+-- vocabulary an officer may optionally use, never a replacement. With
+-- Enabled=false nothing here is registered or reachable at all.
+-- ---------------------------------------------------------------------------
+Config.Charges = {
+    -- Master flag. false = /charges is not registered, and the
+    -- CalculateSentence / RecommendForBooking exports return nil. Existing
+    -- behaviour is bit-for-bit unchanged.
+    Enabled = false,
+
+    -- Command name for the in-game catalogue reader. Configurable for the same
+    -- reason Config.Identify.Command is: the live box runs ~157 resources this
+    -- repo cannot see and the LAST resource to RegisterCommand a name wins.
+    Command = 'charges',
+
+    -- PURE LABEL. Nothing in this repo converts this number into game time —
+    -- see the qbx_police handoff note in README.md. The operator wiring the
+    -- physical side must confirm what unit their jail command actually takes
+    -- before mapping a recommendation onto it. Changing this string changes
+    -- display text and nothing else.
+    SentenceUnit = 'months',
+
+    -- ARITHMETIC. All three are INTEGER PERCENTAGES on purpose: the whole
+    -- calculation runs in integer hundredths and rounds once at the end, so
+    -- there is no floating point anywhere in the result and the same inputs
+    -- always produce the same output on any machine.
+    --
+    -- ConcurrentPct: concurrent sentencing. The single most serious charge is
+    -- served in full; every other charge in the same booking is served at this
+    -- percentage of its base. This is why stacking six petty charges does not
+    -- out-sentence one murder.
+    ConcurrentPct = 50,
+
+    -- Fines are CUMULATIVE, not concurrent, and priors do NOT multiply them.
+    -- Deliberate: time is the escalating penalty, money is a fixed schedule.
+    -- A player can read the catalogue and predict their fine exactly.
+
+    -- PriorsStepPct: each prior unsealed booking adds this many percent to the
+    -- TIME subtotal only. PriorsCap bounds how many priors can ever count, so
+    -- the multiplier tops out at 100 + PriorsCap * PriorsStepPct percent
+    -- (default 150%). Without the cap a long-lived character would drift into
+    -- permanent maximum sentences with no way back.
+    PriorsStepPct = 10,
+    PriorsCap     = 5,
+
+    -- Hard bounds on the recommendation. MaxSentence is the real anti-runaway:
+    -- no combination of charges and priors can ever recommend more than this.
+    MinSentence = 1,
+    MaxSentence = 120,
+    MaxFine     = 250000,
+
+    -- Most charges accepted in one calculation. Bounds both the arithmetic and
+    -- the number of chat lines a single command can emit.
+    MaxCodes = 10,
+
+    -- Display order for /charges.
+    ClassOrder = { 'infraction', 'misdemeanor', 'felony' },
+
+    -- THE CATALOGUE. code (lowercase, no spaces — it is typed in chat), label
+    -- (what a human reads), class, base sentence, base fine.
+    --
+    -- Codes are stable identifiers: renaming one silently changes what every
+    -- previously-typed charge string means, so add new codes rather than
+    -- repurposing old ones. Numbers below are a STARTING SCHEDULE, not a
+    -- balance pass — they are ordered sanely relative to each other and are
+    -- meant to be tuned by whoever runs the city.
+    Catalogue = {
+        -- infractions
+        { code = 'trespass',      label = 'Criminal Trespass',                 class = 'infraction',   sentence = 1,  fine = 500 },
+        { code = 'disorder',      label = 'Disorderly Conduct',                class = 'infraction',   sentence = 1,  fine = 750 },
+        { code = 'obstruct',      label = 'Obstruction of Justice',            class = 'infraction',   sentence = 2,  fine = 1000 },
+        -- misdemeanors
+        { code = 'theft_petty',   label = 'Petty Theft',                       class = 'misdemeanor',  sentence = 4,  fine = 1500 },
+        { code = 'evade',         label = 'Evading a Peace Officer',           class = 'misdemeanor',  sentence = 5,  fine = 2500 },
+        { code = 'poss_ctrl',     label = 'Possession of a Controlled Substance', class = 'misdemeanor', sentence = 5, fine = 2000 },
+        { code = 'weapon_unlic',  label = 'Unlicensed Firearm',                class = 'misdemeanor',  sentence = 6,  fine = 4000 },
+        { code = 'assault',       label = 'Assault',                           class = 'misdemeanor',  sentence = 8,  fine = 3000 },
+        { code = 'burglary',      label = 'Burglary',                          class = 'misdemeanor',  sentence = 10, fine = 5000 },
+        -- felonies
+        { code = 'gta',           label = 'Grand Theft Auto',                  class = 'felony',       sentence = 15, fine = 7500 },
+        { code = 'leo_assault',   label = 'Assault on a Peace Officer',        class = 'felony',       sentence = 20, fine = 10000 },
+        { code = 'robbery_armed', label = 'Armed Robbery',                     class = 'felony',       sentence = 25, fine = 12000 },
+        { code = 'traff_ctrl',    label = 'Trafficking a Controlled Substance', class = 'felony',      sentence = 30, fine = 15000 },
+        { code = 'kidnap',        label = 'Kidnapping',                        class = 'felony',       sentence = 35, fine = 20000 },
+        { code = 'bank_robbery',  label = 'Bank Robbery',                      class = 'felony',       sentence = 45, fine = 25000 },
+        { code = 'murder_2',      label = 'Murder (Second Degree)',            class = 'felony',       sentence = 60, fine = 40000 },
+        { code = 'murder_1',      label = 'Murder (First Degree)',             class = 'felony',       sentence = 90, fine = 60000 },
+    },
+}
+
 -- Suspect identification (/id). The single missing rung in the justice ladder:
 -- /warrant and /book wanted a raw citizenid an officer had no in-game way to
 -- learn, so everything downstream of an arrest was unusable. /id is
@@ -149,4 +250,5 @@ Config.RateLimits = {
     calls        = 2,
     id           = 3,
     runplate     = 3,
+    charges      = 5,
 }

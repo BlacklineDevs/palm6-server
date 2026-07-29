@@ -44,6 +44,36 @@ Config.ClassPayout = {
 Config.HeatOnSale      = 10  -- base heat for any chop-shop sale
 Config.HeatStolenBonus = 6   -- extra when the plate had a live stolen report
 
+-- ---------------------------------------------------------------------------
+-- The OTHER half of that wire: what a chopper PAYS for the heat they have been
+-- earning. The two values above are the WRITE side (this sale makes you hotter);
+-- this block is the READ side (being hot makes this sale worth less). A fence
+-- moving a car for a man the whole city is hunting is taking on his risk, and
+-- prices it into the buy.
+--
+-- SHIPS DISABLED. With Enabled = false no export is called, not one extra DB
+-- round-trip is spent, and /sellstolen pays exactly Config.ClassPayout[class]
+-- and prints exactly the message it prints today.
+--
+-- Heat is read ONLY through the frozen exports.palm6_heat:GetTier export, never
+-- by querying palm6_heat_state: stored heat is settled lazily against
+-- updated_at, so a direct table read reports a stale, too-HIGH tier. Soft-guard
+-- (GetResourceState + pcall) so a stopped or throwing palm6_heat leaves the
+-- payout at the flat class price.
+--
+-- ANTI-FARM: every multiplier is <= 1.0 and the code clamps anything above 1.0
+-- back down, so there is no tier and no config typo that can make being hotter
+-- pay BETTER. Heat here can only ever subtract. The heat this sale ADDS is
+-- unchanged, so the effect does not feed itself any faster than it already did.
+-- ---------------------------------------------------------------------------
+Config.HeatPayout = {
+    Enabled = false,
+    -- Payout multiplier by palm6_heat tier. Tiers absent from this table
+    -- (CLEAN, COOL) are treated as 1.0, i.e. no change.
+    Mult    = { WARM = 1.00, HOT = 0.85, WANTED = 0.70 },
+    Floor   = 0.50,   -- hard floor on the multiplier, whatever Mult says
+}
+
 -- Own guard, independent of palm6_eventguard. Both /reportstolen and
 -- /sellstolen are chat commands, not net events — eventguard's
 -- Config.Events doesn't cover chat commands (confirmed this session,

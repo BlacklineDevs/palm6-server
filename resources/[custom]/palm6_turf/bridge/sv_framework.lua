@@ -54,3 +54,13 @@ end
 function Bridge.Distance(a, b)
     return #(vector3(a.x, a.y, a.z) - vector3(b.x, b.y, b.z))
 end
+
+-- Online server ids as numbers. Used by the contest engine to RE-DERIVE who is
+-- standing in a zone: the server walks this list and reads each ped's position
+-- with GetCoords above. A client never reports its own position or presence.
+-- Same shape as palm6_gangs' bridge.
+function Bridge.GetOnlinePlayers()
+    local out = {}
+    for _, sid in ipairs(GetPlayers()) do out[#out + 1] = tonumber(sid) end
+    return out
+end

@@ -308,6 +308,241 @@ local function cmdExpunge(src, args)
 end
 
 -- ---------------------------------------------------------------------------
+-- /sentence <citizenid|*> <booking#> [code...] : the review step (v0.2.0).
+-- SHIPS OFF.
+--
+-- Prints a recommended sentence and fine for a booking, WITH the arithmetic
+-- that produced it. Read-only in the strongest sense: it selects, it computes,
+-- it replies to the caller. It does not jail, fine, charge, seal, or notify
+-- the subject. The physical side belongs to qbx_police, which is not in this
+-- repo (see README.md).
+--
+-- Three privacy properties hold here and are load-bearing:
+--   * you must already know the subject's citizenid (or hold the court ace),
+--     so the booking number cannot be walked as an identity oracle;
+--   * a sealed (expunged) booking is invisible to everything below the court
+--     ace, and its refusal is worded identically to "no such booking", so the
+--     refusal itself does not confirm that an expungement happened;
+--   * priors are counted from UNSEALED rows only (palm6_mdt's priorsFor), so
+--     the printed prior count cannot betray a sealed booking either.
+--
+-- Staff audit sink, same soft pattern palm6_mdt uses for bookings: never let a
+-- missing or broken sink fail the command. palm6_staff's Log is not internally
+-- pcall'd, so the pcall here is load-bearing rather than decorative.
+-- ---------------------------------------------------------------------------
+local function auditLog(action, actorSrc, targetSrc, detail)
+    if not Bridge.ResourceStarted('palm6_staff') then return end
+    pcall(function()
+        exports.palm6_staff:Log(action, actorSrc, targetSrc, detail)
+    end)
+end
+
+-- Who may pull a recommendation, and AT WHAT TIER. Console and the ace are
+-- 'court', the operator-granted audit tier: the only one that can read a
+-- sealed booking or pass `*` instead of a citizenid. The three job branches are
+-- 'job': they still have to name the subject they are looking up. Every branch
+-- FAILS CLOSED: an ungranted ace and a mistyped job name both simply do not
+-- match, and an unmatched caller gets tier nil.
+local function sentenceGate(src)
+    if src == 0 then return 'court' end
+    local S = Config.Sentencing
+    if Bridge.IsAceAllowed(src, S.Ace) then return 'court' end
+    if S.AllowJudge and Bridge.IsOnDutyJudge(src) then return 'job' end
+    if S.AllowLawyer and Bridge.IsOnDutyLawyer(src) then return 'job' end
+    if S.AllowPolice and Bridge.IsOnDutyPolice(src) then return 'job' end
+    return nil
+end
+
+-- Rolling lookup budget + audit de-dup, per source. One record per source,
+-- reset wholesale when its window expires, so nothing here grows without
+-- bound: `logged` can only ever hold MaxPerWindow keys before the reset drops
+-- the whole record.
+--
+-- This is a SEPARATE control from rl() above. rl() spaces requests 5s apart,
+-- which does nothing against a patient loop; this caps how many distinct
+-- records one source can pull in a window at all.
+local sentenceWindow = {}   -- [src] = { start = ts, n = 0, logged = {} }
+
+local function sentenceBudget(src)
+    if src == 0 then return true end   -- server console, not a player surface
+    local S = Config.Sentencing
+    local windowSec = tonumber(S.WindowSec) or 300
+    local maxPer = tonumber(S.MaxPerWindow) or 8
+    local t = now()
+    local w = sentenceWindow[src]
+    if not w or (t - w.start) >= windowSec then
+        w = { start = t, n = 0, logged = {} }
+        sentenceWindow[src] = w
+    end
+    if w.n >= maxPer then return false, math.max(1, windowSec - (t - w.start)) end
+    w.n = w.n + 1
+    return true
+end
+
+-- True the first time this source is told about this booking in the current
+-- window. Keeps a read-only command from becoming a Discord webhook loop.
+local function auditFirstSeen(src, bookingId)
+    if src == 0 then return true end
+    local w = sentenceWindow[src]
+    if not w then return true end
+    local key = tostring(bookingId)
+    if w.logged[key] then return false end
+    w.logged[key] = true
+    return true
+end
+
+-- Citizenids are typed in chat. Normalise for comparison only; the value that
+-- gets printed is always the one the database returned, never the typed one.
+local function sameCitizen(a, b)
+    local x = tostring(a or ''):gsub('%s+', ''):upper()
+    local y = tostring(b or ''):gsub('%s+', ''):upper()
+    return x ~= '' and x == y
+end
+
+local function cmdSentence(src, args)
+    if src ~= 0 and not rl(src, 'sentence') then return end
+    local tier = sentenceGate(src)
+    if not tier then
+        Bridge.Notify(src, 'Legal',
+            'Only the court, an on-duty judge or lawyer, or on-duty police can pull a sentencing recommendation.', 'error')
+        return
+    end
+    local subject = tostring(args[1] or ''):gsub('%s+', '')
+    local bookingId = tonumber(args[2])
+    if subject == '' or not bookingId then
+        Bridge.Reply(src, {
+            ('Usage: /%s [citizenid] [booking #] [charge code...]'):format(Config.Sentencing.Command),
+            'you have to know whose booking it is: the citizenid must match the record',
+            'with no codes it lists the codes found in the booking text, but will not price them',
+        })
+        return
+    end
+
+    -- `*` means "whoever this booking belongs to" and is the court tier only.
+    -- It is the enumeration primitive, so it is gated exactly like sealed
+    -- access: an operator-granted ace, or the server console.
+    local anySubject = (subject == '*')
+    if anySubject and tier ~= 'court' then
+        Bridge.Notify(src, 'Legal',
+            'Only the court can pull a booking without naming the citizen it belongs to.', 'error')
+        return
+    end
+
+    if not Bridge.ResourceStarted('palm6_mdt') then
+        Bridge.Reply(src, { 'booking records offline' })
+        return
+    end
+
+    -- Budget is spent HERE, on the last line before a record is actually read.
+    -- Everything above this point is either a usage mistake or a hard denial and
+    -- reveals nothing, so a fat-fingered officer does not burn their allowance;
+    -- everything below it is a well-formed request for somebody's record and
+    -- costs the same whether it finds a row or not, so a prober gains nothing by
+    -- aiming at ids that miss.
+    local within, waitSec = sentenceBudget(src)
+    if not within then
+        Bridge.Notify(src, 'Legal',
+            ('That is too many record pulls at once. Try again in %d second(s).'):format(waitSec), 'error')
+        return
+    end
+
+    -- Codes are everything after the booking number. Soft cross-resource call,
+    -- house idiom: palm6_mdt owns the bookings table and the calculator, and
+    -- this resource never touches either directly.
+    local codes = {}
+    for i = 3, #args do codes[#codes + 1] = args[i] end
+
+    -- allowSealed is the court tier ONLY. A sealed booking is one a player paid
+    -- the court fee to bury; for everybody else palm6_mdt returns nil for it,
+    -- which lands on the same branch as a booking that never existed.
+    local rec
+    pcall(function()
+        rec = exports.palm6_mdt:RecommendForBooking(bookingId, codes,
+            { allowSealed = (tier == 'court') })
+    end)
+
+    -- ONE message covers no-such-booking, sealed-and-you-are-not-the-court, and
+    -- wrong-citizenid. That is deliberate: a distinct "that booking belongs to
+    -- someone else" would confirm the booking exists and hand back exactly the
+    -- enumeration signal the citizenid argument is here to remove, and a
+    -- distinct "that record is sealed" would confirm an expungement.
+    local denied = (type(rec) ~= 'table')
+        or (not anySubject and not sameCitizen(subject, rec.citizenid))
+    if denied then
+        Bridge.Reply(src, {
+            'no recommendation available for that booking',
+            'either no booking with that number for that citizen, or the charge catalogue is switched off',
+        })
+        return
+    end
+
+    local r = rec.result
+    local lines = {
+        ('sentencing review — booking #%d, %s (%s)'):format(
+            rec.bookingId,
+            (rec.citizenName and rec.citizenName ~= '') and rec.citizenName or 'unknown citizen',
+            rec.citizenid),
+        ('filed charges: %s'):format(rec.charges),
+    }
+    if rec.sealed then
+        -- Only the court tier can reach this line at all (palm6_mdt returns nil
+        -- for a sealed booking otherwise), and it must never read as live.
+        lines[#lines + 1] = 'NOTE: this booking is SEALED (expunged) — it is not a live charge'
+    end
+
+    if not r or not r.ok then
+        lines[#lines + 1] = ('no recommendation: %s'):format(
+            (r and r.reason) or 'the calculator returned nothing')
+        lines[#lines + 1] = ('give codes explicitly: /%s %s %d [code...]'):format(
+            Config.Sentencing.Command, rec.citizenid, rec.bookingId)
+        if r and #r.unknown > 0 then
+            lines[#lines + 1] = ('unrecognised: %s'):format(table.concat(r.unknown, ', '))
+        end
+        -- Suggestions, clearly marked as not a sentence. The scan is literal
+        -- whole-token matching, so it can only ever see the one-word codes, and
+        -- on the shipped catalogue those are the mild ones. Naming the codes it
+        -- structurally cannot find is the difference between a hint and a trap.
+        -- The unmatchable list comes from palm6_mdt's live catalogue, so it
+        -- stays accurate if an operator edits the charge codes.
+        if rec.suggested and #rec.suggested > 0 then
+            lines[#lines + 1] = ('found in the booking text (NOT priced, check it yourself): %s')
+                :format(table.concat(rec.suggested, ', '))
+        end
+        if rec.unmatchable and #rec.unmatchable > 0 then
+            lines[#lines + 1] = ('the text scan cannot find these codes in ordinary prose, so check the charges by hand: %s')
+                :format(table.concat(rec.unmatchable, ', '))
+        end
+        Bridge.Reply(src, lines)
+        return
+    end
+
+    lines[#lines + 1] = ('charge codes: %s'):format(table.concat(rec.codes, ', '))
+    lines[#lines + 1] = ('RECOMMENDED: %d %s and $%d'):format(r.sentence, r.unit, r.fine)
+    lines[#lines + 1] = 'why:'
+    for _, b in ipairs(r.breakdown) do
+        lines[#lines + 1] = '  ' .. b
+    end
+    -- The honest footer. Nobody should read this output and believe the
+    -- sentence has been carried out.
+    lines[#lines + 1] = 'this is a RECOMMENDATION only — nothing has been applied to this citizen'
+
+    Bridge.Reply(src, lines)
+
+    -- Successful lookups only, de-duplicated per window. GetSourceByCitizenId
+    -- sweeps every online player, so it is called only when a row is actually
+    -- going to be written.
+    if Config.Sentencing.Audit and auditFirstSeen(src, rec.bookingId) then
+        auditLog('legal_sentence_review', src, Bridge.GetSourceByCitizenId(rec.citizenid),
+            ('booking #%d on %s (%s): recommended %d %s + $%d from [%s], %d prior(s) counted, multiplier %d%%')
+            :format(rec.bookingId, rec.citizenName, rec.citizenid,
+                r.sentence, r.unit, r.fine, table.concat(rec.codes, ' '),
+                r.priors, r.multPct))
+    end
+    dbg(('sentence review on booking %d by %s'):format(
+        rec.bookingId, src == 0 and 'console' or tostring(Bridge.GetCitizenId(src))))
+end
+
+-- ---------------------------------------------------------------------------
 -- Resolver sweep — re-checks eligibility at ruling time, then seals
 -- ---------------------------------------------------------------------------
 CreateThread(function()
@@ -365,6 +600,18 @@ end)
 -- ---------------------------------------------------------------------------
 Bridge.RegisterCommand('record', function(source, args) cmdRecord(source, args) end)
 Bridge.RegisterCommand('expunge', function(source, args) cmdExpunge(source, args) end)
+-- Registered only when sentencing is switched on, so with the flag off the
+-- command name is not claimed at all.
+if Config.Sentencing.Enabled then
+    Bridge.RegisterCommand(Config.Sentencing.Command, function(source, args) cmdSentence(source, args) end)
+    -- Drop the departed source's lookup budget. Registered INSIDE this branch
+    -- on purpose: with the flag off, palm6_legal must add no handler and no
+    -- observable behaviour at all beyond its boot banner. lastAction is left
+    -- alone here so /record and /expunge cooldowns behave exactly as they did.
+    AddEventHandler('playerDropped', function()
+        sentenceWindow[source] = nil
+    end)
+end
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
@@ -385,9 +632,10 @@ AddEventHandler('onResourceStart', function(resource)
             print('^1[palm6_legal] schema MISSING - expungement petitions are LOST after charging on this box.^0')
         end
         local processing, granted = petitionCounts()
-        print(('[palm6_legal] court open — %d petition(s) before the court, %d granted all-time; records %s')
+        print(('[palm6_legal] court open — %d petition(s) before the court, %d granted all-time; records %s, sentencing review %s')
             :format(processing, granted,
-                Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline'))
+                Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline',
+                Config.Sentencing.Enabled and ('ON (/' .. Config.Sentencing.Command .. ')') or 'off'))
     end)
 end)
 
@@ -396,3 +644,23 @@ exports('GetSummary', function()
     local processing, granted = petitionCounts()
     return { processing = processing, granted = granted }
 end)
+
+---The name of the registered sentencing review command.
+---
+---Exists so palm6_mdt's /charges can point officers at a command that is
+---actually there, under the name it is actually registered under. The two flags
+---live in independent resources and the name is configurable (same
+---last-registration-wins reasoning as Config.Identify.Command), so /charges
+---printing a hardcoded "/sentence" was advertising a command that may not
+---exist. Additive and read-only; returns a string, never the Config table.
+---
+---Registered ONLY when sentencing is on, alongside the command itself, so the
+---flag-off path adds no export either. A consumer that pcalls a missing export
+---and one that reads a nil from a present export land on the same branch, so
+---gating the registration costs nothing and keeps "flag off changes nothing"
+---literally true.
+if Config.Sentencing.Enabled then
+    exports('GetSentenceCommand', function()
+        return tostring(Config.Sentencing.Command)
+    end)
+end

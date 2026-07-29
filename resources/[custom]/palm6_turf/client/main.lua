@@ -51,7 +51,29 @@ CreateThread(function()
         for id, z in pairs(zones) do
             if Game.DistanceBetween(coords, z.coords) <= Config.InteractRadius then
                 wait = 0
-                Game.ShowHelpThisFrame(('Press ~INPUT_PICKUP~ to tag %s for your gang'):format(z.label))
+                -- With the conflict flag ON, an owned zone no longer promises an
+                -- instant claim, so the prompt names the current holder instead.
+                -- It deliberately does NOT say "contest": the client has no view
+                -- of the player's own gang, so it cannot tell a rival's turf
+                -- from your own, and promising a contest on turf your gang
+                -- already holds is a lie the server immediately contradicts
+                -- ("Your gang already holds this turf"). "Tag" is true in every
+                -- case, because the tag action is what the button does; the
+                -- server alone decides what the tag then means.
+                --
+                -- 'none' is the unowned sentinel the server treats as
+                -- unclaimed (server/main.lua only opens a contest when
+                -- owner_gang is neither nil nor 'none'), so it must fall to the
+                -- unclaimed wording here too rather than read "held by none".
+                -- Unowned zones, and the entire disabled path, keep the original
+                -- wording exactly. Cosmetic only: the server decides everything.
+                if Config.Conflict and Config.Conflict.Enabled
+                    and z.owner_gang and z.owner_gang ~= 'none' then
+                    Game.ShowHelpThisFrame(('Press ~INPUT_PICKUP~ to tag %s (held by %s)')
+                        :format(z.label, z.owner_gang))
+                else
+                    Game.ShowHelpThisFrame(('Press ~INPUT_PICKUP~ to tag %s for your gang'):format(z.label))
+                end
                 if Game.InteractPressed() then
                     TriggerServerEvent('palm6_turf:requestTag', id)
                 end

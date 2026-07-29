@@ -3,8 +3,8 @@ game 'gta5'
 lua54 'yes'
 
 author 'EvThatGuy'
-version '0.1.0'
-description 'palm6 legal — rap sheets + expungement petitions (the lawyer job, employed at last)'
+version '0.2.0'
+description 'palm6 legal — rap sheets, expungement petitions, sentencing review (the lawyer job, employed at last)'
 
 -- Server-only on purpose: records are server reads, petitions are ledger
 -- rows, and the courthouse check is a server-side position read.

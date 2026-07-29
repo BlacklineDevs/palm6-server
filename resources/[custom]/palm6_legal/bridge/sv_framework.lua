@@ -37,6 +37,38 @@ function Bridge.IsOnDutyLawyer(src)
     return job ~= nil and job.name == Config.LawyerJob and job.onduty == true
 end
 
+-- Is this source an on-duty judge right now? Same shape as the lawyer gate
+-- above; see Config.JudgeJob for why the job name is unverifiable from this
+-- repo and what happens if it is wrong (this returns false, nothing errors).
+function Bridge.IsOnDutyJudge(src)
+    local p = getPlayer(src)
+    local job = p and p.PlayerData and p.PlayerData.job
+    return job ~= nil and job.name == Config.JudgeJob and job.onduty == true
+end
+
+-- Is this source an on-duty police officer right now? (palm6_mdt's exact
+-- gate.) Used only by the /sentence review command, which police may run
+-- because the arresting officer is who has to act on the recommendation.
+function Bridge.IsOnDutyPolice(src)
+    local p = getPlayer(src)
+    local job = p and p.PlayerData and p.PlayerData.job
+    return job ~= nil and job.name == 'police' and job.onduty == true
+end
+
+-- Does this source hold `ace`? The server console (src 0) always does.
+--
+-- IsPlayerAceAllowed is a server native, which is why this lives in the bridge
+-- rather than in server/main.lua. It returns FALSE for an ace nobody has been
+-- granted — it does not error — so a box whose custom.cfg has never heard of
+-- palm6.judge degrades to "this branch never passes", not to a runtime error.
+function Bridge.IsAceAllowed(src, ace)
+    if src == 0 then return true end
+    local ok, allowed = pcall(function()
+        return IsPlayerAceAllowed(src, ace)
+    end)
+    return ok and allowed == true
+end
+
 -- Notify a player.
 function Bridge.Notify(src, title, msg, t)
     TriggerClientEvent('ox_lib:notify', src, {
