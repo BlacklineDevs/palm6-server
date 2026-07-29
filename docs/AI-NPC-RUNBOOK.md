@@ -129,10 +129,19 @@ If ANY of these fails — income exceeds the cap, credits without supply, or flo
 | `braindirector` | Run one Director tick now, print the plan |
 | `braingoals` | Live goal store + TTL remaining |
 | `brainmemory` | Recent notable events (memory digest) |
+| `witnesstest` | Fire a fake crime at your position with 3 witnesses (drives the whole chain) |
+| `snitchtest` | Fire a fake `crime_witnessed` and report whether a dispatch landed |
+| `alibitest` | Establish a 5-minute alibi for you, then print `HasAlibi` + the summary |
+| `gossiptest` | Seed a test rumour so you can watch its fidelity decay per hop |
+| `netpedtest` | Spawn one networked test ped that wanders |
+| `netpedgoto` | Retarget the networked test peds at a named scene |
+| `netpedclear` | Delete every networked test ped |
 
-All are `RegisterCommand(..., true)`, i.e. ACE-restricted on `command.<name>`.
+All are ACE-restricted on `command.<name>`. Most are `RegisterCommand(..., true)`;
+`gossiptest` is registered unrestricted and self-checks `command.gossiptest` in its
+own handler. Either way the ACE is what gates them.
 
-> **Gap noted 2026-07-28, not yet fixed:** `custom.cfg` grants no `command.brain*` ACEs. Because these are plain restricted commands (no `lib.addCommand` auto-grant), the only principal that can run them in-game today is `group.owner`, via the blanket `add_ace group.owner command allow`. The **server console** can always run them, which is what §3 assumes, so this is a convenience gap rather than a blocker. If you want admins to reach the meters in-game, add `add_ace group.admin command.brainstatus allow` (and siblings) to `custom.cfg`.
+> **ACE grants (fixed 2026-07-28):** `custom.cfg` previously granted no `command.brain*` ACEs, so `group.owner` (via the blanket `add_ace group.owner command allow`) and the server console were the only principals that could reach the meters. `custom.cfg` now grants all of the commands above. `brainstatus` / `brainvalidate` / `braingoals` / `braincrime` go to `group.admin` **and** `group.mod` because they are read-only; `braindirector` is admin-only because it commits goals whenever `Director.DryRun` is off, and the `netped*` trio is admin-only because it spawns networked entities.
 
 ---
 
