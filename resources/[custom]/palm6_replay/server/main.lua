@@ -533,14 +533,16 @@ if Config.Triggers.ShotsFired then
 end
 
 -- Foreign-resource incident hooks (palm6_robbery etc.) — read-only
--- subscriptions to their existing client->server events.
+-- subscriptions to their existing incident events. Server-raised signals are
+-- the default; an entry only becomes a net-event subscription if it carries an
+-- explicit `clientRaised = true` (see bridge/sv_framework.lua).
 for _, hook in ipairs(Config.Triggers.AutoFlagEvents or {}) do
     Bridge.OnForeignNetEvent(hook.event, function(src)
         local cid = Bridge.GetCitizenId(src)
         if not cid then return end
         if not cooldownOk(srcFlagAt, src, 30) then return end
         flagIncident(hook.type, Bridge.GetCoords(src), hook.label, { flaggedBy = cid })
-    end)
+    end, hook.clientRaised)
 end
 
 -- Officer bodycam: capture a snippet centred on yourself, on demand.

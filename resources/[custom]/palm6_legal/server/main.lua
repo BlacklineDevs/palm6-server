@@ -97,6 +97,7 @@ local function bookingsFor(cid)
 end
 
 local function hasWarrant(cid)
+    if not Bridge.ResourceStarted('palm6_mdt') then return false end
     local w = false
     pcall(function() w = exports.palm6_mdt:HasActiveWarrant(cid) == true end)
     return w

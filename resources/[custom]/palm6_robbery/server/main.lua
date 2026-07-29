@@ -10,9 +10,12 @@
 local cd      = {}  -- [index] = unix expiry
 local pending = {}  -- [src] = { index, holdUntil }
 
+-- FAIL-CLOSED: if the server cannot read the caller's own position there is
+-- nothing to verify against, so the proximity gate must DENY. This is the only
+-- position check between a `:complete` and the payout below.
 local function nearby(src, coords)
     local c = Bridge.GetCoords(src)
-    if not c or not coords then return true end
+    if not c or not coords then return false end
     return Bridge.Distance(c, coords) <= (Config.InteractRadius + 2.5)
 end
 
@@ -30,7 +33,15 @@ RegisterNetEvent('palm6_robbery:start', function(index)
         Bridge.Notify(src, 'Robbery', 'This spot was hit recently. Come back later.', 'error')
         return
     end
-    if not nearby(src, loc.coords) then return end
+    -- Notify rather than returning silently. nearby() fails CLOSED now, so a
+    -- player whose server-side position is momentarily unreadable (mid-spawn,
+    -- character switch) gets refused here through no fault of their own. A silent
+    -- return reads as a broken ATM; the :complete path already notifies for the
+    -- same reason ("You left the ATM").
+    if not nearby(src, loc.coords) then
+        Bridge.Notify(src, 'Robbery', 'You are not close enough to the ATM.', 'error')
+        return
+    end
 
     if Bridge.CountOnDutyPolice() < (Config.MinPolice or 0) then
         Bridge.Notify(src, 'Robbery', 'It is too quiet — not enough police around.', 'error')

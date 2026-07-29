@@ -94,7 +94,14 @@ end
 
 local function nearby(src, coords, extra)
     local c = Bridge.GetCoords(src)
-    if not c or not coords then return true end  -- can't verify -> allow
+    -- FAIL CLOSED. This used to return true ("can't verify -> allow"), which
+    -- meant an unreadable server-side position let a range-gated action settle
+    -- from anywhere: palm6_grind:sell has nearby(src, sell.coords) as its ONLY
+    -- location gate before Bridge.AddCash. Every real caller passes a coords
+    -- table (all three Config.Activities define sell.coords, and the gather path
+    -- proves act.spots[spotIndex] exists before calling), so refusing here only
+    -- rejects the cases we genuinely cannot verify.
+    if not c or not coords then return false end
     return Bridge.Distance(c, coords) <= (Config.InteractRadius + (extra or 3.0))
 end
 
@@ -113,9 +120,11 @@ RegisterNetEvent('palm6_grind:gather', function(activityKey, spotIndex)
         return
     end
 
-    -- spotIndex is client-supplied: an out-of-range value would make `spot`
-    -- nil, and nearby(src, nil) fails open (returns true), letting a crafted
-    -- event gather from anywhere. Require a real spot before the range check.
+    -- spotIndex is client-supplied, so an out-of-range value makes `spot` nil.
+    -- nearby() now fails CLOSED on a nil coords (see its body above), so this is
+    -- belt and braces rather than the only thing standing between a crafted event
+    -- and gathering from anywhere. Keep it: it rejects the bad index explicitly
+    -- and notifies, instead of relying on a distance check to refuse a nil.
     local spot = type(spotIndex) == 'number' and act.spots[spotIndex] or nil
     if not spot or not nearby(src, spot) then
         Bridge.Notify(src, act.label, 'You are not at a gathering spot.', 'error')

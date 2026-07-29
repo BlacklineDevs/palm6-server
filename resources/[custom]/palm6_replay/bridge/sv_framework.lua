@@ -113,24 +113,26 @@ function Bridge.OnPlayerDowned(cb)
     end)
 end
 
--- Names that their owning resource raises SERVER-side with TriggerEvent, after
--- all of its own gates have passed. These must NEVER be RegisterNetEvent'd:
--- doing so does not just add a listener, it OPENS the name to the network for
--- every handler on the box, so one modified client could forge a "all gates
--- passed" signal that palm6_witnesses (and anything else listening) would
--- believe too. Keeping the list here rather than in shared/config.lua means an
--- operator editing Config.Triggers.AutoFlagEvents cannot accidentally downgrade
--- a server-only signal back to a net event.
---   palm6_robbery:started - raised at palm6_robbery/server/main.lua:58 only
---   after the police-count / weapon / cooldown / proximity gates pass. Its
---   client-triggerable sibling 'palm6_robbery:start' is the WRONG signal and is
---   what Config.Triggers.AutoFlagEvents used to point at.
-local SERVER_ONLY_SIGNALS = {
-    ['palm6_robbery:started'] = true,
-}
+-- Incident signals whose owning resource raises them SERVER-side with
+-- TriggerEvent, after all of its own gates have passed, must NEVER be
+-- RegisterNetEvent'd: doing so does not just add a listener, it OPENS the name
+-- to the network for every handler on the box, so one modified client could
+-- forge a "all gates passed" signal that palm6_witnesses (and anything else
+-- listening) would believe too.
+--
+-- The subscriber below therefore defaults to the SAFE primitive
+-- (AddEventHandler) for every name, and only opens a name to the network when
+-- the caller explicitly asks for it. An operator adding a new entry to
+-- Config.Triggers.AutoFlagEvents cannot open a net event by omission - they
+-- have to write `clientRaised = true` on that entry and mean it.
+--   palm6_robbery:started - raised at palm6_robbery/server/main.lua only after
+--   the police-count / weapon / cooldown / proximity gates pass (grep
+--   `TriggerEvent('palm6_robbery:started'`). Its client-triggerable sibling
+--   'palm6_robbery:start' is the WRONG signal and is what
+--   Config.Triggers.AutoFlagEvents used to point at.
 
 -- Subscribe to a server-raised incident signal. AddEventHandler ONLY - this is
--- the whole point, see SERVER_ONLY_SIGNALS above. The raising resource passes
+-- the whole point, see the comment block above. The raising resource passes
 -- the actor's src as its first argument (that is the convention the palm6
 -- ':started' signals follow), so the callback contract matches the net-event
 -- path below: `cb(src, ...)`.
@@ -140,16 +142,16 @@ function Bridge.OnServerOnlyEvent(eventName, cb)
     end)
 end
 
--- Subscribe to another resource's client->server net event purely as an
--- incident signal. Registering the same net event name in a second resource
--- adds a second handler - the owning resource is untouched. `cb(src, ...)`
--- receives the original args.
+-- Subscribe to another resource's incident event, read-only. `cb(src, ...)`.
 --
--- Server-only signal names are routed to Bridge.OnServerOnlyEvent instead, so a
--- future Config.Triggers.AutoFlagEvents entry cannot silently re-open one to the
--- network. Callers do not need to know which kind they asked for.
-function Bridge.OnForeignNetEvent(eventName, cb)
-    if SERVER_ONLY_SIGNALS[eventName] then
+-- FAILS CLOSED: without an explicit `clientRaised == true` this is a plain
+-- AddEventHandler, which listens to server-raised signals and does NOT open the
+-- name to the network. Pass clientRaised only for a name the owning resource's
+-- own CLIENT raises with TriggerServerEvent - there, registering the same name
+-- in a second resource adds a second handler on an already-open name, and the
+-- owning resource is untouched.
+function Bridge.OnForeignNetEvent(eventName, cb, clientRaised)
+    if clientRaised ~= true then
         return Bridge.OnServerOnlyEvent(eventName, cb)
     end
     RegisterNetEvent(eventName, function(...)

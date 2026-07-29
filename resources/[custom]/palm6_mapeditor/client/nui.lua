@@ -88,6 +88,13 @@ local function closeBrowser()
 end
 
 RegisterCommand('propui', function()
+    -- No editor-state guard here on purpose. openBrowser() already refuses when
+    -- the editor is closed AND tells the player why ("open the editor first
+    -- (/mapedit)"). A guard at this level would only swallow that message, which
+    -- is a worse experience for zero security gain: the browser grabs NUI focus
+    -- inside openBrowser, so nothing can open without passing its check anyway.
+    -- Closing an already-open browser stays unconditional so focus can always be
+    -- released even if the editor was shut underneath it.
     if open then closeBrowser() else openBrowser() end
 end, false)
 

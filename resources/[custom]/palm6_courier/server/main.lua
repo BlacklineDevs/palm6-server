@@ -312,8 +312,9 @@ RegisterNetEvent('palm6_courier:post', function(payload)
         -- the last two minutes. Two ways it declines to refund, both on the
         -- safe side of the bias:
         --   * a matching row IS there  -> the INSERT actually succeeded, the
-        --     escrow is correctly attached to a real posting, and the poster
-        --     can /cancel it for the normal single refund.
+        --     escrow is correctly attached to a real posting, and it gets the
+        --     normal single refund from the lifetime sweep (or from
+        --     /courier cancel where Config.EnableCancelCommand is on).
         --   * the confirm itself fails -> we cannot tell, so we keep the money
         --     where it is and print a line an operator can settle by hand.
         -- The one false negative (the poster already had an identical open
@@ -331,21 +332,48 @@ RegisterNetEvent('palm6_courier:post', function(payload)
             return Bridge.Notify(src, 'Courier', 'Could not save the posting. Your escrow was refunded.', 'error')
         end
         -- Either the row landed or we cannot tell. Refresh the cache so a row
-        -- that DID land appears on the board and stays cancellable (:cancel
-        -- reads Postings, so an unloaded row is an unrefundable one).
+        -- that DID land appears on the board and stays cancellable
+        -- (cancelPosting reads Postings, so an unloaded row is an unrefundable
+        -- one). The lifetime sweep queries the DB directly and is unaffected by
+        -- the cache, so it still refunds this row either way.
         pcall(loadPostings)
         print(('^1[palm6_courier] post INSERT for %s ($%d) reported failure but a matching open row may exist (confirm ok=%s, existing id=%s) - escrow NOT auto-refunded, settle by hand: %s^0')
             :format(citizenid, b, tostring(confirmed), tostring(orphan), tostring(id)))
+        -- Copy must match the SHIPPED default. Telling the poster to "cancel it"
+        -- while Config.EnableCancelCommand is false sends them looking for a
+        -- command that does not exist, over money that the lifetime sweep will
+        -- refund on its own. Describe the auto-refund unless cancel is enabled.
         return Bridge.Notify(src, 'Courier',
-            'Could not confirm your posting. Check the board before posting again - if it is there, cancel it to get your escrow back.', 'error')
+            Config.EnableCancelCommand
+                and 'Could not confirm your posting. Check the board before posting again - if it is there, /courier cancel <id> returns your escrow.'
+                or  'Could not confirm your posting. Check the board before posting again - if it is there, your escrow is refunded automatically when it expires.',
+            'error')
     end
     loadPostings()
     Bridge.Notify(src, 'Courier', ('Posted #%d for $%d'):format(id, b), 'success')
 end)
 
--- Accept a posting on behalf of player `src`. Shared by the net event and
--- the /courier accept command so both paths carry the real player source.
+-- Accept a posting on behalf of player `src`. Reached ONLY from the
+-- /courier accept command below, which tonumber()s the id first (Postings is
+-- keyed by the numeric row id, see loadPostings). There used to be a
+-- 'palm6_courier:accept' net event wrapping this call, but no client ever
+-- raised it (client/main.lua raises only :post, :pickup and :complete), so it
+-- was an unowned network entry point into the delivery-assignment half of a
+-- money flow. Removed rather than hardened; re-add it WITH a tonumber() and a
+-- per-source rate limit (see lastPickup/lastComplete below) if an accept UI
+-- ever needs it.
+local lastAccept = {}  -- [src] = ts, per-source rate limit (anti-DoS), see below
+
 local function acceptPosting(src, id)
+    -- The removed net event carried a 10/60s eventguard budget. The command path
+    -- never went through eventguard, so deleting the event left delivery
+    -- assignment with NO rate limit at all. Same 1s per-source shape as
+    -- lastPickup/lastComplete below; the racing-couriers case is still settled by
+    -- the UPDATE's own WHERE status='open', this only bounds spam.
+    local ctNow = os.time()
+    if ctNow - (lastAccept[src] or 0) < 1 then return end
+    lastAccept[src] = ctNow
+
     local citizenid = Bridge.GetCitizenId(src)
     if not citizenid then return end
     local row = Postings[id]
@@ -376,10 +404,6 @@ local function acceptPosting(src, id)
         label = row.label,
     })
 end
-
-RegisterNetEvent('palm6_courier:accept', function(id)
-    acceptPosting(source, id)
-end)
 
 -- Pickup leg: the courier must physically visit the pickup before the delivery
 -- can be completed. Sets a persisted picked_up flag (server-verified proximity),
@@ -420,6 +444,15 @@ RegisterNetEvent('palm6_courier:pickup', function(id)
 end)
 
 local lastComplete = {}  -- [src] = ts — per-source rate limit on :complete (anti-DoS)
+
+-- Drop per-source rate-limit state on disconnect. These tables are keyed by
+-- server id, which climbs over uptime, so without this they grow for the life of
+-- the process. Covers all three (accept was added when the orphaned net event's
+-- eventguard budget was removed, and it would otherwise have been a third leak).
+AddEventHandler('playerDropped', function()
+    local src = source
+    lastAccept[src], lastPickup[src], lastComplete[src] = nil, nil, nil
+end)
 
 RegisterNetEvent('palm6_courier:complete', function(id)
     local src = source
@@ -479,27 +512,44 @@ RegisterNetEvent('palm6_courier:complete', function(id)
     Bridge.Notify(src, 'Courier', ('Delivered. +$%d'):format(row.bounty), 'success')
 end)
 
-RegisterNetEvent('palm6_courier:cancel', function(id)
-    local src = source
+-- Cancel one of YOUR OWN open postings and take the escrow back.
+--
+-- This was a 'palm6_courier:cancel' net event, but nothing in the repo raised
+-- it: client/main.lua raises only :post, :pickup and :complete, no server
+-- TriggerEvent named it, and /courier handled only `list` and `accept`. So it
+-- was an unreachable network entry point on an escrow-refund path. The event
+-- is gone; the logic stays, because the poster-side copy already promises this
+-- ("Check the board before posting again - if it is there, cancel it to get
+-- your escrow back") and the sweep only refunds on the Config.PostingLifetime
+-- clock.
+--
+-- Reaching it is gated on Config.EnableCancelCommand, which defaults to false
+-- so player-visible behaviour is unchanged from when the event was dead. Flip
+-- that flag to make /courier cancel <id> live.
+local function cancelPosting(src, id)
     local citizenid = Bridge.GetCitizenId(src)
     if not citizenid then return end
-    local row = Postings[id]
+    -- Postings is keyed by the numeric row id (loadPostings), so coerce before
+    -- the lookup the way :pickup and :complete already do.
+    local nid = tonumber(id)
+    if not nid then return end
+    local row = Postings[nid]
     if not row or row.status ~= 'open' or row.poster_citizenid ~= citizenid then
         return Bridge.Notify(src, 'Courier', 'Cannot cancel that posting', 'error')
     end
     local refunded = MySQL.update.await(
         "UPDATE courier_postings SET status='cancelled', settled=0 WHERE id=? AND status='open' AND poster_citizenid=?",
-        { id, citizenid }
+        { nid, citizenid }
     ) == 1
     if not refunded then
         loadPostings()
         return Bridge.Notify(src, 'Courier', 'Cannot cancel that posting', 'error')
     end
     -- Claim-before-credit refund; recoverable on boot if we crash before it runs.
-    settlePosting({ id = id, status = 'cancelled', poster_citizenid = citizenid, bounty = row.bounty })
+    settlePosting({ id = nid, status = 'cancelled', poster_citizenid = citizenid, bounty = row.bounty })
     loadPostings()
     Bridge.Notify(src, 'Courier', 'Posting cancelled, bounty refunded', 'success')
-end)
+end
 
 -- ---------------------------------------------------------------------------
 -- List / chat command
@@ -526,6 +576,8 @@ RegisterCommand('courier', function(source, args)
     elseif sub == 'accept' and args[2] then
         local id = tonumber(args[2])
         if id then acceptPosting(source, id) end
+    elseif sub == 'cancel' and args[2] and Config.EnableCancelCommand then
+        cancelPosting(source, args[2])
     end
 end, false)
 

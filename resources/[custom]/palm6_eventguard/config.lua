@@ -33,10 +33,15 @@ Config.KickThreshold = 3
 Config.Events = {
     -- palm6 custom layer events
     ['palm6_courier:post']     = { calls = 5,  window_seconds = 60  },
-    ['palm6_courier:accept']   = { calls = 10, window_seconds = 60  },
     ['palm6_courier:pickup']   = { calls = 20, window_seconds = 60  },
     ['palm6_courier:complete'] = { calls = 20, window_seconds = 60  },
-    ['palm6_courier:cancel']   = { calls = 10, window_seconds = 60  },
+    -- palm6_courier:accept and :cancel are GONE, not merely unbudgeted. Both were
+    -- registered net events that no client ever raised, so they were unowned
+    -- network entry points into a money flow; they were deleted rather than
+    -- hardened. Accept now runs only through /courier accept, which carries its
+    -- own per-source rate limit (acceptPosting's lastAccept) because this budget
+    -- never covered the command path. Leaving dead budgets here would tell the
+    -- next auditor those names are still live entry points.
 
     -- palm6_robbery — ATM two-phase flow. `complete` is the money-touching
     -- event (Bridge.AddCash payout); `start`/`cancel` are budgeted too since
@@ -119,13 +124,15 @@ Config.Events = {
     -- money-touching events are `deposit`/`withdraw` (vault, re-validated +
     -- atomic server-side) and `create` (charges the founder's bank); the
     -- membership events (`invite`/`acceptInvite`/`declineInvite`/`leave`/`kick`/
-    -- `promote`/`demote`/`disband`) all re-check rank server-side. `requestMenu`
-    -- is read-only but fans a full DB-backed roster snapshot per call, so it
-    -- gets a blunt call-count budget as defense-in-depth (same reasoning as
-    -- ox_inventory:openInventory below). ensure order in custom.cfg MUST put
-    -- palm6_eventguard before palm6_gangs so these guards register first in the
-    -- handler chain (same requirement as palm6_robbery/turf/drugs above).
-    ['palm6_gangs:requestMenu']    = { calls = 20, window_seconds = 30 },
+    -- `promote`/`demote`/`disband`) all re-check rank server-side. ensure order in
+    -- custom.cfg MUST put palm6_eventguard before palm6_gangs so these guards
+    -- register first in the handler chain (same requirement as
+    -- palm6_robbery/turf/drugs above).
+    --   palm6_gangs:requestMenu USED to be budgeted here. The net event was
+    -- deleted: no client raised it, so it was an unowned network entry point that
+    -- fanned a full DB-backed roster snapshot per call. The menu is reached
+    -- through the gang command and in-handler pushMenu calls instead, neither of
+    -- which is a network entry point.
     ['palm6_gangs:create']         = { calls = 5,  window_seconds = 60 },
     ['palm6_gangs:disband']        = { calls = 5,  window_seconds = 60 },
     ['palm6_gangs:invite']         = { calls = 15, window_seconds = 60 },

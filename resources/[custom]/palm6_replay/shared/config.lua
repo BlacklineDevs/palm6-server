@@ -103,9 +103,12 @@ Config.Triggers = {
     -- numbers in both files have drifted since this comment was written.
     --
     -- Names listed here are subscribed through Bridge.OnForeignNetEvent, which
-    -- routes server-only signals to AddEventHandler instead of RegisterNetEvent
-    -- (see bridge/sv_framework.lua) - so switching the name here does NOT quietly
-    -- re-open it to the network.
+    -- FAILS CLOSED: every entry is an AddEventHandler unless it carries an
+    -- explicit `clientRaised = true`, so adding a name here can never quietly
+    -- open it to the network. Only set clientRaised on an event the owning
+    -- resource's own CLIENT raises with TriggerServerEvent (that name is already
+    -- open, so a second handler adds no surface) - and never on a ':started'
+    -- style signal, which is server-raised after gates by convention.
     AutoFlagEvents = {
         { event = 'palm6_robbery:started', type = 'robbery', label = 'Robbery in progress' },
     },

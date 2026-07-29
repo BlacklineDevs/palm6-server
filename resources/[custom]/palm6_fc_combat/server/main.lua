@@ -173,19 +173,34 @@ function resolveFight(matchId, winnerCid, method)
     local m = matches[matchId]
     if not m or m.resolving then return end
     m.resolving = true
-    if m.roundStarted then
-        exports.palm6_fightclub:ResolveMatch(matchId, winnerCid, method or 'ko')
-    else
-        -- F1: STATE-AGNOSTIC pre-LIVE void. GoLive flips the DB row to 'live'
-        -- BEFORE m.wentLive is set, so a DC in that window must NOT route off
-        -- m.wentLive (VoidMatch is guarded WHERE status='betting' and would no-op
-        -- on the now-'live' row -> no refund, ring bricked). Try the betting-guarded
-        -- VoidMatch first; if it no-ops (row already live -> returns false), fall
-        -- through to LiveVoidMatch. Both are idempotent, guarded, and resolve to
-        -- winner=NULL draw-refund, so a pre-roundStarted abort ALWAYS refunds.
-        if not exports.palm6_fightclub:VoidMatch(matchId) then
-            exports.palm6_fightclub:LiveVoidMatch(matchId)
+    -- The money leg is pcall'd so a throw inside the fightclub call can never
+    -- skip teardownMatch below. m.resolving is already latched true, so nothing
+    -- can re-enter this hub: if teardown were skipped, both fighters would stay
+    -- flagged in-match and the ring would stay bricked until a restart.
+    local ok, err = pcall(function()
+        if m.roundStarted then
+            exports.palm6_fightclub:ResolveMatch(matchId, winnerCid, method or 'ko')
+        else
+            -- F1: STATE-AGNOSTIC pre-LIVE void. GoLive flips the DB row to 'live'
+            -- BEFORE m.wentLive is set, so a DC in that window must NOT route off
+            -- m.wentLive (VoidMatch is guarded WHERE status='betting' and would no-op
+            -- on the now-'live' row -> no refund, ring bricked). Try the betting-guarded
+            -- VoidMatch first; if it no-ops (row already live -> returns false), fall
+            -- through to LiveVoidMatch. Both are idempotent, guarded, and resolve to
+            -- winner=NULL draw-refund, so a pre-roundStarted abort ALWAYS refunds.
+            if not exports.palm6_fightclub:VoidMatch(matchId) then
+                exports.palm6_fightclub:LiveVoidMatch(matchId)
+            end
         end
+    end)
+    -- Swallowing this error would be silent MONEY LOSS: teardown below frees both
+    -- fighters and drops the match from memory, but the DB row stays 'live' with
+    -- the stakes still in escrow and nobody paid. Availability is the right trade
+    -- (a throw used to brick the ring until a restart) but it must be LOUD, or the
+    -- only symptom is players reporting missing winnings with nothing to correlate.
+    if not ok then
+        print(('^1[palm6_fc_combat] resolve #%s FAILED, stakes UNSETTLED (row still live, nobody paid) -> %s^0')
+            :format(tostring(matchId), tostring(err)))
     end
     teardownMatch(matchId)
 end
@@ -652,11 +667,38 @@ AddEventHandler('onResourceStart', function(res)
         pcall(function()
             rows = MySQL.query.await("SELECT id, status FROM palm6_fightclub_matches WHERE status IN ('betting','live')") or {}
         end)
-        for _, r in ipairs(rows) do
-            if r.status == 'betting' then exports.palm6_fightclub:VoidMatch(r.id)
-            else exports.palm6_fightclub:LiveVoidMatch(r.id) end
+        -- palm6_fightclub is a hard dep, but `dependencies` only asserts it is
+        -- 'started', not that its boot finished and registered exports. Guard
+        -- the state AND pcall PER ROW: a throw here used to kill this thread
+        -- before `bootDone = true` below, and bootDone gates every entry point,
+        -- so the resource would silently refuse every match for the rest of
+        -- uptime. Per-row pcall so one bad row cannot abandon the refunds for
+        -- the rest.
+        local refunded = 0
+        if Bridge.ResourceStarted('palm6_fightclub') then
+            for _, r in ipairs(rows) do
+                local ok = pcall(function()
+                    if r.status == 'betting' then exports.palm6_fightclub:VoidMatch(r.id)
+                    else exports.palm6_fightclub:LiveVoidMatch(r.id) end
+                end)
+                if ok then refunded = refunded + 1 end
+            end
         end
-        if #rows > 0 then print(('[palm6_fc_combat] boot no-contested %d stranded match(es)'):format(#rows)) end
+        -- Report what ACTUALLY happened, never the row count. The guard above can
+        -- skip every refund (fightclub not started, or its exports not registered
+        -- yet - the very case the guard exists for) and each row can still fail its
+        -- own pcall. Printing #rows there would tell an operator escrow was returned
+        -- when it was not, they close the ticket, and the stakes stay stranded with
+        -- no retry. Loud and specific on the shortfall instead.
+        if #rows > 0 then
+            if refunded == #rows then
+                print(('[palm6_fc_combat] boot no-contested %d stranded match(es)'):format(refunded))
+            else
+                print(('^1[palm6_fc_combat] boot no-contest INCOMPLETE: %d/%d stranded match(es) refunded, ' ..
+                       '%d NOT refunded (stakes still in escrow, no retry)^0')
+                    :format(refunded, #rows, #rows - refunded))
+            end
+        end
         bootDone = true
         print('[palm6_fc_combat] ready — Enabled=' .. tostring(enabled()))
     end)

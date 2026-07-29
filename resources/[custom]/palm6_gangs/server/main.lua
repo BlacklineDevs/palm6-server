@@ -143,8 +143,6 @@ end
 local webCooldown = {}    -- [src] = ts of last /gangweb (anti-spam)
 local inviteCooldown = {} -- [src] = ts of last invite (anti-spam; stops forcing
                           -- repeated confirm-dialogs onto a nearby player)
-local menuCooldown = {}   -- [src] = ts of last requestMenu (anti-spam: pushMenu
-                          -- runs 1-3 DB reads; any client can spam this event)
 local WEB_TOKEN_CHARS = '0123456789abcdefghijklmnopqrstuvwxyz'
 local function makeWebToken()
     math.randomseed(os.time() + os.clock() * 1000)
@@ -333,14 +331,13 @@ end
 -- ---------------------------------------------------------------------------
 -- Net events — every handler re-derives citizenid + rank server-side.
 -- ---------------------------------------------------------------------------
-RegisterNetEvent('palm6_gangs:requestMenu', function()
-    local src = source
-    local mt = now()
-    if mt - (menuCooldown[src] or 0) < 1 then return end  -- throttle DB-read spam
-    menuCooldown[src] = mt
-    pushMenu(src)
-end)
-
+-- NOTE: there is deliberately no `palm6_gangs:requestMenu` net event. It was
+-- removed 2026-07-28 as an orphan: no client raised it (client/main.lua raises
+-- create/deposit/withdraw/rename/promote/demote/kick/invite/disband/leave/
+-- acceptInvite/declineInvite and nothing else) and no server code raised it
+-- either, so it was a network entry point with no legitimate caller. The menu is
+-- delivered by the Config.Command handler and by the in-handler pushMenu(src)
+-- calls. If a client-side menu keybind is ever added, re-add it as a net event.
 RegisterNetEvent('palm6_gangs:create', function(payload)
     local src = source
     local cid = Bridge.GetCitizenId(src)

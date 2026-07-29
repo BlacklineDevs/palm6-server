@@ -124,8 +124,13 @@ end, false)
 -- that export is reachable (pcall-guarded), else the number is omitted.
 local function openPromoterInfo()
     local stake
-    local ok, v = pcall(function() return exports.palm6_fightclub:GetEntryStake() end)
-    if ok and type(v) == 'number' and v > 0 then stake = v end
+    -- palm6_fightclub is NOT a declared dependency of this resource
+    -- (fxmanifest.lua lists ox_lib, qbx_core and palm6_fc_core only), so this is
+    -- a true soft dep: check the state before indexing the export, not just pcall.
+    if GetResourceState('palm6_fightclub') == 'started' then
+        local ok, v = pcall(function() return exports.palm6_fightclub:GetEntryStake() end)
+        if ok and type(v) == 'number' and v > 0 then stake = v end
+    end
     local anteDesc = stake
         and ('Both fighters ante $%d — winner takes the purse.'):format(stake)
         or  'Both fighters ante the entry stake — winner takes the purse.'

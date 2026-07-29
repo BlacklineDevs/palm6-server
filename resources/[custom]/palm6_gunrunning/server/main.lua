@@ -201,7 +201,14 @@ RegisterNetEvent('evidence:server:CreateCasing', function(_weapon, _clientSerial
     if not sale then return end -- not a black-market weapon, nothing to link
 
     if not Bridge.ResourceStarted('palm6_evidence') then return end
-    local coords = Bridge.GetCoords(src) or _clientCoords
+    -- No client fallback: Bridge.GetCoords returns nil whenever the ped is
+    -- unreadable (mid-spawn, character switch, respawn), a window the shooter
+    -- picks by choosing when to fire the event. Recording _clientCoords there
+    -- would write an attacker-chosen position into a ballistics_match entry the
+    -- MDT shows police as forensics. No trustworthy position = no entry; the
+    -- incidentKey/case is re-created on the next shot anyway.
+    local coords = Bridge.GetCoords(src)
+    if not coords then return end
     -- incidentKey buckets by serial + 5-minute window so one gunfight (many
     -- shots, many CreateCasing events) collapses into ONE case with
     -- multiple ballistics_match entries, instead of a new case per shot.

@@ -106,6 +106,15 @@ CreateThread(function()
 end)
 
 -- ---- commands --------------------------------------------------------------
+-- Editor-open gate, used on its own by the scene-entity commands that must not
+-- act outside the editor but have no reason to care about a carry (/matentdel,
+-- /mapentwipe and /mapentlist place nothing, so the carry hazard described on
+-- placeGate below cannot apply to them).
+local function editGate()
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return false end
+    return true
+end
+
 -- Gate for every USER-initiated placement (/matped, /matveh, the NUI Peds and
 -- Vehicles tabs). The carry loop below does NOT go through here: it fires
 -- ent:place directly, which is how a carry resolves.
@@ -115,7 +124,7 @@ end)
 -- mid-carry would retire the carried one's backup against the wrong row and leave
 -- the carried entity at the new coords instead of where it gets dropped.
 local function placeGate()
-    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then Game.Notify('open the editor first (/mapedit)', 'error'); return false end
+    if not editGate() then return false end
     if carrying then Game.Notify('drop the entity you are carrying first', 'error'); return false end
     return true
 end
@@ -165,6 +174,7 @@ end)
 -- because the editor's shapetest only intersects world+objects, NOT peds or
 -- vehicles — so a raycast could never hit a scene entity.
 RegisterCommand('matentdel', function()
+    if not editGate() then return end
     local x, y, z = Game.CameraAimPoint(40.0)
     if not x then x, y, z = Game.PlayerPos() end
     local best, bestD
@@ -177,10 +187,17 @@ RegisterCommand('matentdel', function()
 end, false)
 
 RegisterCommand('mapentwipe', function(_, args)
+    if not editGate() then return end
     TriggerServerEvent('palm6_mapeditor:ent:wipeMap', args[1] or workMap)
 end, false)
 
-RegisterCommand('mapentlist', function() TriggerServerEvent('palm6_mapeditor:ent:list') end, false)
+-- Deliberately NOT behind editGate(): this is a READ-ONLY listing and it was
+-- usable outside the editor before. Builders use it to check what is placed
+-- without entering edit mode, and the server side is ACE-gated on its own, so
+-- gating here would be a workflow regression rather than a security gain.
+RegisterCommand('mapentlist', function()
+    TriggerServerEvent('palm6_mapeditor:ent:list')
+end, false)
 
 -- Scene-entity outliner + Performance counts. liveEnts already holds the full
 -- streamed set (peds + vehicles), so the /propui "Entities" view is built

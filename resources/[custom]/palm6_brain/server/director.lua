@@ -538,6 +538,10 @@ fireMoneyPatronage = function(action)
     local d = Config.Director or {}
     if not d.MoneyEnabled then return end                     -- defensive re-check
     if action.verb ~= 'orderAt' then return end               -- only the "shop at a venue" verb
+    -- SOFT SIBLING. palm6_business is not in this resource's fxmanifest
+    -- dependencies, so it can legitimately be absent/stopped. Both exports below
+    -- are guarded by this one state check, matching bridge/sv_framework.lua:145.
+    if GetResourceState('palm6_business') ~= 'started' then return end
     local coords = action.target and sceneCoordSv[action.target]
     if not coords then return end
     local mcfg = d.Money or {}
