@@ -46,9 +46,19 @@ Config.Tiers = {
 
 -- Consumers treat a citizen at/above this tier as "priority": louder dispatch,
 -- extra launder scrutiny, etc. Exposed via the GetTier export; this is just the
--- documented threshold, not enforced here. LIVE consumer today:
--- palm6_laundering (Config.HeatScrutiny: the front skims extra off a HOT or
--- WANTED launderer). palm6_dispatch is still planned, not built.
+-- documented threshold, not enforced here.
+--
+-- LIVE consumers today, both reading GetTier through the soft-dep guard:
+--   palm6_laundering  Config.HeatScrutiny: the front skims extra off a HOT or
+--                     WANTED launderer.
+--   palm6_mdt         Config.CallPriority: the DISPATCH consumer this value was
+--                     named for. A 911 call on the MDT's /calls board from a
+--                     citizen at one of these tiers is marked and floated to the
+--                     top. It ships OFF, and there is no palm6_dispatch resource
+--                     to build: /calls already IS the dispatch surface.
+-- Each consumer keeps its OWN copy of which tier strings count as priority
+-- (a separate resource is a separate Lua state and cannot read this file);
+-- this line stays the single documented source of what the threshold MEANS.
 Config.DispatchPriorityTier = 'HOT'
 
 -- ---------------------------------------------------------------------------

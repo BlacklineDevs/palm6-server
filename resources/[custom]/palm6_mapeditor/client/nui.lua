@@ -279,6 +279,14 @@ RegisterNUICallback('liveRevList', function(data, cb)
     if type(map) == 'string' and Live and Live.revList then Live.revList(map) end
     cb('ok')
 end)
+-- Compare two snapshots (or a snapshot against live: to = 0). Stays open; the
+-- server pushes the diff summary back as a 'revdiff' message.
+RegisterNUICallback('liveRevDiff', function(data, cb)
+    local fromId = type(data) == 'table' and tonumber(data.from) or nil
+    local toId = type(data) == 'table' and tonumber(data.to) or 0
+    if fromId and Live and Live.revDiff then Live.revDiff(fromId, toId or 0) end
+    cb('ok')
+end)
 RegisterNUICallback('liveRevRestore', function(data, cb)
     local id = type(data) == 'table' and tonumber(data.id) or nil
     if id and Live and Live.revRestore then Live.revRestore(id) end

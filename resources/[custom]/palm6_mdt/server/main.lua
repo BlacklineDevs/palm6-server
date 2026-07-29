@@ -938,6 +938,104 @@ local function recordCall(text, src, coords, serverRaised)
     insertCall(text, coords, label)
 end
 
+-- ---------------------------------------------------------------------------
+-- Heat-aware dispatch priority (v0.5.0). See Config.CallPriority for the whole
+-- rationale, including why this is derived at READ time and writes nothing.
+--
+-- Everything below is inert with Config.CallPriority.Enabled = false: the only
+-- entry point is callPriorityFlags(), which returns nil on the first line, and
+-- a nil flag set makes cmdCalls emit the exact bytes v0.4.0 emitted.
+-- ---------------------------------------------------------------------------
+
+-- [citizenid] = { tier = string, exp = ts }. Bounded by heatTierCacheCap.
+local heatTierCache = {}
+local heatTierCacheN = 0
+local heatTierCacheCap = 256
+
+-- Current palm6_heat tier for a citizen, or nil when the heat layer cannot
+-- answer. Callers must have confirmed palm6_heat is started first.
+--
+-- GetTier is one indexed single-row read per citizen inside palm6_heat, so the
+-- TTL cache is here to keep a spammed /calls from turning into a burst of
+-- round trips. The cache is cleared wholesale when it reaches its cap rather
+-- than evicted entry by entry: entries are tiny, expire on their own, and a
+-- city never holds enough distinct 911 callers in one retention window for the
+-- difference to matter.
+local function heatTier(cid)
+    local ttl = math.max(tonumber(Config.CallPriority.TierCacheSec) or 0, 0)
+    local t = now()
+    -- ttl 0 means "no cache" on BOTH ends, read as well as write, so the config
+    -- comment stays exactly true even for an operator who changes the value on
+    -- a running server rather than at boot.
+    local hit = ttl > 0 and heatTierCache[cid] or nil
+    if hit and hit.exp > t then return hit.tier end
+
+    local tier
+    -- Soft cross-resource read, house shape: the resource-state check is the
+    -- caller's, the pcall is here. A throwing or half-booted palm6_heat leaves
+    -- tier nil and the call is simply not priority.
+    pcall(function() tier = exports.palm6_heat:GetTier(cid) end)
+    if type(tier) ~= 'string' or tier == '' then return nil end
+
+    if ttl > 0 then
+        if heatTierCacheN >= heatTierCacheCap then
+            heatTierCache, heatTierCacheN = {}, 0
+        end
+        if heatTierCache[cid] == nil then heatTierCacheN = heatTierCacheN + 1 end
+        heatTierCache[cid] = { tier = tier, exp = t + ttl }
+    end
+    return tier
+end
+
+-- The citizen a 911 row is attributed to, or nil.
+--
+-- src_label is the only column that carries one. recordCall above builds it as
+-- ('citizen %s'):format(cid) and may append ' (unverified)', so the citizenid
+-- is the first whitespace-free token after the `citizen ` prefix. If that
+-- recorder format ever changes, this pattern must change with it. Every other
+-- label written to this table (palm6_tips' 'anonymous', palm6_brain's bus
+-- label, the empty label a server-raised alert with no player gets) names no
+-- citizen and correctly yields nil.
+local function callCitizenId(label)
+    if type(label) ~= 'string' then return nil end
+    local cid = label:match('^citizen (%S+)')
+    if cid == nil or cid == '' then return nil end
+    return cid
+end
+
+-- Which of these 911 rows came from a citizen the heat layer rates as priority
+-- RIGHT NOW. Returns a { [callId] = true } set, or nil when the feature is off,
+-- palm6_heat is not started, or no row qualifies. nil is the "behave exactly as
+-- before" answer and is the common case.
+local function callPriorityFlags(rows)
+    local cfg = Config.CallPriority
+    if not (cfg and cfg.Enabled) then return nil end
+    if type(cfg.Tiers) ~= 'table' then return nil end
+    if not Bridge.ResourceStarted('palm6_heat') then return nil end
+
+    local maxLookups = math.max(math.floor(tonumber(cfg.MaxLookups) or 0), 0)
+    local seen, lookups, set = {}, 0, nil
+    for _, c in ipairs(rows) do
+        local cid = callCitizenId(c.src_label)
+        if cid then
+            -- false is a cached miss; nil means not looked up yet. One lookup
+            -- per distinct citizen per invocation, whatever the TTL cache does.
+            local tier = seen[cid]
+            if tier == nil then
+                if lookups >= maxLookups then break end
+                lookups = lookups + 1
+                tier = heatTier(cid) or false
+                seen[cid] = tier
+            end
+            if tier and cfg.Tiers[tier] then
+                set = set or {}
+                set[c.id] = true
+            end
+        end
+    end
+    return set
+end
+
 -- /calls [n] — recent 911 traffic
 local function cmdCalls(src, args)
     if not gate(src, 'calls') then return end
@@ -955,11 +1053,38 @@ local function cmdCalls(src, args)
         Bridge.Reply(src, { 'no calls on the log' })
         return
     end
+
+    -- nil whenever the feature is off or the heat layer is not answering, which
+    -- makes every branch below collapse to the v0.4.0 code path.
+    local priority = callPriorityFlags(rows)
+
+    -- Priority rows float to the top of the same fetched set. Built by
+    -- partitioning rather than table.sort: sort is not stable in Lua, and the
+    -- newest-first order inside each group is the whole value of the listing.
+    local ordered = rows
+    if priority and Config.CallPriority.SortFirst then
+        local hot, rest = {}, {}
+        for _, c in ipairs(rows) do
+            local dst = priority[c.id] and hot or rest
+            dst[#dst + 1] = c
+        end
+        for _, c in ipairs(rest) do hot[#hot + 1] = c end
+        ordered = hot
+    end
+
     local lines = {}
-    for _, c in ipairs(rows) do
-        lines[#lines + 1] = ('#%d [%dm ago] %s%s'):format(
+    for _, c in ipairs(ordered) do
+        -- Format string untouched from v0.4.0. The marker is prepended after
+        -- the fact so that with no priority rows the emitted bytes are
+        -- identical, not merely equivalent.
+        local line = ('#%d [%dm ago] %s%s'):format(
             c.id, tonumber(c.age_m) or 0, c.text,
             c.src_label ~= '' and (' — ' .. c.src_label) or '')
+        if priority and priority[c.id] then
+            local mark = tostring(Config.CallPriority.Marker or '')
+            if mark ~= '' then line = mark .. ' ' .. line end
+        end
+        lines[#lines + 1] = line
     end
     Bridge.Reply(src, lines)
 end
@@ -1160,11 +1285,20 @@ AddEventHandler('onResourceStart', function(resource)
         ensureSchema()
         if Config.Calls.Enabled then pruneCalls() end
 
-        print(('[palm6_mdt] desk online - %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s), %d call(s)/24h; contract %s, case system %s, call log %s, charge catalogue %s, schema %s')
+        -- `call priority` is a BOOT-TIME snapshot of the heat soft-dep, not a
+        -- promise about later: palm6_heat can stop or restart after this line
+        -- prints, and /calls re-checks GetResourceState on every invocation.
+        -- It is here so an operator who flips the flag can see at a glance
+        -- whether the resource it reads was even up when the desk came online.
+        print(('[palm6_mdt] desk online - %d active BOLO(s), %d active warrant(s), %d report(s), %d booking(s), %d call(s)/24h; contract %s, case system %s, call log %s, call priority %s, charge catalogue %s, schema %s')
             :format(activeBoloCount(), activeWarrantCount(), reportCount(), bookingCount(), calls24h(),
                 Bridge.GetMDTContract() and 'qbx_police_overrides' or 'built-in defaults',
                 Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline',
                 Config.Calls.Enabled and 'ON' or 'off',
+                Config.CallPriority.Enabled
+                    and ('ON (palm6_heat %s at boot)'):format(
+                        Bridge.ResourceStarted('palm6_heat') and 'started' or 'NOT started')
+                    or 'off',
                 Config.Charges.Enabled and ('ON (%d codes)'):format(#Config.Charges.Catalogue) or 'off',
                 schemaOk and 'OK' or '^1MISSING^0'))
 

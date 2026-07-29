@@ -14,36 +14,36 @@ local zones   = {}  -- [id] = { label, coords, owner_gang, captured_by, captured
 local pending = {}  -- [src] = { zoneId, gangName, holdUntil }
 
 -- ---------------------------------------------------------------------------
--- TURF CONFLICT state (v2). ALL of it is IN-MEMORY and ALL of it is dead while
--- Config.Conflict.Enabled is false: nothing below is written unless a contest
--- opens, and a contest cannot open on the disabled path.
+-- TURF CONFLICT state (v2). ALL of it is dead while Config.Conflict.Enabled is
+-- false: nothing below is written unless a contest opens, and a contest cannot
+-- open on the disabled path.
 --
 -- PERSISTENCE DECISION (Config.Conflict documents the player-facing side):
--- contests are deliberately NOT persisted. On a restart every open contest
--- simply ceases to exist and the DEFENDER keeps the zone, which is the
+-- CONTESTS themselves are deliberately NOT persisted. On a restart every open
+-- contest simply ceases to exist and the DEFENDER keeps the zone, which is the
 -- fail-safe direction. There is no "contested" flag in any table, so there is
--- no way for a restart to leave a zone permanently locked, and no new table or
--- sql/NNNN file is needed. The anti-ping-pong flip cooldown persists for free:
--- it is derived from palm6_turf.captured_at, which every flip already writes.
+-- no way for a restart to leave a zone permanently locked.
 --
--- The other three brakes (gangOpenAt / gangRepelAt / gangNotifyAt) are NOT
--- persisted and a restart DOES clear them. That is a real gap, not a claim of
--- restart-proofing: nothing below pretends otherwise. Config.Conflict.
--- RestartGraceSec is what bounds it — for that long after the engine arms no
--- contest can open at all, so a scheduled reboot buys a losing gang a freeze
--- rather than an instant reopen, and the reconnect window (when the player list
--- is still filling and a defender headcount would read as "nobody online") is
--- covered by the same gate. Persisting the three properly needs a table this
--- resource does not own yet, so it is deliberately deferred.
+-- The BRAKES are a different question and all four now survive a restart:
+--   * the anti-ping-pong flip cooldown persists for free, derived from
+--     palm6_turf.captured_at which every flip already writes;
+--   * gangOpenAt / gangRepelAt / gangNotifyAt are mirrored into
+--     palm6_turf_brakes (sql/0074_turf_brakes.sql) and reloaded at boot, so a
+--     reboot no longer cuts a gang's remaining cooldown short.
+-- The in-memory tables below stay the read path: nothing on a gate, a tick or a
+-- notify ever touches the DB. The DB is written once per brake CHANGE, on its
+-- own thread, and read once at boot.
 -- ---------------------------------------------------------------------------
 local contests     = {}  -- [zoneId] = live contest (see openContest)
 local gangOpenAt   = {}  -- [attackerGangId]   = ts that gang last OPENED a contest
 local gangNotifyAt = {}  -- [defenderGangName] = ts that gang was last notified
 local gangRepelAt  = {}  -- [attackerGangId]   = ts that gang was DRIVEN OFF a zone
 
--- os.time() at which the contest engine armed. Every brake except the flip
--- cooldown is in-memory, so a restart clears it; RestartGraceSec turns that
--- reset into a short freeze instead of a free reopen. 0 while the flag is off.
+-- os.time() at which the contest engine armed. Starts RestartGraceSec, which is
+-- no longer the only thing standing between a reboot and a free reset (the three
+-- brakes above are reloaded from palm6_turf_brakes first); it now covers the
+-- reconnect window, when the player list is still filling and a defender
+-- headcount would wrongly read as "nobody online". 0 while the flag is off.
 local conflictBootAt = 0
 
 -- Cached {gangName -> {srcs}} snapshot of everyone online. Rebuilt at most once
@@ -53,6 +53,224 @@ local presenceCache = { at = 0, byGang = nil }
 
 local function conflictOn()
     return Config.Conflict ~= nil and Config.Conflict.Enabled == true
+end
+
+-- ===========================================================================
+-- BRAKE PERSISTENCE (palm6_turf_brakes). Everything in this section is reached
+-- ONLY from a conflictOn() branch, so with the flag off the table is never
+-- created, never read and never written, and this whole section is dead code.
+--
+-- WHY A SECOND TABLE. The three per-gang brakes are not properties of a zone,
+-- so palm6_turf (one row per zone) has nowhere to put them: a gang can be on
+-- open cooldown while holding no turf at all, and the notify budget belongs to
+-- the gang being pinged, not to any one of its zones. This resource owns its
+-- own schema, so it owns one more table rather than borrowing a sibling's.
+--
+-- WHAT IT COSTS. One write per brake CHANGE, which is one per contest opened,
+-- one per contest lost with a defender present, and one per defender ping. Those
+-- are already rate-limited by the very cooldowns being stored, so the write rate
+-- is bounded by the feature's own design and not by player input. There is no
+-- timer flush and no write on any read path.
+-- ===========================================================================
+local brakesReady = false   -- true once palm6_turf_brakes is known to exist
+
+-- Which brake a row belongs to. `open`/`repel` are keyed on the IMMUTABLE
+-- palm6_gangs.id; `notify` is keyed on the gang NAME, because that is what turf
+-- ownership (and therefore the defender side) is keyed on.
+local BRAKE_SCOPES = { 'open', 'repel', 'notify' }
+
+-- The window each scope is measured against. These MUST stay identical to the
+-- fallbacks used by the in-memory sweep in startContestTicker, or the DB sweep
+-- and the RAM sweep would disagree about when a row dies.
+local function brakeWindow(scope)
+    local c = Config.Conflict or {}
+    if scope == 'open'   then return tonumber(c.OpenCooldownSec)   or 600 end
+    if scope == 'repel'  then return tonumber(c.RepelCooldownSec)  or 600 end
+    if scope == 'notify' then return tonumber(c.NotifyCooldownSec) or 300 end
+    return nil   -- unknown scope: never loaded, and never swept either
+end
+
+-- Mirror one brake stamp to the DB. Fire-and-forget BY DESIGN.
+--
+-- The caller must never wait on this. closeContest() stamps the repel brake and
+-- closeContest() is called from inside the contest ticker, so a synchronous
+-- MySQL.*.await here would yield the ticker thread mid-pass and stretch every
+-- live contest's clock by the round-trip. CreateThread hands the write to a
+-- fresh coroutine and returns immediately, so the ticker never blocks on the DB.
+-- pcall'd on top of that: a dead DB must cost the brakes their persistence and
+-- nothing else, exactly like every other write in this resource.
+--
+-- GREATEST(set_at, ?) rather than a plain overwrite, because two deferred writes
+-- for the same gang can land out of order. Monotonic means a late-arriving older
+-- stamp can only ever be ignored, never SHORTEN a brake that is already stored.
+local function persistBrake(scope, key, ts)
+    if not brakesReady then return end
+    if key == nil or ts == nil then return end
+    local gangKey = tostring(key)
+    if gangKey == '' then return end
+    -- Clamp a future stamp DOWN to now before it is ever stored. Without this,
+    -- a forward clock jump (NTP correcting a bad RTC, or a manual date during
+    -- maintenance) writes set_at = T_future, and then GREATEST() below silently
+    -- discards every correct stamp that follows, the sweeper's `set_at < cutoff`
+    -- never matches a future value, and loadBrakes clamps it to now on EVERY
+    -- boot, so the gang eats a fresh unearned cooldown forever. Before the table
+    -- existed a restart cleared that; persistence turned the restart into the
+    -- thing that re-arms it. Clamping on write is what keeps the row reachable
+    -- by the sweep at all.
+    local nowTs = os.time()
+    if ts > nowTs then ts = nowTs end
+    CreateThread(function()
+        pcall(function()
+            MySQL.query.await(
+                'INSERT INTO palm6_turf_brakes (scope, gang_key, set_at) VALUES (?, ?, ?) '
+                .. 'ON DUPLICATE KEY UPDATE set_at = GREATEST(set_at, ?)',
+                { scope, gangKey, ts, ts })
+        end)
+    end)
+end
+
+-- Boot DDL for the brakes table. Kept OUT of ensureSchema() on purpose: that
+-- function runs on every boot including today's, and the safest possible change
+-- to a live path is no change at all. This one is called only from the
+-- conflictOn() branch of the boot handler, so a box with the feature off never
+-- creates the table. palm6_turf itself still answers for SchemaReady; a missing
+-- brakes table is reported on its own line and only disables persistence.
+--
+-- DDL copied VERBATIM from sql/0074_turf_brakes.sql.
+local function ensureBrakeSchema()
+    local ok, err = pcall(function()
+        MySQL.query.await([[
+CREATE TABLE IF NOT EXISTS `palm6_turf_brakes` (
+    scope VARCHAR(16) NOT NULL,
+    gang_key VARCHAR(64) NOT NULL,
+    set_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, gang_key),
+    KEY idx_palm6_turf_brakes_scope_set_at (scope, set_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]])
+    end)
+    brakesReady = ok
+    if not ok then
+        print(('^1[palm6_turf] brake table init FAILED -> %s^0'):format(tostring(err)))
+        print('^1[palm6_turf] contest cooldowns will NOT survive a restart on this box.^0')
+    end
+    return brakesReady
+end
+
+-- Reload the three brakes. Runs ONCE, at boot, before the ticker starts.
+--
+-- A row is only honoured while it is still inside its own window, so a stale
+-- row can never resurrect a dead cooldown; expired rows are simply not loaded
+-- and the sweeper deletes them. A set_at in the FUTURE is clamped to now rather
+-- than trusted: a box whose clock jumped must not be able to mint a brake that
+-- outlives its window.
+local function loadBrakes()
+    if not brakesReady then return end
+    local ok, rows = pcall(function()
+        return MySQL.query.await('SELECT scope, gang_key, set_at FROM palm6_turf_brakes') or {}
+    end)
+    if not ok then return end
+
+    local now, live, stale = os.time(), 0, 0
+    for _, r in ipairs(rows) do
+        local window = brakeWindow(r.scope)
+        local ts = tonumber(r.set_at) or 0
+        if ts > now then ts = now end
+        if window and ts > 0 and (ts + window) >= now then
+            if r.scope == 'notify' then
+                -- Keyed on the gang NAME. A gang renamed while the server was
+                -- down orphans its row, which then just expires: the effect is
+                -- one un-throttled ping, the same as today's in-memory table
+                -- (RenameOwner does not rewrite gangNotifyAt either).
+                local k = r.gang_key
+                if k and k ~= '' then
+                    gangNotifyAt[k] = math.max(gangNotifyAt[k] or 0, ts)
+                    live = live + 1
+                end
+            else
+                -- Keyed on palm6_gangs.id, which is a NUMBER in memory. The
+                -- column is text, so it must be converted back or the reloaded
+                -- key would never match a live gang.id lookup.
+                local gid = tonumber(r.gang_key)
+                if gid then
+                    local t = (r.scope == 'open') and gangOpenAt or gangRepelAt
+                    t[gid] = math.max(t[gid] or 0, ts)
+                    live = live + 1
+                end
+            end
+        else
+            stale = stale + 1
+        end
+    end
+    print(('[palm6_turf] restored %d live contest brake(s), %d expired'):format(live, stale))
+end
+
+-- PRUNE. An expired row can no longer gate anything, so it is dead weight in a
+-- table that would otherwise grow one row per gang per brake forever.
+--
+-- The delete CANNOT touch a live brake. Its predicate is `set_at + window < now`
+-- with the window read from the same Config value the gate reads, which is the
+-- exact expression the in-memory sweep in startContestTicker already uses: a row
+-- survives for precisely as long as it can still refuse something. It is written
+-- as the algebraically identical `set_at < now - window` so the cutoff is a
+-- plain constant and the set_at index can be used instead of scanning. Three
+-- consequences worth stating, because "sweep" is where data loss usually hides:
+--   * it is per-scope, so a row is only ever measured against ITS OWN window and
+--     an unknown scope (brakeWindow -> nil) is skipped entirely rather than
+--     swept with a wrong one;
+--   * raising a cooldown in Config immediately extends the rows already stored,
+--     because the window is applied at sweep time and not frozen at write time;
+--   * a future-dated set_at fails the predicate and is kept, so a clock skew
+--     cannot delete a brake early.
+-- Runs on its own thread at a low frequency: never in the ticker, never on a
+-- gate. Every statement is pcall'd, so a DB hiccup skips a sweep and nothing
+-- else - the table is disposable, only ever growing until the next pass.
+local function startBrakeSweeper()
+    CreateThread(function()
+        local every = math.max(60, tonumber(Config.Conflict.BrakeSweepSec) or 900)
+        while true do
+            for _, scope in ipairs(BRAKE_SCOPES) do
+                local window = brakeWindow(scope)
+                if window and window >= 0 then
+                    local nowTs = os.time()
+                    local cutoff = nowTs - window
+                    -- The OR arm collects rows stamped in the FUTURE. persistBrake
+                    -- now clamps on write so this should never fire, but a row
+                    -- written before that clamp existed, or by hand, would
+                    -- otherwise be immortal: it fails `set_at < cutoff` forever
+                    -- and re-arms the gang on every boot. The bound is a full
+                    -- window past now, so a few seconds of ordinary clock skew
+                    -- still cannot delete a live brake early.
+                    pcall(function()
+                        MySQL.query.await(
+                            'DELETE FROM palm6_turf_brakes WHERE scope = ? AND (set_at < ? OR set_at > ?)',
+                            { scope, cutoff, nowTs + window })
+                    end)
+                end
+            end
+            -- Rows whose scope is not one we know about (a hand-written row, or
+            -- a scope renamed in a later version) match no branch above and
+            -- would live forever, so "prune" would not actually cover the table.
+            -- Deleting by exclusion keeps the sweep total. Guarded on a non-empty
+            -- scope list so a future refactor emptying BRAKE_SCOPES cannot turn
+            -- this into a full table wipe.
+            if #BRAKE_SCOPES > 0 then
+                local placeholders = {}
+                local params = {}
+                for _, scope in ipairs(BRAKE_SCOPES) do
+                    placeholders[#placeholders + 1] = '?'
+                    params[#params + 1] = scope
+                end
+                pcall(function()
+                    MySQL.query.await(
+                        'DELETE FROM palm6_turf_brakes WHERE scope NOT IN ('
+                            .. table.concat(placeholders, ', ') .. ')',
+                        params)
+                end)
+            end
+            Wait(every * 1000)
+        end
+    end)
 end
 
 local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
@@ -238,9 +456,11 @@ end
 -- Why this zone cannot be contested right now, or nil if it can. Ordered
 -- cheapest-first: nothing here touches the DB or walks the player list.
 local function contestBlocked(z, gang)
-    -- Post-restart grace, first because it is the cheapest and the most
-    -- fundamental: three of the four brakes live only in memory, so until this
-    -- expires a reboot would otherwise be a free reset of all of them.
+    -- Post-restart grace, first because it is the cheapest gate here. It is no
+    -- longer what makes the other brakes restart-proof (they are reloaded from
+    -- palm6_turf_brakes at boot); it covers the reconnect window, when the
+    -- player list is still filling and the defender headcount below would
+    -- wrongly read as "nobody online".
     local graceLeft = (Config.Conflict.RestartGraceSec or 0) - (os.time() - conflictBootAt)
     if graceLeft > 0 then
         return ('Turf conflict is still settling after a server restart. %d min to go.')
@@ -369,6 +589,10 @@ local function notifyDefender(gangName, title, msg, kind)
         return false
     end
     gangNotifyAt[gangName] = now
+    -- Deferred, pcall'd DB mirror. Stamped BEFORE the notify loop, which yields
+    -- once per online member, so the throttle is banked even if this handler is
+    -- torn down mid-broadcast. persistBrake never yields the caller.
+    persistBrake('notify', gangName, now)
     notifyGang(gangName, title, msg, kind)
     return true
 end
@@ -492,7 +716,12 @@ local function closeContest(zoneId, outcome)
         -- that got pushed off waits before it can start anything again, and no
         -- third party pays for that.
         if ct.defenderSeen and ct.attackerGangId then
-            gangRepelAt[ct.attackerGangId] = os.time()
+            local repelAt = os.time()
+            gangRepelAt[ct.attackerGangId] = repelAt
+            -- This runs ON THE TICKER THREAD (closeContest is called from the
+            -- contest loop), which is exactly why persistBrake defers the write
+            -- to its own coroutine instead of awaiting here.
+            persistBrake('repel', ct.attackerGangId, repelAt)
         end
         notifyDefender(ct.defenderGang, 'Turf', ('You held %s.'):format(label), 'success')
         notifyGang(ct.attackerGang, 'Turf', ('You failed to take %s.'):format(label), 'error')
@@ -533,6 +762,10 @@ local function startContestTicker()
 
             -- Bound the anti-grief ledgers: an entry older than its own window
             -- can no longer gate anything (same sweep as palm6_drugs' heatLast).
+            -- Memory only, no DB work on this thread; the matching rows in
+            -- palm6_turf_brakes are deleted by startBrakeSweeper on its own
+            -- thread, using `set_at < now - window`, which is this same
+            -- `ts + window < now` test rearranged.
             for gid, ts in pairs(gangOpenAt) do
                 if ts + (Config.Conflict.OpenCooldownSec or 600) < now then gangOpenAt[gid] = nil end
             end
@@ -699,6 +932,10 @@ local function openContest(src, z, gang, cid)
         defenderSeen   = false,      -- latched once a defender is seen in radius
     }
     gangOpenAt[gang.id] = now
+    -- Mirrored to palm6_turf_brakes so a restart cannot hand this gang a free
+    -- early reopen. Deferred and pcall'd: it must not delay the notify below,
+    -- and it must not be able to fail the contest that was just installed.
+    persistBrake('open', gang.id, now)
 
     local mins = math.max(1, math.ceil((Config.Conflict.ContestSeconds or 300) / 60))
     local hold = math.max(1, math.ceil((Config.Conflict.HoldSeconds or 120) / 60))
@@ -757,12 +994,21 @@ AddEventHandler('onResourceStart', function(resource)
                     if z then z.captured_ts = tonumber(r.captured_ts) or 0 end
                 end
             end)
+            -- Per-gang brakes. The table is created HERE and not in
+            -- ensureSchema(), so a box running with the feature off never grows
+            -- it. Order matters: the brakes must be back in memory before the
+            -- ticker can close a contest and before any gate can be evaluated,
+            -- and the sweeper is started last so it can never race the load.
+            ensureBrakeSchema()
+            loadBrakes()
+            if brakesReady then startBrakeSweeper() end
             conflictBootAt = os.time()   -- starts RestartGraceSec (see contestBlocked)
             startContestTicker()
-            print(('[palm6_turf] conflict ARMED - hold %ds inside %.0fm, window %ds, flip cooldown %ds, grace %ds')
+            print(('[palm6_turf] conflict ARMED - hold %ds inside %.0fm, window %ds, flip cooldown %ds, grace %ds, brakes %s')
                 :format(Config.Conflict.HoldSeconds or 0, Config.Conflict.Radius or 0,
                         Config.Conflict.ContestSeconds or 0, Config.Conflict.FlipCooldownSec or 0,
-                        Config.Conflict.RestartGraceSec or 0))
+                        Config.Conflict.RestartGraceSec or 0,
+                        brakesReady and 'persisted' or 'MEMORY ONLY'))
         end
         bootReady = true
         print(('[palm6_turf] loaded %d turf zone(s)'):format(#Config.Zones))

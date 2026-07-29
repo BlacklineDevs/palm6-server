@@ -140,14 +140,25 @@ Config.Conflict = {
     OpenCooldownSec   = 600,
     NotifyCooldownSec = 300,
 
-    -- Contests are in-memory only, so a restart clears OpenCooldownSec,
-    -- RepelCooldownSec and NotifyCooldownSec (FlipCooldownSec survives, it comes
-    -- off palm6_turf.captured_at). This is the honest patch for that: for this
-    -- long after the engine arms, no contest can open at all, so a scheduled
-    -- reboot buys a gang that just lost one a freeze rather than a free instant
-    -- reopen. It also covers the reconnect window, when the player list is still
-    -- filling and a defender headcount would wrongly read as "nobody online".
+    -- For this long after the engine arms, no contest can open at all.
+    --
+    -- This is NOT what keeps the cooldowns above honest across a restart any
+    -- more: OpenCooldownSec, RepelCooldownSec and NotifyCooldownSec are now
+    -- stamped into palm6_turf_brakes (sql/0074_turf_brakes.sql) and reloaded at
+    -- boot with their remaining time intact, and FlipCooldownSec has always come
+    -- off palm6_turf.captured_at. What this grace still covers is the RECONNECT
+    -- window: for the first minutes after a reboot the player list is still
+    -- filling, so a defender headcount would wrongly read as "nobody online" and
+    -- RequireDefenderOnline would wave through attacks it should refuse. It also
+    -- remains the fallback if the brakes table cannot be created on a given box,
+    -- which the boot banner says out loud ("brakes MEMORY ONLY").
     RestartGraceSec = 300,
+
+    -- How often expired rows are deleted from palm6_turf_brakes. Pure
+    -- housekeeping on its own thread, never on the contest ticker and never on a
+    -- gate: a row that outlives a sweep still cannot gate anything, because
+    -- every gate re-checks the window itself. Floored at 60s in code.
+    BrakeSweepSec = 900,
 
     -- The 4am problem, stated precisely. A rival zone cannot be OPENED unless
     -- the owning gang has this many members CONNECTED TO THE SERVER. That is

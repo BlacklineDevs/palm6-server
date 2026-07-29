@@ -1118,10 +1118,15 @@ function selectLive(keepScroll) {
 var liveRevsTarget = '';   // the map whose snapshots we're viewing
 var liveRevs = [];         // [{id, rev, label, props, lights, created_by, ts}]
 var revConfirmId = null;   // snapshot id armed for a two-click restore confirm
+var revDiffFrom = null;    // snapshot id armed as the diff BASE (null = not comparing)
+var revDiff = null;        // the last diff summary the server sent
 
 function onRevs(map, list) {
     liveRevs = Array.isArray(list) ? list : [];
     if (typeof map === 'string' && map) liveRevsTarget = map;
+    // Drop an armed base that no longer exists (deleted, or a different map's
+    // list arrived), so the row buttons can't offer a comparison against nothing.
+    if (revDiffFrom !== null && !liveRevs.some(function (r) { return r.id === revDiffFrom; })) revDiffFrom = null;
     if (view.type === 'revs') selectRevs();
 }
 
@@ -1144,6 +1149,29 @@ function makeRevRow(r) {
     var co = document.createElement('div'); co.className = 'scene-coords';
     co.textContent = (r.props || 0) + ' props · ' + (r.lights || 0) + ' lights · ' + revRelTime(r.ts) + (r.created_by ? ' · ' + r.created_by : '');
     main.appendChild(nm); main.appendChild(co);
+    // Diff picker: first click arms this snapshot as the base, the next click on
+    // ANY other row (or "Compare to live" in the toolbar) runs the comparison.
+    // Two clicks, no extra screen — the point is to see what a Restore would do
+    // before the button next to it is pressed.
+    var diff = document.createElement('button');
+    diff.className = 'scene-batch-clear'; diff.type = 'button';
+    if (revDiffFrom === null) {
+        diff.textContent = 'Diff';
+        diff.title = 'Compare this snapshot with another one, or with the live map';
+        diff.addEventListener('click', function (ev) { ev.stopPropagation(); revDiffFrom = r.id; selectRevs(); });
+    } else if (revDiffFrom === r.id) {
+        diff.textContent = 'Base';
+        diff.classList.add('is-base');
+        diff.title = 'This snapshot is the comparison base — click to cancel';
+        diff.addEventListener('click', function (ev) { ev.stopPropagation(); revDiffFrom = null; selectRevs(); });
+    } else {
+        diff.textContent = 'Compare';
+        diff.title = 'Compare the base snapshot against this one';
+        diff.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            post('liveRevDiff', { from: revDiffFrom, to: r.id });
+        });
+    }
     var armed = revConfirmId === r.id;
     var restore = document.createElement('button');
     restore.className = armed ? 'scene-batch-del' : 'scene-batch-save'; restore.type = 'button';
@@ -1157,7 +1185,7 @@ function makeRevRow(r) {
     var del = document.createElement('button'); del.className = 'scene-del'; del.title = 'Delete snapshot';
     del.setAttribute('aria-label', 'Delete snapshot'); del.innerHTML = ICON_TRASH;
     del.addEventListener('click', function (ev) { ev.stopPropagation(); post('liveRevDelete', { id: r.id }); });
-    row.appendChild(ic); row.appendChild(main); row.appendChild(restore); row.appendChild(del);
+    row.appendChild(ic); row.appendChild(main); row.appendChild(diff); row.appendChild(restore); row.appendChild(del);
     return row;
 }
 
@@ -1178,6 +1206,18 @@ function selectRevs() {
     left.appendChild(back); left.appendChild(lab);
     bar.appendChild(left);
     var actions = document.createElement('div'); actions.className = 'scene-actions';
+    // While a base is armed, the most useful comparison is against the CURRENT
+    // map ("what would restoring this throw away?"), so it gets its own button.
+    if (revDiffFrom !== null) {
+        var toLive = document.createElement('button'); toLive.className = 'scene-batch-save'; toLive.type = 'button';
+        toLive.textContent = 'Compare to live';
+        toLive.title = 'Compare the base snapshot against the live map as it is right now';
+        toLive.addEventListener('click', function () { post('liveRevDiff', { from: revDiffFrom, to: 0 }); });
+        var cancelDiff = document.createElement('button'); cancelDiff.className = 'scene-batch-clear'; cancelDiff.type = 'button';
+        cancelDiff.textContent = 'Cancel compare';
+        cancelDiff.addEventListener('click', function () { revDiffFrom = null; selectRevs(); });
+        actions.appendChild(cancelDiff); actions.appendChild(toLive);
+    }
     var snap = document.createElement('button'); snap.className = 'scene-batch-save'; snap.type = 'button';
     snap.textContent = 'Snapshot now';
     snap.title = 'Save the current state of “' + liveRevsTarget + '” as a new snapshot';
@@ -1185,6 +1225,13 @@ function selectRevs() {
     actions.appendChild(snap);
     bar.appendChild(actions);
     container.appendChild(bar);
+    if (revDiffFrom !== null) {
+        var hint = document.createElement('div'); hint.className = 'perf-stats';
+        var baseRow = liveRevs.filter(function (r) { return r.id === revDiffFrom; })[0];
+        hint.textContent = 'Comparing from #' + (baseRow ? baseRow.rev : '?')
+            + ' — pick another snapshot with Compare, or compare it to the live map.';
+        container.appendChild(hint);
+    }
 
     if (!liveRevs.length) {
         container.appendChild(emptyState('No snapshots yet',
@@ -1196,6 +1243,170 @@ function selectRevs() {
     }
     el.grid.appendChild(container);
     el.ctx.textContent = liveRevs.length + (liveRevs.length === 1 ? ' snapshot · ' : ' snapshots · ') + liveRevsTarget;
+}
+
+// ---- snapshot diff -------------------------------------------------------
+// What actually CHANGED between two snapshots (or a snapshot and the live map).
+// Every number here is computed server-side in shared/diff.lua from the snapshot
+// blobs and arrives already grouped and capped; this file only frames it.
+//
+// DIRECTION MATTERS and is the whole point of the screen. The diff runs
+// from = the snapshot you picked, to = the other side. So when the target is the
+// LIVE map, "added" means "exists live but not in the snapshot", i.e. exactly the
+// work a Restore would DESTROY, and "removed" means "in the snapshot but gone
+// live", i.e. what a Restore would BRING BACK. The two sections are labelled in
+// those terms rather than as raw added/removed, because the raw words read
+// backwards next to a Restore button.
+function onRevDiff(d) {
+    revDiff = (d && typeof d === 'object') ? d : null;
+    if (revDiff) selectRevDiff();
+}
+
+// Lua's json.encode turns an EMPTY list into {} (an object), not [], so every
+// list off the wire has to be normalised before it is iterated.
+function diffArr(v) { return Array.isArray(v) ? v : []; }
+function diffNum(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+function diffGroupRow(g, tone) {
+    var row = document.createElement('div'); row.className = 'scene-row diff-row is-' + tone;
+    var n = document.createElement('span'); n.className = 'diff-n'; n.textContent = diffNum(g.n);
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = prettify(g.model || '');
+    var co = document.createElement('div'); co.className = 'scene-coords'; co.textContent = g.model || '';
+    main.appendChild(nm); main.appendChild(co);
+    row.appendChild(n); row.appendChild(main);
+    return row;
+}
+
+function diffMovedRow(m) {
+    var row = document.createElement('div'); row.className = 'scene-row diff-row is-moved';
+    var n = document.createElement('span'); n.className = 'diff-n';
+    n.textContent = diffNum(m.dist).toFixed(1) + 'm';
+    var main = document.createElement('div'); main.className = 'scene-main';
+    var nm = document.createElement('div'); nm.className = 'scene-name'; nm.textContent = prettify(m.model || '');
+    var co = document.createElement('div'); co.className = 'scene-coords';
+    var bits = [m.model || ''];
+    if (diffNum(m.rot) >= 0.5) bits.push(Math.round(diffNum(m.rot)) + '° turned');
+    bits.push(diffNum(m.x).toFixed(1) + ', ' + diffNum(m.y).toFixed(1) + ', ' + diffNum(m.z).toFixed(1));
+    if (m.byId) bits.push('same row id');
+    co.textContent = bits.join('  ·  ');
+    main.appendChild(nm); main.appendChild(co);
+    row.appendChild(n); row.appendChild(main);
+    return row;
+}
+
+function diffSection(container, title, groups, more, tone, emptyText) {
+    var h = document.createElement('div'); h.className = 'scene-section'; h.textContent = title;
+    container.appendChild(h);
+    if (!groups.length) {
+        var none = document.createElement('div'); none.className = 'perf-stats'; none.textContent = emptyText;
+        container.appendChild(none);
+        return;
+    }
+    var list = document.createElement('div'); list.className = 'scene-list';
+    groups.forEach(function (g) { list.appendChild(tone === 'moved' ? diffMovedRow(g) : diffGroupRow(g, tone)); });
+    container.appendChild(list);
+    if (more > 0) {
+        var m = document.createElement('div'); m.className = 'perf-stats';
+        m.textContent = '+ ' + more + ' more (showing the largest groups)';
+        container.appendChild(m);
+    }
+}
+
+function selectRevDiff() {
+    view = { type: 'revdiff' };
+    renderCats();
+    if (thumbObserver) thumbObserver.disconnect();
+    el.grid.textContent = '';
+    imgOk = 0; imgFail = 0; updateThumbStat();
+
+    var d = revDiff || {};
+    var c = d.counts || {};
+    var added = diffNum(c.added), removed = diffNum(c.removed), moved = diffNum(c.moved);
+    var unchanged = diffNum(c.unchanged), rotated = diffNum(c.rotated);
+    var toLive = !d.toId;   // toId 0/absent = compared against the live map
+    var fromName = d.fromName || '#?';
+    var toName = d.toName || 'live';
+
+    var container = document.createElement('div'); container.className = 'perf-view';
+
+    var bar = document.createElement('div'); bar.className = 'scene-toolbar';
+    var left = document.createElement('div'); left.className = 'scene-selall';
+    var back = document.createElement('button'); back.className = 'scene-batch-clear'; back.type = 'button';
+    back.textContent = '← Snapshots';
+    back.addEventListener('click', function () { selectRevs(); });
+    var lab = document.createElement('span');
+    lab.textContent = 'Diff · ' + fromName + ' → ' + toName + (d.map ? '  ·  ' + d.map : '');
+    left.appendChild(back); left.appendChild(lab);
+    bar.appendChild(left);
+    container.appendChild(bar);
+
+    // Headline. "Nothing changed" is a real and useful answer, so it gets said
+    // plainly instead of rendering three empty sections.
+    var changed = added + removed + moved;
+    var lvl = changed === 0 ? 'ok' : ((toLive && added > 0) ? 'crit' : 'warn');
+    var health = document.createElement('div'); health.className = 'perf-health is-' + lvl;
+    var hdot = document.createElement('span'); hdot.className = 'perf-health-dot';
+    var hlab = document.createElement('span');
+    if (changed === 0) {
+        hlab.textContent = 'Identical — ' + plural(unchanged, 'prop', 'props') + ' unchanged.';
+    } else if (toLive) {
+        hlab.textContent = 'Restoring ' + fromName + ' would delete ' + plural(added, 'prop', 'props')
+            + ', bring back ' + plural(removed, 'prop', 'props') + ', and move ' + plural(moved, 'prop', 'props') + '.';
+    } else {
+        hlab.textContent = toName + ' has ' + plural(added, 'prop', 'props') + ' ' + fromName + ' does not, is missing '
+            + plural(removed, 'prop', 'props') + ', and ' + plural(moved, 'prop', 'props') + ' moved.';
+    }
+    health.appendChild(hdot); health.appendChild(hlab);
+    container.appendChild(health);
+
+    var totals = document.createElement('div'); totals.className = 'perf-stats';
+    totals.textContent = fromName + ': ' + diffNum(c.aTotal) + ' props  ·  ' + toName + ': ' + diffNum(c.bTotal)
+        + ' props  ·  ' + unchanged + ' unchanged' + (rotated > 0 ? '  ·  ' + rotated + ' turned in place' : '');
+    container.appendChild(totals);
+
+    diffSection(container,
+        toLive ? ('Deleted by a restore — added since ' + fromName) : ('Only in ' + toName),
+        diffArr(d.addedGroups), diffNum(d.addedMore), 'added',
+        toLive ? 'Nothing has been added since this snapshot.' : 'Nothing.');
+    diffSection(container,
+        toLive ? ('Brought back by a restore — deleted since ' + fromName) : ('Only in ' + fromName),
+        diffArr(d.removedGroups), diffNum(d.removedMore), 'removed',
+        toLive ? 'Nothing has been deleted since this snapshot.' : 'Nothing.');
+    diffSection(container, toLive ? 'Moved back by a restore' : 'Moved',
+        diffArr(d.movedTop), diffNum(d.movedMore), 'moved', 'Nothing moved.');
+
+    // Lights are matched by position only, so they get their own one-liner rather
+    // than pretending to the same fidelity as the prop sections.
+    var lt = d.lights || {};
+    var lrow = document.createElement('div'); lrow.className = 'perf-stats';
+    lrow.textContent = 'Lights: ' + diffNum(lt.added) + ' added · ' + diffNum(lt.removed) + ' removed · '
+        + diffNum(lt.changed) + ' retuned · ' + diffNum(lt.unchanged) + ' unchanged'
+        + '   (matched by position; a moved light reads as one added + one removed)';
+    container.appendChild(lrow);
+
+    // How the match was made, in the builder's words. This is not decoration: a
+    // purely positional diff can pair the wrong two identical props, and someone
+    // about to press Restore deserves to know which kind of answer they have.
+    var mt = d.match || {};
+    var note = document.createElement('div'); note.className = 'diff-note';
+    var noteBits = [];
+    noteBits.push('Matched ' + diffNum(mt.byId) + ' by row id, ' + diffNum(mt.byPos)
+        + ' by exact position, ' + diffNum(mt.byMove) + ' by nearest same-model prop within 25m.');
+    if (!d.idMatched) {
+        noteBits.push('No row ids matched, so this comparison is entirely positional: snapshots taken before ids were recorded have none, and a prop that was grabbed and re-committed gets a new id.');
+    }
+    noteBits.push('Two identical models close together can be paired the wrong way round, and a prop moved more than 25m is reported as one deleted + one added rather than a move.');
+    noteBits.push('Scene peds and vehicles are not in snapshots, so they are not compared here.');
+    if (d.truncated) {
+        noteBits.push('This map is dense enough that the comparison hit its work limit — the counts above are incomplete and lean towards over-reporting added/deleted.');
+    }
+    note.textContent = noteBits.join(' ');
+    container.appendChild(note);
+
+    el.grid.appendChild(container);
+    el.ctx.textContent = 'Diff · ' + fromName + ' → ' + toName;
 }
 
 // ---- entities outliner (scene peds / vehicles) ---------------------------
@@ -2110,6 +2321,7 @@ window.addEventListener('message', function (e) {
     else if (d.action === 'live') onLive(d.props);
     else if (d.action === 'entities') onEnts(d.ents);
     else if (d.action === 'revs') onRevs(d.map, d.revs);
+    else if (d.action === 'revdiff') onRevDiff(d.diff);
     else if (d.action === 'perf') onPerf(d);
     else if (d.action === 'close') hide();
     else if (d.action === 'thumb') onThumb(d.model, d.data);

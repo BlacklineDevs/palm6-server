@@ -710,6 +710,31 @@ kbd { font: inherit; }
 }
 .perf-tip.is-ok { border-left-color: rgba(70, 226, 155, 0.5); color: var(--muted); }
 
+/* ---- snapshot diff ---- */
+/* One row per changed model group (or per moved prop). The left badge carries
+   the number, colour-coded by what the change costs: rose = goes away, green =
+   comes back, cyan = same prop, different transform. */
+.diff-row { border-left: 2px solid var(--line-2); }
+.diff-row.is-added   { border-left-color: var(--rose); }
+.diff-row.is-removed { border-left-color: var(--green); }
+.diff-row.is-moved   { border-left-color: var(--cyan); }
+.diff-n {
+    flex: 0 0 auto; min-width: 2.6rem; text-align: center;
+    font-family: var(--mono); font-size: 0.72rem; font-variant-numeric: tabular-nums;
+    color: var(--muted-2); background: var(--panel-deep); border: 1px solid var(--line);
+    border-radius: 7px; padding: 0.15rem 0.35rem;
+}
+.diff-row.is-added   .diff-n { color: #ffc6cd; border-color: rgba(255, 94, 126, 0.4); }
+.diff-row.is-removed .diff-n { color: #a9f2cf; border-color: rgba(70, 226, 155, 0.4); }
+.diff-row.is-moved   .diff-n { color: #b6e8ff; border-color: var(--cyan-line); }
+.diff-note {
+    font-size: 0.72rem; line-height: 1.55; color: var(--muted);
+    padding: 0.55rem 0.75rem; margin-top: 0.35rem;
+    background: var(--panel-deep); border: 1px solid var(--line);
+    border-left: 2px solid var(--cyan-line); border-radius: 7px;
+}
+.scene-batch-clear.is-base { color: var(--amber); border-color: var(--amber-line); background: var(--amber-soft); }
+
 /* scrollbars */
 .cats::-webkit-scrollbar, .grid::-webkit-scrollbar, .help-body::-webkit-scrollbar, .detail-info::-webkit-scrollbar { width: 11px; }
 .cats::-webkit-scrollbar-thumb, .grid::-webkit-scrollbar-thumb, .help-body::-webkit-scrollbar-thumb, .detail-info::-webkit-scrollbar-thumb {

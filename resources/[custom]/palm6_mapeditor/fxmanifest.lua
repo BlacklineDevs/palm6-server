@@ -9,6 +9,7 @@ description 'palm6_mapeditor — in-game map/prop editor: spawn, gizmo move/rota
 shared_scripts {
     '@ox_lib/init.lua',
     'shared/config.lua',
+    'shared/diff.lua',      -- pure snapshot-diff matcher (MapDiff), no natives/DB
     'data/prop_groups.lua', -- 5,295-prop catalog (Config.PropGroups)
     'data/scene_models.lua', -- curated ped + vehicle catalogs (Config.PedGroups / Config.VehGroups)
 }

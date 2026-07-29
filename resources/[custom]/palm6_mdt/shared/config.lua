@@ -234,6 +234,96 @@ Config.Calls = {
     RequireServerProvenance = false,
 }
 
+-- ---------------------------------------------------------------------------
+-- Heat-aware dispatch priority (v0.5.0). SHIPS OFF (Enabled = false).
+--
+-- palm6_heat has carried Config.DispatchPriorityTier = 'HOT' since it was
+-- written, pointing at a dispatch consumer that did not exist. This block is
+-- that consumer. There is no new resource and no new table: /calls is already
+-- the city's dispatch surface, so the priority read lands here.
+--
+-- DERIVED AT READ TIME, ON PURPOSE. Nothing is written when a call is
+-- recorded and palm6_mdt_calls gains no column. Three reasons, in order of
+-- weight:
+--   1. The recorder is the one path a live player can reach without an officer
+--      present. Leaving recordCall byte-for-byte untouched means this feature
+--      cannot break the 911 log even if every assumption below is wrong.
+--   2. A stored flag would be a snapshot of the heat a citizen had at 03:12 and
+--      would still say WANTED an hour after they cooled off. Heat is a decaying
+--      number whose whole point is that it moves; a persisted copy of it is
+--      stale the moment it is written. Read time is the only time the answer is
+--      true.
+--   3. No schema change means no MariaDB-only ALTER, no sql/ migration to apply
+--      by hand on a box nobody is testing, and no half-migrated state.
+-- The cost is that the flag answers "is this caller dangerous NOW", not "were
+-- they dangerous when they called". For an officer scanning a live board that
+-- is the more useful question, but it IS a different question, and an operator
+-- who wants the historical answer needs the column after all.
+--
+-- WHICH CITIZEN A CALL BELONGS TO: only the alert recorder attributes a row to
+-- a person, and it does so in src_label as `citizen <cid>`. Rows from the
+-- LogCall export (palm6_tips' `anonymous`, palm6_brain's bus label) name no
+-- citizen and are therefore never priority. That is correct, not a gap: an
+-- anonymous tip has no caller to be hot.
+--
+-- SOFT DEP. palm6_heat is read only through its frozen GetTier export, behind
+-- the house GetResourceState + pcall guard. If palm6_heat is stopped, still
+-- booting, or throwing, every call is simply normal priority and /calls prints
+-- exactly what it prints today. palm6_heat is deliberately NOT added to this
+-- resource's fxmanifest dependencies: a hard dependency would stop the whole
+-- MDT booting over an optional flag, which is a far worse failure than a
+-- missing marker.
+-- ---------------------------------------------------------------------------
+Config.CallPriority = {
+    -- Master flag. false = /calls does not read heat at all and its output is
+    -- bit-for-bit the v0.4.0 output.
+    Enabled = false,
+
+    -- The palm6_heat tier strings that count as priority, as a SET.
+    --
+    -- A set rather than a ">= this tier" comparison because the tier ladder
+    -- lives in palm6_heat's Config.Tiers, which this resource cannot read (a
+    -- separate resource is a separate Lua state), so there is no ordinal here
+    -- to compare against and inventing one would mean duplicating a ladder that
+    -- could then drift. Same shape palm6_laundering's Config.HeatScrutiny keys
+    -- its surcharge on, for the same reason.
+    --
+    -- This is the wired meaning of palm6_heat's Config.DispatchPriorityTier =
+    -- 'HOT', i.e. HOT and everything above it. palm6_heat currently ships five
+    -- tiers (CLEAN, COOL, WARM, HOT, WANTED); if a tier above HOT is ever added
+    -- there, add it here too or it will not be treated as priority.
+    Tiers = { HOT = true, WANTED = true },
+
+    -- Prefix stamped on a priority row in /calls, followed by one space. Rows
+    -- that are not priority are printed unchanged, so a board with no hot
+    -- callers looks exactly as it does today.
+    Marker = '[PRIORITY]',
+
+    -- Float priority rows to the top of the SAME result set. This re-orders the
+    -- n rows /calls already fetched; it never pulls a row in or pushes one out,
+    -- so nothing disappears from the board. Order within each group stays
+    -- newest-first. Set false to keep strict newest-first and rely on the
+    -- marker alone.
+    SortFirst = true,
+
+    -- Memoise a citizen's tier this long (seconds). /calls can list up to
+    -- Config.Calls.ListMax rows and GetTier is one indexed DB read each, so
+    -- without this a board full of distinct callers is that many round trips
+    -- every time any officer types the command.
+    --
+    -- Staleness is bounded and small: palm6_heat sheds Config.DecayPerMin (0.75
+    -- as shipped) points per minute, so 30s of cache is at most ~0.4 points of
+    -- drift against tier bands that are 29 points wide at their narrowest. Set
+    -- 0 to disable the cache and read live every time.
+    TierCacheSec = 30,
+
+    -- Hard ceiling on heat lookups per /calls invocation. Distinct citizens
+    -- beyond this many in one listing are left unflagged rather than costing
+    -- another DB read. Default matches Config.Calls.ListMax, so under the
+    -- shipped config it never truncates anything.
+    MaxLookups = 20,
+}
+
 -- Per-source command cooldowns (seconds).
 Config.RateLimits = {
     mdt          = 2,

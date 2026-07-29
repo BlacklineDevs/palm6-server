@@ -230,6 +230,14 @@ RegisterNetEvent('palm6_mapeditor:live:revs', function(map, list)
     SendNUIMessage({ action = 'revs', map = map, revs = list or {} })
 end)
 
+-- Server computed a snapshot diff -> hand the (already bounded) summary to the
+-- NUI. Pure passthrough: every count in here was produced server-side from the
+-- snapshot blobs, so the client never re-derives or second-guesses it.
+RegisterNetEvent('palm6_mapeditor:live:revDiffResult', function(sum)
+    if type(sum) ~= 'table' then return end
+    SendNUIMessage({ action = 'revdiff', diff = sum })
+end)
+
 -- Server renamed a map: relabel the streamed props in place (no respawn) so the
 -- outliner map-picker reflects the new name, then re-push the outliner. The
 -- matching light relabel lives in the lights section below (liveLights is
@@ -350,6 +358,64 @@ RegisterCommand('mapexportlive', function(_, args)
     TriggerServerEvent('palm6_mapeditor:live:exportRequest', args[1])
 end, false)
 
+-- Two quaternions describing the same rotation, allowing for q and -q (a
+-- quaternion and its negation are the same orientation) and float noise. A
+-- convention or ordering mismatch is nowhere near this tolerance, so this only
+-- passes when the two really agree.
+local function quatAgrees(ax, ay, az, aw, bx, by, bz, bw)
+    if not (ax and bx) then return false end
+    local dot = ax * bx + ay * by + az * bz + aw * bw
+    if dot < 0 then dot = -dot end
+    return dot >= 0.9999
+end
+
+-- Prove the rotation probe on THIS client, right now, before a single culled
+-- prop's rotation is written to a file. Two independent checks, both required:
+--
+--  1. STALENESS. Apply rotation A, read it; apply B, read it; apply A again,
+--     read it. If GetEntityQuaternion trailed SetEntityRotation by a call or a
+--     frame, the three reads would not come back as (qa, qb, qa) with qa ~= qb,
+--     and every exported prop would silently carry its neighbour's rotation.
+--  2. GROUND TRUTH. For props of this map that DID spawn, push their stored
+--     euler through the probe and compare against the quaternion the real object
+--     reports. That is exactly the operation about to be performed for culled
+--     props, checked against a known-good answer. At least one sample is
+--     required — with none, there is nothing to prove the probe against, so it
+--     is refused rather than trusted.
+--
+-- Returns ok, reason.
+local function probeVerified(probe, spawnedRecs)
+    local a1x, a1y, a1z, a1w = Game.ProbeQuat(probe, 0.0, 0.0, 0.0)
+    local bx, by, bz, bw = Game.ProbeQuat(probe, 37.0, 21.0, 143.0)
+    local a2x, a2y, a2z, a2w = Game.ProbeQuat(probe, 0.0, 0.0, 0.0)
+    if not quatAgrees(a1x, a1y, a1z, a1w, a2x, a2y, a2z, a2w) then
+        return false, 'the probe did not return the same rotation twice'
+    end
+    if quatAgrees(a1x, a1y, a1z, a1w, bx, by, bz, bw) then
+        return false, 'the probe returned the same rotation for two different angles (stale read)'
+    end
+    local checked = 0
+    for i = 1, #spawnedRecs do
+        local r = spawnedRecs[i]
+        if r.obj then
+            -- e* = the real object's quaternion, p* = the probe's answer for the
+            -- SAME stored euler. (r.rx/ry/rz are degrees; these are quaternion
+            -- components — different things, hence the different names.)
+            local eqx, eqy, eqz, eqw = Game.GetObjectQuat(r.obj)
+            local pqx, pqy, pqz, pqw = Game.ProbeQuat(probe, r.rx or 0.0, r.ry or 0.0, r.rz or 0.0)
+            if not quatAgrees(eqx, eqy, eqz, eqw, pqx, pqy, pqz, pqw) then
+                return false, ('the probe disagreed with a spawned prop (%s)'):format(tostring(r.model))
+            end
+            checked = checked + 1
+            if checked >= 8 then break end
+        end
+    end
+    if checked == 0 then
+        return false, 'no prop of this map is streamed in on your client, so the probe cannot be checked against a real one'
+    end
+    return true, ('verified against %d streamed prop(s)'):format(checked)
+end
+
 RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
     if type(ids) ~= 'table' or #ids == 0 then Game.Notify('live map "' .. tostring(mapName) .. '" has no props', 'error'); return end
     if not (MapEd and MapEd.buildExports) then return end
@@ -360,14 +426,57 @@ RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
     -- (client/main.lua buildYmap/buildSollumz -> Game.GetObjectQuat), so a record
     -- with no entity would silently export flat. Count those instead of shipping
     -- wrong rotations.
-    local recs, missing = {}, 0
-    for id, r in pairs(liveObjs) do
-        if want[id] then
-            if r.obj then recs[#recs + 1] = r else missing = missing + 1 end
+    -- Split this map's records into "has an entity" and "does not". Kept as a
+    -- function because the probe below yields on a model load, and liveObjs can
+    -- change across a yield (a commit or a removal streaming in), so the split
+    -- has to be taken again afterwards rather than exported stale.
+    local function collect()
+        local withEnt, without = {}, {}
+        for id, r in pairs(liveObjs) do
+            if want[id] then
+                if r.obj then withEnt[#withEnt + 1] = r else without[#without + 1] = r end
+            end
+        end
+        return withEnt, without
+    end
+    local recs, dark = collect()
+    local missing = #dark
+    -- Rotation probe (Config.ExportRotationProbe, ships OFF). The record of a
+    -- culled prop still carries its DB rotation, so the only thing standing
+    -- between distance culling and a correct export is euler -> quaternion. With
+    -- the flag on, ask the game to do that conversion on a hidden scratch object
+    -- and VERIFY it against props that are streamed before using it; a failed
+    -- verification falls straight through to the refusal below, unchanged.
+    local probe, quatFn, probed = nil, nil, 0
+    if missing > 0 and Config.ExportRotationProbe then
+        -- Models that ALREADY spawned come first: they are proven to stream on
+        -- this client, so the probe's own model load is instant. The culled
+        -- props' models are only the fallback (a map where nothing spawned at
+        -- all), and the list is short because each failed load costs ~2s.
+        local models = {}
+        for i = 1, math.min(#recs, 2) do models[#models + 1] = recs[i].model end
+        for i = 1, math.min(#dark, 2) do models[#models + 1] = dark[i].model end
+        probe = Game.CreateRotationProbe(models)   -- yields on the model load
+        recs, dark = collect()                     -- re-read: the yield above may have changed liveObjs
+        missing = #dark
+        local okProbe, why = false, 'no model of this map would load for the probe'
+        if probe then okProbe, why = probeVerified(probe, recs) end
+        if okProbe and missing > 0 then
+            quatFn = function(r)
+                if r.obj then return Game.GetObjectQuat(r.obj) end
+                return Game.ProbeQuat(probe, r.rx or 0.0, r.ry or 0.0, r.rz or 0.0)
+            end
+            for i = 1, #dark do recs[#recs + 1] = dark[i] end
+            probed, missing = #dark, 0
+            Game.Notify(('rotation probe %s — %d prop(s) with no entity will export from their stored rotation'):format(why, probed), 'inform')
+        elseif not okProbe then
+            Game.DestroyRotationProbe(probe); probe = nil
+            Game.Notify(('rotation probe unusable: %s. Falling back to entity-only export.'):format(why), 'error')
         end
     end
     if missing > 0 and Config.LiveCull then
-        Game.Notify(('%d prop(s) of "%s" are distance-culled, and rotation is read off the live object, so exporting now would write them flat. Set Config.LiveCull = false, restart the resource, and retry.'):format(missing, tostring(mapName)), 'error')
+        Game.Notify(('%d prop(s) of "%s" are distance-culled, and rotation is read off the live object, so exporting now would write them flat. Set Config.ExportRotationProbe = true (or Config.LiveCull = false), restart the resource, and retry.'):format(missing, tostring(mapName)), 'error')
+        Game.DestroyRotationProbe(probe)
         return
     end
     -- Nothing exportable. Say WHICH nothing: "not streamed in yet" is only true
@@ -380,6 +489,7 @@ RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
         else
             Game.Notify('live map not streamed in yet — move nearer / retry', 'error')
         end
+        Game.DestroyRotationProbe(probe)
         return
     end
     if missing > 0 then
@@ -390,10 +500,21 @@ RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
     -- every live-map export (and defeated buildLua/buildJson's own default,
     -- because an empty table is truthy).
     local lgs = (Live and Live.lightsForMap) and Live.lightsForMap(mapName) or {}
-    local lua, js, ymap, py = MapEd.buildExports(recs, lgs, mapName, ents)
+    -- quatFn is nil unless the verified probe is in play, so this is the same
+    -- call it has always been under the shipped config. buildExports does not
+    -- yield, so the probe cannot be raced away underneath it.
+    local lua, js, ymap, py = MapEd.buildExports(recs, lgs, mapName, ents, quatFn and { quat = quatFn } or nil)
+    Game.DestroyRotationProbe(probe)
     Game.SetClipboard(lua)
     TriggerServerEvent('palm6_mapeditor:save', mapName, lua, js, ymap, py)
-    Game.Notify(('exporting live map "%s": %d props, %d lights, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #lgs, #ents), 'inform')
+    -- Same sentence as always when no probe was used, so the default config's
+    -- output is unchanged; the extra clause only appears when it earned its place.
+    if probed > 0 then
+        Game.Notify(('exporting live map "%s": %d props (%d of them from stored rotation), %d lights, %d entities (.lua/.json/.ymap.xml/.py)')
+            :format(mapName, #recs, probed, #lgs, #ents), 'inform')
+    else
+        Game.Notify(('exporting live map "%s": %d props, %d lights, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #lgs, #ents), 'inform')
+    end
 end)
 
 RegisterCommand('mapwipe', function(_, args)
@@ -468,6 +589,15 @@ function Live.snapshot(map, label)
 end
 function Live.revList(map)
     if type(map) == 'string' and map ~= '' then TriggerServerEvent('palm6_mapeditor:live:revList', map) end
+end
+-- Diff two snapshots, or a snapshot against the live map (to = 0 means live).
+-- The server owns the comparison; this only forwards two ids it read out of the
+-- revision list the server itself sent, and the server re-validates both.
+function Live.revDiff(fromId, toId)
+    local f = tonumber(fromId)
+    local t = tonumber(toId) or 0
+    if not f or f <= 0 then return end
+    TriggerServerEvent('palm6_mapeditor:live:revDiff', math.floor(f), math.floor(t))
 end
 function Live.revRestore(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revRestore', n) end end
 function Live.revDelete(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revDelete', n) end end

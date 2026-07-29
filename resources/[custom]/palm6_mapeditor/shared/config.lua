@@ -60,6 +60,29 @@ Config.LiveCullTickMs  = 750        -- how often the ring is re-evaluated
 Config.LiveCullPerTick = 25         -- max props spawned per tick, so a teleport
                                     -- across the map cannot hitch the frame
 
+-- Export a prop that has NO entity on your client (distance-culled, or its model
+-- never streamed) by taking its rotation from the record instead of the object.
+-- THIS IS THE FLAG THAT UNBLOCKS Config.LiveCull: with it off, /mapexportlive
+-- refuses outright whenever culling is on, because the .ymap/.py writers read
+-- each prop's quaternion off the live object and a culled prop would export flat.
+--
+-- The record has always carried the DB's euler rotation, so nothing is missing
+-- except the euler -> quaternion step, and that step is NOT hand-rolled here
+-- (guessing GTA's rotation order is how you ship a whole map at wrong angles).
+-- Instead one hidden scratch object is spawned and the game is asked to do the
+-- conversion with the same SetEntityRotation call the editor uses on real props.
+-- Before a single rotation is exported that probe is proved on your client: it
+-- must round-trip three rotations without a stale read, AND reproduce the exact
+-- quaternion of at least one prop of this map that IS spawned. If either check
+-- fails the export refuses exactly as it does today rather than writing rotations
+-- nobody verified.
+--
+-- Ships OFF because it changes export OUTPUT under the current default
+-- (LiveCull off): props whose model failed to stream are silently dropped from
+-- an export today, and with this on they would be included from stored data.
+-- Flip it ON together with Config.LiveCull.
+Config.ExportRotationProbe = false
+
 -- Nudge steps (fine value used while Shift is held).
 Config.Step = {
     move = 0.05, moveFine = 0.01,

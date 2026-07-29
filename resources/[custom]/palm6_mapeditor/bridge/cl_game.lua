@@ -216,6 +216,51 @@ function Game.GetObjectQuat(obj)
     return GetEntityQuaternion(obj)
 end
 
+-- ---- rotation probe (exporting props with no entity) -----------------------
+-- The .ymap / Blender writers need each prop's world QUATERNION, and the only
+-- exact source is GetEntityQuaternion on a real entity. A distance-culled prop
+-- (or one whose model never streamed) has no entity — but it has never lost its
+-- rotation either: the DB row carries the euler and client/live.lua keeps it on
+-- the record. The only missing step is euler -> quaternion.
+--
+-- Rather than reimplement that conversion (which means picking GTA's rotation
+-- order by hand — precisely the mismatch Game.GetObjectQuat exists to avoid),
+-- these three functions borrow the game's own conversion: spawn ONE hidden
+-- scratch object, apply an euler to it with the SAME SetEntityRotation(...,2,true)
+-- call Game.SetObjectTransform uses on real props, and read the quaternion back.
+-- Same operation, same order, same engine — just on a stand-in entity.
+--
+-- The probe's model does not matter (an entity's rotation quaternion does not
+-- depend on its geometry); it only has to be a model that streams in, so the
+-- caller passes model names taken from the map being exported. Spawned AT THE
+-- PLAYER (no authored coordinate anywhere), invisible, collisionless, and
+-- deleted the moment the export is built.
+function Game.CreateRotationProbe(models)
+    local px, py, pz = Game.PlayerPos()
+    for i = 1, #(models or {}) do
+        local obj = Game.SpawnObject(models[i], px, py, pz)   -- yields on model load
+        if obj then
+            SetEntityVisible(obj, false, false)
+            SetEntityAlpha(obj, 0, false)
+            SetEntityCollision(obj, false, false)
+            return obj
+        end
+    end
+    return nil
+end
+
+-- Euler (degrees, the record's rx/ry/rz) -> world quaternion, via the probe.
+-- Returns the identity quaternion if the probe is gone, matching what
+-- Game.GetObjectQuat does for a dead entity, so a caller can never get nil back
+-- and format a nil into an export.
+function Game.ProbeQuat(probe, rx, ry, rz)
+    if not (probe and DoesEntityExist(probe)) then return 0.0, 0.0, 0.0, 1.0 end
+    SetEntityRotation(probe, (rx or 0.0) + 0.0, (ry or 0.0) + 0.0, (rz or 0.0) + 0.0, 2, true)
+    return GetEntityQuaternion(probe)
+end
+
+function Game.DestroyRotationProbe(probe) Game.DeleteObject(probe) end
+
 -- What world entity the crosshair is pointing at (for select / world-erase).
 -- Returns entity, model, hitX, hitY, hitZ  (entity 0 if none).
 function Game.RaycastEntity(maxDist)

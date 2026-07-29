@@ -688,15 +688,27 @@ local function label_clean(s)
     return (tostring(s or '')):gsub('[^%w %%%-_]', ''):sub(1, 96)
 end
 
--- Gather a map's props + lights into the snapshot shape (call under the lock so
--- the read is consistent with concurrent writers).
+-- Gather a map's props + lights into the snapshot shape. Every WRITE path
+-- (snapshot, restore) calls it under the write lock so what gets stored is
+-- consistent with concurrent writers. The read-only diff path calls it WITHOUT
+-- the lock on purpose, exactly like revList: a diff that is a few milliseconds
+-- stale is harmless, and it must not be able to block a commit.
+--
+-- `id` is the row id at snapshot time and is written PURELY so a later diff can
+-- match a prop exactly instead of guessing by position (shared/diff.lua pass 1).
+-- It is NOT an identity that survives editing: /maplivegrab deletes the row and
+-- the re-commit inserts a new one, and a restore re-inserts every prop, so an id
+-- only proves "untouched since that snapshot". Restore ignores the field
+-- entirely — cleanPlacement builds a fresh row and the DB assigns the id — so
+-- adding it changes nothing about restore, and blobs written before this
+-- (which have no ids) still diff, positionally.
 local function gatherSnapshot(map)
     local props, lts = {}, {}
     for _, r in pairs(live) do
-        if r.map == map then props[#props + 1] = { model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz } end
+        if r.map == map then props[#props + 1] = { id = r.id, model = r.model, x = r.x, y = r.y, z = r.z, rx = r.rx, ry = r.ry, rz = r.rz } end
     end
     for _, l in pairs(lights) do
-        if l.map == map then lts[#lts + 1] = { x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind } end
+        if l.map == map then lts[#lts + 1] = { id = l.id, x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b, range = l.range, intensity = l.intensity, kind = l.kind } end
     end
     return props, lts
 end
@@ -763,6 +775,91 @@ RegisterNetEvent('palm6_mapeditor:live:revList', function(map)
     map = cleanMap(map)
     local list = MySQL.query.await('SELECT id, rev, label, props, lights, created_by, UNIX_TIMESTAMP(created_at) AS ts FROM palm6_mapeditor_revisions WHERE map = ? ORDER BY rev DESC, id DESC', { map }) or {}
     TriggerClientEvent('palm6_mapeditor:live:revs', src, map, list)
+end)
+
+-- ---------------------------------------------------------------------------
+-- DIFF two snapshots (or one snapshot and the CURRENT live state).
+--
+-- This is the piece that makes the revision list safe to act on: "#7, 412 props,
+-- 2h ago" tells you nothing about what a restore would destroy. `toId == 0` means
+-- "compare against live", which is the case that answers "what would I lose if I
+-- rolled back to this".
+--
+-- Reads only. It re-uses the snapshot LONGTEXT blobs already written by
+-- writeRevision and adds no table and no column. Both revisions must belong to
+-- the same map: a cross-map diff would report every prop of each as added and
+-- removed, which is noise dressed up as a result.
+--
+-- Does NOT take the write lock (like revList): the two blobs are immutable rows
+-- and the live side is copied out with gatherSnapshot before any matching runs,
+-- so a concurrent commit can only make the answer slightly stale, never
+-- inconsistent. The matcher yields (Wait(0)) every few thousand comparisons so a
+-- big diff cannot stall the server tick, and it is budgeted, so a pathologically
+-- dense map returns a flagged-truncated answer rather than running forever.
+-- ---------------------------------------------------------------------------
+RegisterNetEvent('palm6_mapeditor:live:revDiff', function(fromId, toId)
+    local src = source
+    if not isAllowed(src) then notify(src, 'not authorized (needs admin)', 'error'); return end
+    if not READY then notify(src, 'live map DB not ready yet', 'error'); return end
+    fromId = math.floor(tonumber(fromId) or 0)
+    toId = math.floor(tonumber(toId) or 0)
+    if fromId <= 0 then notify(src, 'pick a snapshot to compare from', 'error'); return end
+    if fromId == toId then notify(src, 'pick two different snapshots', 'error'); return end
+
+    local rows = MySQL.query.await('SELECT id, map, rev, label, data FROM palm6_mapeditor_revisions WHERE id = ?', { fromId })
+    if not rows or not rows[1] then notify(src, 'no such snapshot', 'error'); return end
+    local fromRow = rows[1]
+    local map = cleanMap(fromRow.map)
+
+    local toRow, toProps, toLights, toName
+    if toId > 0 then
+        local trows = MySQL.query.await('SELECT id, map, rev, label, data FROM palm6_mapeditor_revisions WHERE id = ?', { toId })
+        if not trows or not trows[1] then notify(src, 'no such snapshot', 'error'); return end
+        toRow = trows[1]
+        if cleanMap(toRow.map) ~= map then
+            notify(src, 'those snapshots belong to different maps — diff only compares within one map', 'error')
+            return
+        end
+    end
+
+    -- Decode both blobs defensively: a truncated/corrupt LONGTEXT must produce a
+    -- refusal, not a diff that silently reports the whole map as deleted.
+    local function decode(row)
+        local ok, snap = pcall(json.decode, row.data or '')
+        if not ok or type(snap) ~= 'table' then return nil end
+        return (type(snap.props) == 'table' and snap.props or {}), (type(snap.lights) == 'table' and snap.lights or {})
+    end
+    local fromProps, fromLights = decode(fromRow)
+    if not fromProps then notify(src, ('snapshot #%d is unreadable (corrupt data)'):format(math.floor(tonumber(fromRow.rev) or 0)), 'error'); return end
+    if toRow then
+        toProps, toLights = decode(toRow)
+        if not toProps then notify(src, ('snapshot #%d is unreadable (corrupt data)'):format(math.floor(tonumber(toRow.rev) or 0)), 'error'); return end
+        toName = ('#%d'):format(math.floor(tonumber(toRow.rev) or 0))
+    else
+        toProps, toLights = gatherSnapshot(map)
+        toName = 'live'
+    end
+
+    if type(MapDiff) ~= 'table' or type(MapDiff.props) ~= 'function' then
+        notify(src, 'diff module not loaded', 'error'); return
+    end
+    -- Wrapped rather than passed as `Wait` itself: Wait(nil) is not the same call
+    -- as Wait(0), and the matcher passes no argument.
+    local dres = MapDiff.props(fromProps, toProps, { yield = function() Wait(0) end })
+    local sum = MapDiff.summarise(dres)
+    sum.lights = MapDiff.lights(fromLights, toLights)
+    sum.map = map
+    sum.fromId = fromId
+    sum.toId = toId
+    sum.fromName = ('#%d'):format(math.floor(tonumber(fromRow.rev) or 0))
+    sum.toName = toName
+    sum.fromLabel = fromRow.label or ''
+    sum.toLabel = toRow and (toRow.label or '') or ''
+    -- Only the props side can carry ids, and only for snapshots written after the
+    -- field was added. Tell the UI, so it can say the match was positional rather
+    -- than let a builder assume exactness that isn't there.
+    sum.idMatched = (dres.idPairs > 0)
+    TriggerClientEvent('palm6_mapeditor:live:revDiffResult', src, sum)
 end)
 
 RegisterNetEvent('palm6_mapeditor:live:revDelete', function(revId)

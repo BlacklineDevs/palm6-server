@@ -19,7 +19,7 @@ CodeWalker `.ymap.xml`**. Admin dev tool, ACE-gated (`command.mapedit`).
 | Command | Does |
 |---|---|
 | `/mapedit` | toggle editor |
-| `/propui` | **visual thumbnail browser** — 5,295 props with images, category rail, search, favorites, recent, a **Props / Peds / Vehicles catalogue switcher** (click a ped/vehicle card to place it at your aim — no need to memorise model names; a **ped behaviour picker** makes placed peds guard / lean / smoke / work instead of standing frozen), **blueprint kits** (prefabs), a **scene outliner** (jump to / delete / multi-select / save-as-kit), a **live-map outliner** (jump to / grab / delete committed props, **filter by named map**, **rename a map**, **merge a map into another**, **snapshots / rollback** (checkpoint a map and restore any snapshot; restore auto-saves the current state first), **one-click export** of a map to .lua/.json/.ymap.xml/.py), an **entities outliner** (jump to / **move (grab-to-reposition)** / delete / multi-select placed peds + vehicles), a **performance panel** (budget meters vs the prop/light/erase/entity caps + density-cluster warnings), and a click-through detail view (preview + description + Spawn) |
+| `/propui` | **visual thumbnail browser** — 5,295 props with images, category rail, search, favorites, recent, a **Props / Peds / Vehicles catalogue switcher** (click a ped/vehicle card to place it at your aim — no need to memorise model names; a **ped behaviour picker** makes placed peds guard / lean / smoke / work instead of standing frozen), **blueprint kits** (prefabs), a **scene outliner** (jump to / delete / multi-select / save-as-kit), a **live-map outliner** (jump to / grab / delete committed props, **filter by named map**, **rename a map**, **merge a map into another**, **snapshots / rollback** (checkpoint a map and restore any snapshot; restore auto-saves the current state first) with a **snapshot diff** (pick a snapshot, compare it to another one or to the live map, and see exactly which props a restore would delete, bring back, and move — grouped by model, before you press Restore), **one-click export** of a map to .lua/.json/.ymap.xml/.py), an **entities outliner** (jump to / **move (grab-to-reposition)** / delete / multi-select placed peds + vehicles), a **performance panel** (budget meters vs the prop/light/erase/entity caps + density-cluster warnings), and a click-through detail view (preview + description + Spawn) |
 | `/maphelp` (key **H**) | **in-game controls & commands sheet** — every keybind and slash command, overlaid on the browser |
 | `/maplog` (key **L**) | **activity log** — searchable history of every action the editor reported this session |
 | `/mapcam` (key **B**) | **freecam** — detach a smooth camera: WASD fly, mouse look, Shift fast, mouse-wheel FOV zoom, Backspace exit |
@@ -88,6 +88,54 @@ drop a custom build in and everyone sees the same world. `/mapworldrestore` undo
 nearest one everywhere. On resource stop the client re-shows all hidden props (re-applied on
 next sync), so a restart never leaves vanilla geometry permanently gone.
 
+## Snapshots, and what a snapshot diff can (and cannot) tell you
+A snapshot serialises a map's props + lights into `palm6_mapeditor_revisions`. The
+**Diff** button in the Snapshots view compares two of them — or one of them against the
+live map — and reports props **added**, **removed** and **moved**, grouped by model. When
+the target is the live map the sections are labelled by consequence ("deleted by a
+restore", "brought back by a restore"), because that is the question being asked next to
+a Restore button.
+
+Matching (`shared/diff.lua`, a pure module with no natives and no DB) runs three passes:
+by **row id** where both snapshots carry one, then by **exact position** for the same
+model, then by **nearest same-model prop within 25 m**, which is what turns a
+remove+add pair into a "moved". The screen states which of the three did the work,
+because the answer is only as exact as its weakest pass:
+
+- Ids are **not** stable across an edit. `/maplivegrab` deletes the row and `/mapcommit`
+  re-inserts it, and a restore re-inserts every prop, so a moved prop gets a NEW id and is
+  only found positionally. Snapshots taken before ids were recorded have none at all.
+- The nearest-neighbour pass is greedy, so two identical models close together can be
+  paired the wrong way round. The counts stay conserved; *which* prop moved where can be
+  wrong.
+- A prop moved more than 25 m reads as one removed + one added, deliberately.
+- Scene peds/vehicles are not in snapshots and are therefore not compared.
+- A very dense map can exhaust the comparison budget; the diff then says so instead of
+  quietly reporting a partial answer.
+
+Nothing here adds a table or a column — it re-reads the snapshot blobs that already exist.
+
+## Distance culling and export (`Config.LiveCull` / `Config.ExportRotationProbe`)
+`Config.LiveCull` spawns only the live props near you and despawns the rest. It ships OFF,
+and the thing that has kept it off is export: the `.ymap.xml` and Blender writers read each
+prop's world **quaternion** off the live object, so a culled prop would export flat, and
+`/mapexportlive` refuses outright rather than write that.
+
+`Config.ExportRotationProbe` (also OFF) removes that blocker. A culled prop never lost its
+rotation — the DB row's euler is on the record — so the only missing step is euler ->
+quaternion. That step is **not** hand-rolled: one hidden scratch object is spawned at the
+player and the game is asked to do the conversion with the same `SetEntityRotation(...,2,true)`
+call the editor uses on real props. Before any rotation is exported the probe must pass two
+checks on your client: round-trip three rotations without a stale read, **and** reproduce
+the exact quaternion of at least one prop of this map that is actually spawned. If either
+check fails the export refuses exactly as it does today. (The `.lua` and `.json` writers
+never needed the entity at all — they write the euler straight off the record — but a
+culled prop is dropped from the record list before it reaches them, so today it is missing
+from all four formats, not just the two that need a quaternion.)
+
+Turn both flags on together, restart the resource, and export from inside the map (the
+probe needs one streamed prop of that map to check itself against).
+
 ## Architecture
 - `bridge/cl_game.lua` — all GTA natives (spawn/transform, camera raycast, surface
   snap, model-hide, gizmo bridge). `client/*` call `Game.*` only.
@@ -102,6 +150,8 @@ next sync), so a restart never leaves vanilla geometry permanently gone.
   **smart search** — conceptual keyword aliases ("trash"→bins/dumpsters, "seat"→chairs/benches)
   layered over fuzzy substring/subsequence matching.
 - `client/live.lua` — live-map streaming (spawns/syncs the persisted props on each client).
+- `shared/diff.lua` — the snapshot-diff matcher (`MapDiff`). Pure functions: no natives, no
+  MySQL, no events, so it can be reasoned about and tested outside the game.
 - `server/main.lua` — writes export files (ACE-gated).
 - `server/live.lua` — MySQL persistence + authoritative live sync (owns `palm6_mapeditor_props`).
 - `object_gizmo` (separate vendored resource) — the visual DrawGizmo handles.
@@ -137,3 +187,28 @@ live map, so it can't regress it.
 
 ## Roadmap (not yet built)
 - Scene-entity editing/grab (currently place + delete); prefab support for entities.
+
+### Assessed and deliberately NOT built: "shell builder"
+A room/building shell generator (walls + floor + ceiling from a size) would be a thin
+wrapper over two tools that already exist and are already wired into undo, the NUI and
+`/mapcommit`:
+
+- **Repetition** is `/matgrid <rows> <cols> <spacing>` (`client/tools.lua`) — a wall run is
+  a 1xN grid, a floor is an NxM grid, both with a ghost preview and one undo group.
+- **Reuse** is the prefab / Blueprint-kit system (`server/prefabs.lua` stores a group
+  relative to its centroid, `client/prefabs.lua` stamps it at your aim at any yaw, lights
+  included). Build one shell by hand, save it as a kit, and stamp it forever.
+
+The only thing a shell builder would genuinely add is knowing each wall prop's real
+dimensions so tiles butt up without gaps. The editor has no model-size data anywhere
+(`data/prop_groups.lua` is names only, and nothing calls `GetModelDimensions`), and wall
+prop origins are not consistently centred, so the spacing has to be measured in-game per
+model — which is exactly what `/matgrid`'s `spacing` argument already takes. Building it
+blind would mean authoring dozens of offsets that can only be judged by standing in the
+room, which is the one thing this project cannot currently do.
+
+The single non-wrapper gap, if it is ever wanted: `/matgrid` grids on X/Y only (it reuses
+`r.z` for every copy, `client/tools.lua`), so it cannot stack vertically. A 4th optional
+`layers` argument defaulting to 1 would make walls possible and leave every existing call
+byte-identical. Not built here, because it is a change to a working command that nobody can
+verify in game yet.

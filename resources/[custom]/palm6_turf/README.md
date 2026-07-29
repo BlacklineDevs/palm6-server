@@ -80,25 +80,48 @@ memoised per pass, so six live contests cost one lookup per player, not six.
 same rate as one. Headcount decides *whether* you hold the zone, never *how
 fast*, so stacking alts buys nothing on the clock. Ties favour the defender.
 
-### Persistence: contests do NOT survive a restart, on purpose
+### Persistence: contests do NOT survive a restart, the brakes DO
 
 Contests are in-memory only. On a restart every open contest simply ceases to
 exist and the **defender keeps the zone**, which is the fail-safe direction.
 There is no `contested` flag in any table, so **a restart cannot leave a zone
-locked**. There is nothing persisted that could stay stuck. No new table and
-no new `sql/NNNN` file were needed.
+locked**. There is nothing persisted that could stay stuck.
 
-Of the four brakes, only the anti-ping-pong **flip** cooldown outlives a
-restart, and it does so for free: it is derived from `palm6_turf.captured_at`,
-which every flip has always written (same lesson as `rep_at` /
-`RepCooldownSec`). `OpenCooldownSec`, `RepelCooldownSec` and
-`NotifyCooldownSec` are in-memory and a restart **does** clear them. That gap is
-bounded, not hidden: `RestartGraceSec` blocks *every* contest from opening for
-that long after the engine arms, so a scheduled reboot buys a gang that just
-lost one a freeze rather than a free instant reopen. It also covers the
-reconnect window, when the player list is still filling and a defender headcount
-would wrongly read as "nobody online". Persisting the other three properly needs
-a table this resource does not own yet, so it is deliberately deferred.
+All four brakes now outlive a restart:
+
+- `FlipCooldownSec` does it for free, derived from `palm6_turf.captured_at`,
+  which every flip has always written (same lesson as `rep_at` /
+  `RepCooldownSec`).
+- `OpenCooldownSec`, `RepelCooldownSec` and `NotifyCooldownSec` are mirrored
+  into **`palm6_turf_brakes`** (`sql/0074_turf_brakes.sql`) and reloaded at boot
+  with their remaining time intact, so a gang that lost a contest 500 s before a
+  reboot comes back still owing the rest of its cooldown instead of getting it
+  cut short.
+
+One row per `(scope, gang_key)`. `open` and `repel` are keyed on the immutable
+`palm6_gangs.id`; `notify` is keyed on the gang *name*, because that is what
+turf ownership and therefore the defender side is keyed on. Only `set_at` is
+stored, never an expiry, so retuning a cooldown in `Config` takes effect
+immediately on rows already written.
+
+The DB is **not** on any hot path. It is read once at boot and written once per
+brake *change* (a contest opened, a contest lost with a defender present, a
+defender ping) — all three already rate-limited by the very cooldowns being
+stored. Each write is deferred to its own coroutine and `pcall`'d, because
+`closeContest` runs on the contest ticker and must never block on a round trip.
+Expired rows are swept on a slow separate thread using the same
+`set_at + window < now` test the gates use, so the sweep can never delete a
+brake that could still refuse something, and losing the whole table only costs
+the brakes their restart-proofing — nothing in it grants anything.
+
+The table is created **only when `Config.Conflict.Enabled` is true**: the DDL
+lives in its own `ensureBrakeSchema()` rather than in `ensureSchema()`, so a box
+running with the feature off never grows it. If it cannot be created, the boot
+banner says `brakes MEMORY ONLY` and `RestartGraceSec` is the fallback.
+
+`RestartGraceSec` is still here and still load-bearing, for a different reason:
+it covers the **reconnect window**, when the player list is still filling and a
+defender headcount would wrongly read as "nobody online".
 
 ### Anti-grief
 
@@ -202,8 +225,23 @@ the flag flips rather than broken by it.
 - `ensure palm6_turf` is wired into `custom.cfg`.
 - SQL migration `sql/0013_turf.sql` creates `palm6_turf` (one row per
   zone, seeded idempotently via `INSERT IGNORE` on every boot).
-- **Turf Conflict adds no migration.** It reuses `captured_at`, which
-  `0013_turf.sql` already creates.
+- `sql/0074_turf_brakes.sql` documents `palm6_turf_brakes` (per-gang contest
+  cooldowns). Needed **only** if `Config.Conflict.Enabled` is turned on; the
+  resource self-creates the same table at boot in that case, and never touches
+  it while the flag is off.
+  - ⚠️ On prod that file is **documentation only**: the DB is unreachable from
+    outside the panel network, so the table exists solely because
+    `ensureBrakeSchema()` self-creates it. Keep the two copies identical.
+  - ⚠️ It is deliberately **NOT** registered in `palm6_dbmigrate`, and it should
+    stay that way. A dbmigrate entry would create the table on every box
+    regardless of the flag, which throws away the point of the feature being
+    dark. Do not "fix" its absence.
+  - ⚠️ Choosing a migration number: do **not** `ls sql/` and take max+1.
+    `palm6_dbmigrate/server.lua` owns numbers with no file in `sql/` at all
+    (0067 racing, 0068-0073 business). This file was first written as `0067` and
+    collided with racing for exactly that reason. Grep both places.
+- **Turf Conflict adds no other migration.** The flip cooldown reuses
+  `captured_at`, which `0013_turf.sql` already creates.
 
 ## GTA VI notes (Tier 3)
 

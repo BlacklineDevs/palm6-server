@@ -99,6 +99,49 @@ running and falls back to identical built-in defaults when it isn't.
   dropped text. Turning it on will silence the four qbx robberies above in
   `/calls`; that is the trade, and it is why it ships off.
 
+## Heat-aware dispatch priority (v0.5.0, SHIPS OFF)
+
+`Config.CallPriority.Enabled = false`. With the flag off `/calls` never reads
+the heat layer and prints byte-for-byte what v0.4.0 printed.
+
+`palm6_heat` has shipped `Config.DispatchPriorityTier = 'HOT'` since it was
+written, pointing at a dispatch consumer that did not exist. This is that
+consumer. No new resource: `/calls` is already the city's dispatch surface.
+
+With the flag on, a 911 row attributed to a citizen whose **current**
+`palm6_heat` tier is in `Config.CallPriority.Tiers` (`HOT`/`WANTED` as shipped)
+is prefixed `[PRIORITY]` and floated to the top of the same listing
+(`SortFirst`, on by default). Floating re-orders the `n` rows the command
+already fetched; it never adds or drops a row, and newest-first order is kept
+inside each group. Every other row prints unchanged.
+
+**Read-time, not stored.** Nothing is written when a call is recorded and
+`palm6_mdt_calls` gains no column, so there is no migration to apply by hand
+and `recordCall` is untouched. Heat is a decaying number: a flag persisted at
+insert time would still say `WANTED` an hour after the caller cooled off, so a
+stored copy is wrong almost immediately. The honest trade is that the marker
+answers *"is this caller dangerous now"*, not *"were they dangerous when they
+called"*. That is the more useful question for a live board, but a different one.
+
+**Attribution.** Only the alert recorder ties a row to a person, in `src_label`
+as `citizen <cid>`; the priority lookup parses that prefix. Rows from the
+`LogCall` export (`palm6_tips`' `anonymous`, `palm6_brain`'s bus label) name no
+citizen and are never priority: an anonymous tip has no caller to be hot. The
+citizenid in that label is server-derived from the net event's resolved sender
+(see the provenance stamp above), so it is not client-spoofable, and a marker
+grants nothing, so there is no reward here to farm.
+
+**Soft dep, no manifest entry.** `palm6_heat` is read only through its frozen
+`GetTier` export behind `GetResourceState` + `pcall`. Stopped, still booting or
+throwing all mean "no priority" and the board degrades to today's output in
+silence. It is deliberately absent from `fxmanifest.lua`'s `dependencies`: a
+hard dependency would stop the whole MDT booting over an optional flag.
+
+Cost is bounded by `TierCacheSec` (30s memo per citizen; at the shipped
+`DecayPerMin = 0.75` that is ~0.4 points of drift against tier bands 29+ points
+wide) and `MaxLookups` (default 20, equal to `Config.Calls.ListMax`, so under
+the shipped config it never truncates).
+
 ## Charge catalogue + sentence calculator (v0.4.0, SHIPS OFF)
 
 `Config.Charges.Enabled = false`. With the flag off `/charges` is not

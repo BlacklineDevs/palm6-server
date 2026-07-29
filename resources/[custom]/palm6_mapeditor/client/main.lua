@@ -322,9 +322,24 @@ local function buildJson(recs, lg, ents)
     return json.encode({ objects = objs, lights = lg, entities = ents or {} })
 end
 
+-- Where a record's world quaternion comes from. Default: the live object, which
+-- is the only exact source and what every export has always used. `quatFn` lets
+-- /mapexportlive supply a record that has NO entity (distance-culled) with a
+-- quaternion derived from its stored euler through the game's own conversion —
+-- see Game.CreateRotationProbe and Config.ExportRotationProbe. Passing nothing
+-- keeps the old behaviour byte for byte.
+--
+-- Written as an if/else rather than `(quatFn and quatFn(r)) or Game...`: an
+-- and/or expression truncates a multi-value call to ONE value, which would put
+-- nil in three of the four quaternion components.
+local function quatOf(r, quatFn)
+    if quatFn then return quatFn(r) end
+    return Game.GetObjectQuat(r.obj)
+end
+
 -- CodeWalker .ymap.xml — the streamable format (import in CodeWalker RPF Explorer
 -- -> right-click -> Import XML). This is the differentiator most editors can't do.
-local function buildYmap(name, recs)
+local function buildYmap(name, recs, quatFn)
     -- The name is embedded raw in <name>%s</name>; keep it to identifier chars so a
     -- stray &/</>/quote can't produce malformed XML the CodeWalker import rejects.
     name = tostring(name or 'palm6_map'):gsub('[^%w_%-]', '')
@@ -333,7 +348,7 @@ local function buildYmap(name, recs)
     local ex = { minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9 }
     local ents = {}
     for _, r in ipairs(recs) do
-        local qx, qy, qz, qw = Game.GetObjectQuat(r.obj)
+        local qx, qy, qz, qw = quatOf(r, quatFn)
         -- CEntityDef stores the INVERSE (conjugate) of the world quaternion.
         ents[#ents + 1] = table.concat({
             '  <Item type="CEntityDef">',
@@ -383,7 +398,7 @@ end
 -- "archetypeName" custom property, so a Sollumz user has the names + precise
 -- placements to author a YMAP (or import the sibling .ymap.xml directly). Stock
 -- bpy only — no fragile addon-internal calls — so the script always runs.
-local function buildSollumz(name, recs)
+local function buildSollumz(name, recs, quatFn)
     -- Name goes raw into a Python string literal (MAP_NAME = "..."); constrain it to
     -- identifier chars so a quote/backslash/newline can't break the generated .py.
     name = tostring(name or 'palm6_map'):gsub('[^%w_%-]', '')
@@ -391,7 +406,7 @@ local function buildSollumz(name, recs)
     recs = recs or placed
     local rows = {}
     for _, r in ipairs(recs) do
-        local qx, qy, qz, qw = Game.GetObjectQuat(r.obj)
+        local qx, qy, qz, qw = quatOf(r, quatFn)
         rows[#rows + 1] = ('    ("%s", %.4f, %.4f, %.4f, %.6f, %.6f, %.6f, %.6f),')
             :format(r.model, r.x, r.y, r.z, qx, qy, qz, qw)
     end
@@ -442,8 +457,17 @@ end
 -- Build every export format from an arbitrary record list — used by
 -- client/live.lua's /mapexportlive to export the accumulated live map (not just
 -- the session), so the pipeline works over a map built across sessions.
-function MapEd.buildExports(recs, lg, name, ents)
-    return buildLua(recs, lg, ents), buildJson(recs, lg, ents), buildYmap(name, recs), buildSollumz(name, recs)
+--
+-- `opts.quat` is an optional function(rec) -> qx,qy,qz,qw used by the ymap and
+-- Blender writers in place of reading the live object. Only /mapexportlive passes
+-- it, and only when Config.ExportRotationProbe is on and the probe has been
+-- verified; with no opts this is the same call it always was. The Lua and JSON
+-- writers are untouched because they emit the euler straight off the record and
+-- so were never affected by a prop having no entity.
+function MapEd.buildExports(recs, lg, name, ents, opts)
+    local quatFn = (type(opts) == 'table') and opts.quat or nil
+    return buildLua(recs, lg, ents), buildJson(recs, lg, ents),
+        buildYmap(name, recs, quatFn), buildSollumz(name, recs, quatFn)
 end
 
 RegisterCommand('mapexport', function(_, args)
