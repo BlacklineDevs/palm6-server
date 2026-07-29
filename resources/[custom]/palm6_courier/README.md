@@ -29,6 +29,8 @@ The courier board satisfies all four.
   `complete`, and pays you the bounty.
 - A 60-second sweep marks postings older than
   `Config.PostingLifetimeMinutes` as `expired` and refunds the bounty.
+- `/courier cancel <id>` cancels your own `open` posting and returns the
+  escrow. Off unless `Config.EnableCancelCommand` is true.
 
 ## Files
 
@@ -37,7 +39,8 @@ The courier board satisfies all four.
 - `shared/config.lua` — bounty bounds, lifetime, per-player cap, delivery
   radius, blip colour.
 - `server/main.lua` — postings cache, net events
-  (`post`/`accept`/`complete`/`cancel`), command handler, sweep thread.
+  (`post`/`pickup`/`complete`), command handler (accept + optional cancel),
+  sweep thread.
   Calls `Bridge.*` only.
 - `client/main.lua` — blip + GPS route on accept, arrival detection,
   `/courierpost` helper. Calls `Game.*` only.

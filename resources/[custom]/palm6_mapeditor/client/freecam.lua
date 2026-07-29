@@ -44,6 +44,10 @@ local function stop()
 end
 
 RegisterCommand('mapcam', function()
+    -- Silent no-op outside the editor: B is a bare keybind, so it must never act
+    -- or notify unless the map editor is actually open (same shape as the
+    -- /maphelp and /maplog guards in nui.lua).
+    if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then return end
     if EditorCam.active then stop() else start() end
 end, false)
 RegisterKeyMapping('mapcam', 'Map editor: freecam', 'keyboard', 'B')

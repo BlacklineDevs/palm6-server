@@ -78,6 +78,105 @@ CreateThread(function()
 end)
 
 -- ---------------------------------------------------------------------------
+-- Boot schema check.
+--
+-- The custom layer's sql/ migrations are applied BY HAND (deploy/README.md)
+-- and CI never touches the DB, so a restored backup or a new box can boot with
+-- half its tables absent. Because nearly every query in the layer is
+-- pcall-wrapped, that state is SILENT: no errors, no warnings, features just
+-- quietly do nothing. This is the one always-on assertion that makes it loud.
+--
+-- Deliberate properties:
+--   * ONE read-only information_schema SELECT for the whole layer. No
+--     per-table queries, no writes, no DDL. This resource must stay cheap.
+--   * It NEVER blocks startup and never stops anything. It prints and exits.
+--   * Only STARTED resources are checked, so a dark resource is not noise.
+--   * The result is cached and surfaced in /diag, so staff can see it in-game
+--     long after the boot console scrolled away. Only the BOOT run publishes to
+--     that cache (publish=true); an on-demand re-run returns its own snapshot
+--     and leaves what /diag reports alone.
+-- ---------------------------------------------------------------------------
+local SchemaReport = nil   -- { checked, missing = { [resource] = {tables} }, missingCount, ok, err }
+
+local function runSchemaCheck(publish)
+    -- server/tables.lua owns RequiredTables. If that file is ever missing from
+    -- a deploy the whole check would otherwise die inside its caller's pcall
+    -- and /diag would say "has not run yet" forever, which is the silent state
+    -- this feature exists to abolish. Say so instead.
+    if type(RequiredTables) ~= 'table' then
+        local report = { checked = 0, missing = {}, missingCount = 0, ok = false,
+            err = 'RequiredTables is nil (server/tables.lua did not load)' }
+        if publish then SchemaReport = report end
+        print('^1[palm6_perf] SCHEMA CHECK COULD NOT RUN - ' .. report.err .. '^0')
+        return report
+    end
+
+    local present, err = {}, nil
+    local queried = pcall(function()
+        local rows = MySQL.query.await(
+            'SELECT table_name AS t FROM information_schema.tables WHERE table_schema = DATABASE()') or {}
+        -- MySQL returns the alias case-folded differently across versions/drivers,
+        -- so accept either spelling rather than depending on one.
+        for _, r in ipairs(rows) do
+            local name = r.t or r.T
+            if name then present[name] = true end
+        end
+    end)
+    if not queried or next(present) == nil then
+        err = 'information_schema unreadable (is oxmysql connected?)'
+        local report = { checked = 0, missing = {}, missingCount = 0, ok = false, err = err }
+        if publish then SchemaReport = report end
+        print('^1[palm6_perf] SCHEMA CHECK COULD NOT RUN - ' .. err .. '^0')
+        return report
+    end
+
+    local names = {}
+    for resource in pairs(RequiredTables) do names[#names + 1] = resource end
+    table.sort(names)
+
+    local checked, missingCount = 0, 0
+    local missing = {}
+    for _, resource in ipairs(names) do
+        if GetResourceState(resource) == 'started' then
+            checked = checked + 1
+            local gone = {}
+            for _, t in ipairs(RequiredTables[resource]) do
+                if not present[t] then gone[#gone + 1] = t end
+            end
+            if #gone > 0 then
+                missing[resource] = gone
+                missingCount = missingCount + #gone
+            end
+        end
+    end
+
+    local report = {
+        checked = checked, missing = missing, missingCount = missingCount,
+        ok = (missingCount == 0), err = nil,
+    }
+    if publish then SchemaReport = report end
+
+    if missingCount == 0 then
+        print(('[palm6_perf] schema check PASS - every table present for %d started resource(s)')
+            :format(checked))
+    else
+        local ordered = {}
+        for resource in pairs(missing) do ordered[#ordered + 1] = resource end
+        table.sort(ordered)
+        print('^1[palm6_perf] ============================================^0')
+        print(('^1[palm6_perf] SCHEMA CHECK: %d TABLE(S) MISSING across %d resource(s).^0')
+            :format(missingCount, #ordered))
+        for _, resource in ipairs(ordered) do
+            print(('^1[palm6_perf]   %s MISSING %s^0'):format(resource, table.concat(missing[resource], ', ')))
+        end
+        print('^1[palm6_perf] These resources are RUNNING but their queries are pcall-swallowed -^0')
+        print('^1[palm6_perf] they will fail SILENTLY. Apply the matching sql/ migration.^0')
+        print('^1[palm6_perf] ============================================^0')
+    end
+    return report
+end
+
+-- ---------------------------------------------------------------------------
 -- /diag — one-glance custom-layer health for staff. ACE-restricted
 -- (command.diag). Aggregates only data this layer already owns: resource
 -- states, the sampler summary, and eventguard's per-player violation counts.
@@ -119,6 +218,26 @@ local function diagLines()
         lines[#lines + 1] = ('eventguard: NOT RUNNING — %d online player(s) unguarded'):format(#players)
     end
 
+    -- Schema line: the boot banner scrolls away, this does not.
+    if not Config.SchemaCheck then
+        lines[#lines + 1] = 'schema: check disabled (Config.SchemaCheck = false)'
+    elseif not SchemaReport then
+        lines[#lines + 1] = 'schema: check has not run yet'
+    elseif SchemaReport.err then
+        lines[#lines + 1] = 'schema: CHECK FAILED - ' .. SchemaReport.err
+    elseif SchemaReport.ok then
+        lines[#lines + 1] = ('schema: OK - all tables present for %d started resource(s)')
+            :format(SchemaReport.checked)
+    else
+        local parts = {}
+        for resource, tables in pairs(SchemaReport.missing) do
+            parts[#parts + 1] = ('%s(%s)'):format(resource, table.concat(tables, '/'))
+        end
+        table.sort(parts)
+        lines[#lines + 1] = ('schema: %d TABLE(S) MISSING - %s'):format(
+            SchemaReport.missingCount, table.concat(parts, ', '))
+    end
+
     return lines
 end
 
@@ -134,7 +253,40 @@ AddEventHandler('onResourceStart', function(resource)
     print(('[palm6_perf] sampling every %dms, reporting every %dm, hitch>=%dms%s'):format(
         Config.SamplePeriodMs, Config.ReportEveryMinutes, Config.HitchThresholdMs,
         Config.DiagCommand and (' — /' .. Config.DiagCommand .. ' online') or ''))
+
+    -- Schema check on its own thread so a slow DB can never delay this
+    -- resource's start, and long enough after boot that the self-creating
+    -- resources and palm6_dbmigrate have finished their own work.
+    if Config.SchemaCheck then
+        CreateThread(function()
+            Wait(Config.SchemaCheckDelayMs or 20000)
+            -- The boot run is the only one that publishes to SchemaReport.
+            pcall(function() runSchemaCheck(true) end)
+        end)
+    end
 end)
 
 exports('GetSummary', summarize)
 exports('RunDiag', diagLines)
+
+-- The required-table map, so palm6_devtest (and anything else) reads the ONE
+-- authority instead of keeping a second copy that drifts.
+exports('GetRequiredTables', function() return RequiredTables end)
+
+-- Last schema-check result, or nil if it has not run. Read-only snapshot.
+exports('GetSchemaReport', function() return SchemaReport end)
+
+-- Re-run the check on demand (used by palm6_devtest so its run reflects the
+-- state at test time rather than at boot). Read-only, cheap, one SELECT, and
+-- read-only in the other sense too: it returns a FRESH snapshot and does NOT
+-- overwrite the cached boot report, so running the devtest suite cannot change
+-- what /diag says for the rest of the boot. Honours Config.SchemaCheck: an
+-- operator who turned the check off gets no query, and the returned report says
+-- why rather than pretending everything passed.
+exports('CheckSchema', function()
+    if not Config.SchemaCheck then
+        return { checked = 0, missing = {}, missingCount = 0, ok = false,
+            err = 'schema check disabled (Config.SchemaCheck = false)' }
+    end
+    return runSchemaCheck(false)
+end)

@@ -19,6 +19,13 @@ Config.PostingLifetimeMinutes = 30
 -- Maximum simultaneous postings per player. Prevents spam.
 Config.MaxPostingsPerPlayer = 3
 
+-- Enables `/courier cancel <id>` (cancel your own OPEN posting, escrow
+-- refunded). false = current behaviour: the cancel path exists in
+-- server/main.lua but nothing reaches it, so postings only ever clear on the
+-- Config.PostingLifetimeMinutes sweep. The refund logic itself is unchanged
+-- either way; this flag only decides whether players can trigger it.
+Config.EnableCancelCommand = false
+
 -- Distance in metres at which a delivery is considered completed when
 -- the courier arrives at the dropoff. Client-side detection uses this
 -- directly; the server re-checks it against its OWN read of the courier's

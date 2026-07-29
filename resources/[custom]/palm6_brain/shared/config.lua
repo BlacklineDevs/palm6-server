@@ -27,6 +27,20 @@ Config.Enabled = true
 -- Debug: print each scene spawn/despawn to the client console.
 Config.Debug = false
 
+-- LLM CALL METER + BACKOFF (server/main.lua `BrainMeter`, read by every GLM call
+-- site). Counters are ALWAYS on and surface in /brainstatus; the backoff is what
+-- stops a dead/revoked/rate-limited GLM key being POSTed to every 60s forever.
+--   BackoffAfter   = consecutive TRANSPORT failures before a lane pauses. Set 0 to
+--                    disable the pause and keep only the counters. Only a non-200 /
+--                    nil-body counts here: a 200 that carried an empty or unparseable
+--                    answer is metered as `wasted` and deliberately does NOT count,
+--                    because the 'dialogue' lane is shared by every ped in the city
+--                    and is reachable from a player-triggered event.
+--   BackoffSeconds = how long a paused lane stays paused. A single success clears
+--                    it early and logs the recovery.
+-- BackoffSeconds is math.floor'd on ingest (it is printed with %d).
+Config.LlmMeter = { BackoffAfter = 3, BackoffSeconds = 300 }
+
 -- Distances (metres) from the player to a scene's anchor. Despawn > Spawn gives a
 -- hysteresis band so peds don't flicker in/out at the boundary as you walk the edge.
 Config.SpawnDist   = 90.0
@@ -382,4 +396,144 @@ Config.Social = {
 
     -- TALK-TO-ANY-PED — interaction distance for the "talk" prompt on any ped.
     TalkRange = 2.5,
+
+    -- CRIME REPORT TRUST BOUND - how far a client-claimed crime position may sit
+    -- from where the SERVER says the reporting player actually is before the report
+    -- is REJECTED (server/crimewatch.lua re-derives the position; it never rewrites
+    -- the claim). The client only reports crimes within its own NEAR_CRIME bound of
+    -- 45.0m (client/crimewatch.lua), so 50.0 leaves ~5m over that bound. That 5m is
+    -- slack for SERVER-POSITION LAG, not for distance error: the client already
+    -- measured the distance itself and passed, but the server re-reads the reporter's
+    -- ped a round trip later. It is ample for the common case (knifing a ped a few
+    -- metres away leaves ~48m of headroom) and it can pinch on the far edge of the
+    -- 45m bound while the reporter is moving fast - a drive-by at 40 m/s covers 5m in
+    -- ~125ms, so a legitimate long-range report CAN be dropped. Rejections are
+    -- counted and printed in /brainstatus, so that shows up instead of vanishing.
+    -- Raising this widens the forged-blip window; lowering it drops more real reports.
+    CrimeClaimMaxM = 50.0,
+
+    -- CRIME SCAN CADENCE (client/crimewatch.lua) - the detector walks the ped pool
+    -- on a timer. ScanMs is the "hot" cadence used while the player is shooting, in
+    -- melee, or has just been detected committing something; IdleMs is the cheaper
+    -- cadence used the rest of the time. Detection is never MISSED by the slower
+    -- cadence (the engine's damage flag persists until we clear it), only delayed by
+    -- at most IdleMs. Set IdleMs = ScanMs to restore the old fixed 500ms cadence.
+    CrimeScanMs = 500, CrimeScanIdleMs = 1000,
+}
+
+-- ===========================================================================
+-- POLICE RECORD BUS - are brain's dispatches real 911s, or just blips?
+--
+-- THE GAP THIS CLOSES. Bridge.AlertPolice is a PRIVATE fan-out: it pushes a blip
+-- + notify straight to on-duty officers over the palm6_brain:dispatch client
+-- event, and it never touches police:server:policeAlert, the shared 911 bus that
+-- palm6_mdt (the /calls log) and palm6_witnesses (incidents) listen on. So today,
+-- with this resource LIVE, an AI-Director crime or a snitch report is a blip on an
+-- officer's map and nothing else: no /calls row, no incident, no trace once the
+-- blip expires. "The 911 log" is not the 911 log.
+--
+-- WHILE Enabled = false NOTHING CHANGES. The private fan-out is untouched either
+-- way; this flag only decides whether the dispatch is ALSO put on the record.
+--
+-- ONE ASSUMPTION UNDERPINS THE SUSPECT PATH, NAMED HERE BEFORE THE BULLETS THAT
+-- REST ON IT. Every consumer below decides what to do by testing `source` inside
+-- the handler against the repo's shared server-raise predicate: a raise from
+-- inside the server VM surfaces as nil, <= 0, or 65535, never a real player id
+-- (palm6_eventguard/server/main.lua guard(); palm6_mdt/bridge/sv_framework.lua,
+-- grep `local fromNet`; palm6_witnesses/server/main.lua, grep `local
+-- isServerCall`). That predicate is a CONVENTION OF THIS TREE, not something
+-- this tree can prove: qbx_core and qbx_police live on the game box.
+--
+-- The evidence for it, and why palm6_brain is not the file that has to settle it:
+-- SEVEN in-repo resources already raise this event in the byte-identical shape
+-- palm6_brain uses - TriggerEvent('police:server:policeAlert', text, nil, src)
+-- out of their own bridge/sv_framework.lua (business, counterfeit, drugs,
+-- laundering, protection, smuggling, and palm6_witnesses itself; grep the event
+-- name). Those ship live today, and palm6_witnesses' heat-suppression branch is
+-- built on the predicate holding for exactly them. palm6_brain's raise is an
+-- EIGHTH caller of an existing convention, not a new one, and it inherits
+-- whatever the other seven already do in production - including the yielding
+-- insert, which is why bridge/sv_framework.lua's recordDispatch routes from a
+-- detached CreateThread. palm6_onboarding/bridge/sv_framework.lua refuses to
+-- assert the same predicate for QBCore:Server:OnPlayerLoaded, and that is not a
+-- contradiction: that event is raised by qbx_core, which is not in this tree and
+-- has zero in-repo precedent, whereas this one is raised BY this tree seven times
+-- over. Same predicate, different amounts of evidence, so different confidence.
+--
+-- WHAT Enabled = true DOES, per path (each claim checked against the consumer as
+-- it stands in this tree today, ASSUMING the predicate above holds):
+--
+--   SUSPECT PATH - a dispatch that names a real, still-connected player (the
+--   snitch path: a ped saw a player commit a crime).
+--     • palm6_mdt writes a palm6_mdt_calls row stamped `citizen <cid>` with NO
+--       `(unverified)` suffix, because a server-side raise is trusted provenance.
+--       Its coords come from the SUSPECT'S live ped at raise time, not from the
+--       coords passed to Bridge.AlertPolice.
+--     • palm6_witnesses opens a witness incident against that player: NPC
+--       witnesses are seeded and the incident persists. THIS IS THE LIVE
+--       GAMEPLAY CHANGE - a player enters the witness system because of
+--       something an NPC "perceived".
+--     • palm6_heat scores NOTHING. A server-side raise sets that resource's
+--       `emitterOwnsHeat`, which suppresses the charge on the assumption the
+--       emitting resource owns its own AddHeat wire. palm6_brain deliberately
+--       does not add one: letting AI perception move a player's durable heat is
+--       its own decision, not a side effect of this flag.
+--     • palm6_eventguard does not budget it. Its 40/60s police:server:policeAlert
+--       budget counts CLIENT raises only; this is a server raise, which its
+--       guard() returns early on (grep `server-emitted`).
+--     • qbx_police is expected to render its own 911 notify for it, so officers
+--       would get the brain blip AND the qbx ping for one event. Two pings, one
+--       crime. UNVERIFIED FROM THIS REPO: qbx_police lives on the game box, not
+--       here, so confirm the double ping in-game before deciding it is fine.
+--
+--   IF THE PREDICATE DOES NOT HOLD - i.e. `source` is inherited from the calling
+--   chain rather than reset, so the snitch path's raise carries the reporting
+--   client's id - three of those five bullets invert, and they invert for the
+--   other seven raisers at the same time:
+--     • palm6_mdt sees fromNet = true, stamps the row `(unverified)`, and drops
+--       it outright if its Config.Calls.RequireServerProvenance is on.
+--     • palm6_witnesses sees isServerCall = false, so emitterOwnsHeat is false
+--       and palm6_heat IS charged.
+--     • palm6_eventguard sees a real player id, so brain's dispatches count
+--       against that player's own 40/60s police:server:policeAlert drop_only
+--       budget and can CancelEvent() a subsequent real 911 from them.
+--   THE ONE-LINE EXPERIMENT THAT SETTLES IT: print(tonumber(source)) at the top
+--   of palm6_mdt's police:server:policeAlert handler, then trigger any drug sale
+--   (palm6_drugs raises it exactly like this). Do that before flipping this flag
+--   if the inverted column matters to you.
+--
+--   NO-SUSPECT PATH - an AI-Director crime (an NPC did it; there is no player to
+--   attribute it to), or a suspect who has since disconnected. That bus cannot
+--   carry it: police:server:policeAlert derives everything from a player source.
+--   These go to exports.palm6_mdt:LogCall instead - the additive 911-log entry
+--   palm6_tips already uses - so they show up in /calls and touch no player, no
+--   incident and no heat.
+--   WHERE THOSE COORDS COME FROM DIFFERS BY CALLER, and the difference matters
+--   because this row is DURABLE where the blip was ephemeral:
+--     • AI-Director crime: server-authored. director.lua reads sceneCoordSv,
+--       built from Config.Scenes in this file. Nothing client-supplied.
+--     • Disconnected-suspect fallback (snitch path): the CLIENT'S CLAIMED crime
+--       position, passed through by server/crimewatch.lua, which deliberately
+--       rejects rather than rewrites a bad claim. It is bounded, not trusted:
+--       the claim must be within CrimeClaimMaxM (50m default) of the reporter's
+--       SERVER-derived ped position. So a player can nudge a /calls row up to
+--       50m off, and unlike the blip it does not expire. Bounded and logged, but
+--       do not read the row as a server-surveyed position.
+--
+-- DEFAULT OFF because the witness-incident half is a live gameplay change nobody
+-- asked for. /brainstatus prints the routing counters in BOTH states, so you can
+-- see how many dispatches a flip WOULD ATTEMPT. Attempted, not recorded: each
+-- sink has its own gates after this point (palm6_mdt Config.Calls.Enabled /
+-- RequireServerProvenance / PerSourceCdSec; palm6_witnesses' per-source rate
+-- limit, IncidentCooldownSec and MinWitnesses), so the counter is an upper bound
+-- on the rows a flip would produce, not a preview of them.
+-- ===========================================================================
+Config.PoliceBus = {
+    -- false = dispatches stay private blips (current, shipped behaviour).
+    Enabled = false,
+
+    -- src_label written on the LogCall rows for the no-suspect path, so an
+    -- officer reading /calls can tell an AI dispatch from a real one. The column
+    -- is VARCHAR(64) in palm6_mdt; keep it short.
+    CallLabel = 'palm6_brain (AI dispatch)',
 }

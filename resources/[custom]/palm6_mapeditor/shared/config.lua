@@ -20,6 +20,10 @@ Config.LiveMaxProps   = 6000        -- max total props a single live map may hol
 Config.LiveMaxHides   = 2000        -- max total persisted world-erases (all maps)
 Config.LiveMaxLights  = 256         -- max total persisted live lights (all maps)
 Config.LiveLightDist  = 120.0       -- only draw a live light within this many m of you
+-- Snapshots/revisions: keep only the newest N per map. Every /maprestore also
+-- writes a "before restore" snapshot, so without a bound the LONGTEXT blobs grow
+-- forever. Set to 0 to disable pruning entirely (unbounded, the old behaviour).
+Config.RevisionsPerMap = 20
 
 -- Prefabs: named, reusable groups of props (a furnished room, a checkpoint…)
 -- saved relative to their centre so they can be stamped anywhere at any angle.
@@ -28,7 +32,33 @@ Config.PrefabMaxCount = 200         -- max saved prefabs
 
 -- Scene entities (peds / vehicles) — placed live, persisted, synced to all.
 Config.EntityMax      = 1500        -- max total persisted scene entities
-Config.EntityDrawDist = 300.0       -- (reserved) cull distance if needed later
+
+-- Leave a scene ped with an ambient scenario UNFROZEN (bridge/cl_game.lua).
+-- Scene peds have always been frozen, which pins them to their placed coords but
+-- also blocks the small reposition the sit/lie scenarios (SEAT_LEDGE, SUNBATHE)
+-- ask for. Ships OFF because unfreezing changes what every player sees: the ped
+-- becomes subject to gravity and to player/vehicle collision, so it can be shoved
+-- off its post or fall through a custom floor that has not streamed in, while the
+-- outliner, /matentdel and the map export keep using its authored DB coords.
+-- Flip it on only after looking at a map of scenario peds in-game.
+Config.ScenePedScenarioUnfreeze = false
+
+-- Live-prop distance ring (client/live.lua). With this OFF the client spawns
+-- EVERY live prop of EVERY map, so a map at the LiveMaxProps cap is 6000
+-- permanent client objects for every player, not just admins. Turning it on
+-- spawns only what is near you and despawns the rest.
+--
+-- Ships OFF because it changes what every player sees (props appear/disappear
+-- around you) and pop-in is only judgeable in-game. Flip it on after walking a
+-- large map. It culls PROPS ONLY: scene peds/vehicles are untouched, and the
+-- outliner, the Performance panel and the map export still see the whole map.
+Config.LiveCull        = false
+Config.EntityDrawDist  = 300.0      -- ring radius (m): a prop this close is spawned
+Config.LiveCullPad     = 60.0       -- extra m before a spawned prop is culled again
+                                    -- (hysteresis, stops flicker on the boundary)
+Config.LiveCullTickMs  = 750        -- how often the ring is re-evaluated
+Config.LiveCullPerTick = 25         -- max props spawned per tick, so a teleport
+                                    -- across the map cannot hitch the frame
 
 -- Nudge steps (fine value used while Shift is held).
 Config.Step = {

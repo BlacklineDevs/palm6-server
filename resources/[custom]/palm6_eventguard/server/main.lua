@@ -10,6 +10,54 @@
 local Counts     = {}  -- [eventName][src] = { calls = {ts...}, breaches = 0 }
 local Violations = {}  -- [src] = total breaches this session
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same pattern as palm6_courier/palm6_mdt/
+-- palm6_ems: Wait(3000) for oxmysql on a thread, per-statement pcall, CREATE
+-- TABLE IF NOT EXISTS. sql/ files are applied BY HAND (deploy/README.md) and CI
+-- never touches the DB, so a restored backup or a fresh box can boot without
+-- event_violations. record()'s INSERT is pcall-wrapped, so that loss is SILENT:
+-- the guard still drops and kicks, but the forensics trail is simply gone with
+-- nothing in the console to say so. Re-running is a harmless no-op on the live
+-- box, which already has the table.
+--
+-- The statement is copied VERBATIM from sql/0008_security_events.sql (only the
+-- trailing semicolon dropped, since this is one MySQL.query call) so the two
+-- can never diverge. Do NOT hand-edit it: a divergence is invisible in
+-- production and only detonates on the fresh box this exists to protect.
+--
+-- There are no additive ALTERs for this table, so nothing is excluded from
+-- SchemaReady here.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `event_violations` (
+    `id`         INT AUTO_INCREMENT PRIMARY KEY,
+    `player_src` INT NOT NULL,
+    `identifier` VARCHAR(100) DEFAULT NULL,
+    `event_name` VARCHAR(100) NOT NULL,
+    `reason`     VARCHAR(255) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    KEY `idx_event_time` (`event_name`, `created_at`),
+    KEY `idx_identifier` (`identifier`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_eventguard] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function bucket(eventName, src)
@@ -61,8 +109,29 @@ end
 -- Wrap one event with the ratelimit. Returns the wrapper handler.
 local function guard(eventName, budget)
     AddEventHandler(eventName, function(...)
-        local src = source
-        if not src or src == 0 then return end  -- skip server-emitted
+        -- SERVER-RAISE PREDICATE. This is the repo's shared test, not a local
+        -- invention: a raise from inside the server VM surfaces as nil, <= 0,
+        -- OR 65535 - never a real player id. The two other consumers of
+        -- police:server:policeAlert reasoned this out independently and now
+        -- share it verbatim. Cited by SYMBOL, not by line number, because line
+        -- numbers in those files have already drifted twice:
+        --   palm6_mdt/bridge/sv_framework.lua, inside Bridge.OnPoliceAlert
+        --     (grep `local fromNet`)
+        --   palm6_witnesses/server/main.lua, inside its
+        --     police:server:policeAlert handler (grep `local isServerCall`)
+        -- Both read `tonumber(source)` and test `== nil or <= 0 or == 65535`.
+        -- Keep all three identical; two consumers of one event must not
+        -- disagree about what its source means.
+        --
+        -- The old test here was `src == 0` only. That missed 65535 and missed
+        -- negatives, so a SERVER-side TriggerEvent that surfaced as 65535 got
+        -- bucketed under a phantom src, counted against a client budget, and on
+        -- the (budget+1)-th raise hit CancelEvent() - killing a REAL event for
+        -- every handler registered after this one - then record()'d violations
+        -- and eventually called Bridge.Kick(65535, ...). This predicate is the
+        -- root protection for EVERY budget in config.lua, not just the 911 one.
+        local src = tonumber(source)
+        if src == nil or src <= 0 or src == 65535 then return end  -- server-emitted
         local b = bucket(eventName, src)
         prune(b, budget.window_seconds)
         if #b.calls >= budget.calls then
@@ -77,15 +146,22 @@ local function guard(eventName, budget)
             -- the combat branch, which cancelled before returning, worked).
             -- Dropping is load-bearing; logging is best-effort. Order matters.
             CancelEvent()
-            -- Combat-class budget (fc striking/finisher mash): DROP the
-            -- over-budget event but NEVER call record() — no violation row,
-            -- no Violations[src]++ , no 3-strike kick. A legit flurry of
-            -- palm6_fc_combat:strike/connect/block/break can burst past the
-            -- budget; the server move-clock (palm6_fc_combat) — not eventguard
-            -- — is the combat authority, and the §7 finisher :break mash would
-            -- trip the kick model instantly. Money/menu events keep the
-            -- strike-and-kick model via record() below.
-            if budget.class == 'combat' then return end
+            -- DROP-WITHOUT-KICK budgets: drop the over-budget event but NEVER
+            -- call record(): no violation row, no Violations[src]++ , no
+            -- 3-strike kick. Two spellings, one behaviour:
+            --   'combat'    - the original fc striking/finisher case. A legit
+            --                 flurry of palm6_fc_combat:strike/connect/block/
+            --                 break can burst past the budget; the server
+            --                 move-clock (palm6_fc_combat), not eventguard, is
+            --                 the combat authority, and the §7 finisher :break
+            --                 mash would trip the kick model instantly.
+            --   'drop_only' - the same branch for events that have nothing to
+            --                 do with fighting (racing checkpoints, 911
+            --                 alerts). Added because 'combat' was being used as
+            --                 a de-facto alias on non-combat events, which read
+            --                 as a miscategorisation to the next reader.
+            -- Money/menu events keep the strike-and-kick model via record().
+            if budget.class == 'combat' or budget.class == 'drop_only' then return end
             record(src, eventName, ('over budget %d/%ds'):format(
                 budget.calls, budget.window_seconds))
             return
@@ -102,10 +178,75 @@ end
 -- many times the event fires.
 local guardsRegistered = false
 
+-- Every budget in config.lua is only real because this resource registers its
+-- handler BEFORE the owning resource registers its own - custom.cfg ensures
+-- palm6_eventguard at the top of the list for exactly that reason. FiveM appends
+-- handlers to a chain in registration order and CancelEvent() only stops
+-- handlers that have not run yet, so a guard added at the END of a chain can
+-- never drop anything: the real handler already ran.
+--
+-- That means a lone `restart palm6_eventguard` on a live box silently converts
+-- every budget in this file into a no-op, while the boot banner below still
+-- cheerfully prints "guarding N events". Detect it and say so in red. We infer
+-- it from the guarded event names: 'palm6_drugs:sell' belongs to palm6_drugs,
+-- so if palm6_drugs is ALREADY 'started' when we boot, we are not first in its
+-- chain.
+--
+-- ONLY palm6_* prefixes count toward the alarm, and that restriction is
+-- load-bearing rather than cosmetic. ASSUMPTION, not a verified fact from this
+-- repo: custom.cfg execs from the BOTTOM of the panel-generated server.cfg.
+-- server.cfg is panel-managed and is NOT in this tree, so nothing here can
+-- prove it; if the panel is ever reordered to exec custom.cfg first, revisit
+-- this whole block. On the assumed ordering the recipe's own resources
+-- (ox_inventory, and the qbx_police resources behind the 'police:' and
+-- 'evidence:' event namespaces) are ALREADY started before this resource exists.
+-- Counting those would fire the red banner on every clean start and train
+-- whoever reads the console to ignore it, which would cost more than it buys.
+-- Every palm6_* consumer, by contrast, is ensured by custom.cfg strictly AFTER
+-- palm6_eventguard, so on a clean boot this returns an empty list and prints
+-- nothing, and a non-empty list is real evidence of an out-of-order restart.
+--
+-- KNOWN AND ACCEPTED, documented here so nobody rediscovers it as a bug: the
+-- ox_inventory / police / evidence budgets cannot drop anything for the RECIPE's
+-- own handlers on a normal boot, for the same ordering reason, and no ensure
+-- order inside custom.cfg can fix that because those resources start before
+-- custom.cfg is even read. Against those handlers they are defense-in-depth on
+-- top of the resources' own validation, not the authority.
+--
+-- DO NOT generalise that into "those budgets are inert", which is what an
+-- earlier version of this comment said and which is false. A non-palm6_* event
+-- name can still have palm6_* consumers, and THOSE are ensured after this
+-- resource, so the guard IS first in the chain ahead of them and its
+-- CancelEvent() does bite. police:server:policeAlert is exactly that case:
+-- palm6_witnesses (custom.cfg:146) and palm6_mdt (custom.cfg:179) both register
+-- handlers on it and both start after palm6_eventguard (custom.cfg:112). Read
+-- the sizing note on that entry in config.lua before touching it.
+--
+-- Prefixes that are not resource names at all just resolve to a non-'started'
+-- state and are skipped. This is a console warning only - zero runtime effect.
+local function lateChainConsumers()
+    local seen, late = {}, {}
+    for name in pairs(Config.Events) do
+        local res = name:match('^([^:]+)')
+        if res and not seen[res] then
+            seen[res] = true
+            if res ~= GetCurrentResourceName()
+                and res:sub(1, 6) == 'palm6_'
+                and GetResourceState(res) == 'started' then
+                late[#late + 1] = res
+            end
+        end
+    end
+    table.sort(late)
+    return late
+end
+
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     if guardsRegistered then return end
     guardsRegistered = true
+
+    local late = lateChainConsumers()
 
     local n = 0
     for name, budget in pairs(Config.Events) do
@@ -114,6 +255,26 @@ AddEventHandler('onResourceStart', function(resource)
     end
     print(('[palm6_eventguard] guarding %d events; kick threshold=%d'):format(
         n, Config.KickThreshold or 3))
+
+    if #late > 0 then
+        print(('^1[palm6_eventguard] RESTARTED after consumers - guards are NOT first in the chain; budgets are INERT until a full server restart^0'))
+        print(('^1[palm6_eventguard] %d guarded resource(s) were already started: %s^0'):format(
+            #late, table.concat(late, ', ')))
+    end
+
+    -- Schema lands on its OWN thread so the 3s oxmysql wait can never delay
+    -- guard registration above. Registration order is the whole reason this
+    -- resource works (see the lateChainConsumers note), so nothing that drops
+    -- events may sit behind a yield. Nothing in the guard/kick path reads the
+    -- DB, so there is no in-memory state to gate on this thread completing:
+    -- the only consumer is record()'s forensics INSERT, which is already
+    -- pcall-guarded and best-effort by design.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        print(('[palm6_eventguard] schema %s'):format(
+            SchemaReady and 'OK' or '^1MISSING^0'))
+    end)
 end)
 
 AddEventHandler('playerDropped', function()

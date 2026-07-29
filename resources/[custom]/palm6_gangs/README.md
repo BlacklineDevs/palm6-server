@@ -56,8 +56,11 @@ the authoritative source of truth for player-run gangs.
 
 ## Net events (all `palm6_eventguard`-rate-limited)
 
-`requestMenu`, `create`, `disband`, `invite`, `acceptInvite`, `declineInvite`,
+`create`, `disband`, `invite`, `acceptInvite`, `declineInvite`,
 `leave`, `kick`, `promote`, `demote`, `deposit`, `withdraw`.
+
+There is no `requestMenu` net event: the menu is opened by the `/gang` command,
+which calls `pushMenu` server-side.
 
 ## Command
 

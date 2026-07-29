@@ -7,9 +7,12 @@ not a free pass.
 
 ## Player surface
 
-- `/cite [citizenid] [amount] [reason]` — police + `mdt_tablet`. Writes
-  the citation against server-validated citizen records ($25-5000,
-  72h due window); the cited player is told immediately if online.
+- `/cite [citizenid or server id] [amount] [reason]` — police + `mdt_tablet`.
+  Writes the citation against server-validated citizen records ($25-5000,
+  72h due window); the cited player is told immediately if online. Takes
+  **either** a citizenid (unchanged) or the online server id `palm6_mdt`'s
+  `/id` prints, resolved through that resource's `ResolveTarget` export
+  (soft: with `palm6_mdt` stopped, the citizenid path still works).
 - `/fines` — anyone; your own open citations with time left and total
   owed. Overdue-escalated rows read `OVERDUE — WARRANT OUT`.
 - `/payfine [#]` — at the city hall desk (server-checked position),

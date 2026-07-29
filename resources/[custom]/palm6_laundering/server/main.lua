@@ -13,10 +13,60 @@
 -- ============================================================================
 
 local lastAction = {}   -- [src] = ts of last /launder (spam guard)
-AddEventHandler('playerDropped', function() lastAction[source] = nil end)  -- reclaim on disconnect
+local lastQuote  = {}   -- [src] = ts of last /dirtymoney (spam guard)
+AddEventHandler('playerDropped', function()  -- reclaim on disconnect
+    lastAction[source] = nil
+    lastQuote[source] = nil
+end)
 local frontHeat = 0.0   -- single-front heat accumulator (server-only, decays)
 
 math.randomseed(os.time())
+
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier and palm6_ems:
+-- Wait-for-oxmysql on the caller's thread, per-statement pcall, IF NOT EXISTS
+-- so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_laundering_runs at all. The failure is SILENT and it costs players
+-- money twice over: dirtyWashedToday() is pcall'd and returns 0, so the daily
+-- ceiling stops existing, and the run INSERT is pcall'd too, so the wash is
+-- never recorded. On the live box this statement is a pure no-op.
+--
+-- The DDL is copied VERBATIM from sql/0033_laundering.sql. There are no
+-- additive ALTERs for this table.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_laundering_runs` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    dirty_in INT UNSIGNED NOT NULL,
+    clean_out INT UNSIGNED NOT NULL,
+    fee_bps SMALLINT UNSIGNED NOT NULL,
+    flagged TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_laundering_citizen_day (citizenid, created_at)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_laundering] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
 
 local function now() return os.time() end
 
@@ -59,6 +109,43 @@ local function assessHeat(amount)
         if math.random() < chance then return true end
     end
     return false
+end
+
+-- Persistent-heat scrutiny at the front. Returns (extraCut, tier, refuse) for
+-- the character. The front reads palm6_heat's frozen GetTier export and skims
+-- harder off a citizen the whole city is already looking for. Soft-dep + pcall:
+-- a stopped or throwing palm6_heat leaves the flat Config.Cut untouched, so the
+-- wash can never break because the heat layer is down.
+local function heatScrutiny(cid)
+    if not Config.HeatScrutiny.Enabled then return 0.0, nil, false end
+    if GetResourceState('palm6_heat') ~= 'started' then return 0.0, nil, false end
+    local tier
+    pcall(function() tier = exports.palm6_heat:GetTier(cid) end)
+    if type(tier) ~= 'string' then return 0.0, nil, false end
+    if Config.HeatScrutiny.Refuse[tier] then return 0.0, tier, true end
+    return tonumber(Config.HeatScrutiny.ExtraCut[tier]) or 0.0, tier, false
+end
+
+-- Persistent police attention this run earns its launderer, amount-proportional
+-- (see Config.PlayerHeat for why flat-per-run was the wrong shape).
+--
+-- EVERY key is read guarded (tonumber(...) or a default, Base included) so the
+-- documented reversal to the old FLAT charge is genuinely config-only:
+-- PerThousand = 0 (or absent) makes this return exactly Base, and an absent
+-- MaxPerRun means "no cap". An absent Base falls back to 0, which charges
+-- nothing rather than erroring, so a table must still set one. That matters
+-- because the pre-reshape table was literally `{ Base = 5, FlaggedBonus = 8 }`,
+-- and the obvious way to revert is to paste it back. Reading the missing keys
+-- unguarded would throw inside the caller's pcall, which does not surface an
+-- error, it just silently stops charging heat at all.
+local function playerHeatFor(amount, flagged)
+    local H = Config.PlayerHeat
+    local h = math.floor((tonumber(H.Base) or 0)
+        + (amount / 1000.0) * (tonumber(H.PerThousand) or 0))
+    local cap = tonumber(H.MaxPerRun)
+    if cap and h > cap then h = cap end
+    if flagged then h = h + (tonumber(H.FlaggedBonus) or 0) end
+    return h
 end
 
 -- Open/append an evidence case for a flagged run. Returns the case id or nil.
@@ -112,6 +199,16 @@ local function cmdLaunder(src)
         return
     end
 
+    -- How hot the launderer already is decides what the front charges them (or
+    -- whether it deals with them at all). Read BEFORE any item is removed so a
+    -- refusal costs the player nothing but the cooldown they already burned.
+    local extraCut, heatTier, refused = heatScrutiny(cid)
+    if refused then
+        Bridge.Notify(src, 'Laundromat',
+            'The front knows your face from the news. They want nothing to do with you.', 'error')
+        return
+    end
+
     local held = Bridge.CountItem(src, Config.DirtyItem)
     if held <= 0 then
         Bridge.Notify(src, 'Laundromat', 'You have no dirty money to wash.', 'error')
@@ -137,7 +234,11 @@ local function cmdLaunder(src)
         return
     end
 
-    local cleanOut = math.floor(amount * (1.0 - Config.Cut))
+    -- Total skim = the standing fee plus whatever the heat surcharge added.
+    -- Clamped so a wash always pays out something, and recorded in the run row
+    -- below (fee_bps) so the ledger reflects what was actually charged.
+    local cut = math.min(0.90, Config.Cut + extraCut)
+    local cleanOut = math.floor(amount * (1.0 - cut))
     if not Bridge.CreditBank(src, cleanOut, 'laundering') then
         -- Credit failed after we pulled the cash — hand it straight back so
         -- the player is never charged for a wash they didn't receive.
@@ -158,25 +259,30 @@ local function cmdLaunder(src)
             [[INSERT INTO palm6_laundering_runs
                 (citizenid, dirty_in, clean_out, fee_bps, flagged, evidence_case_id)
               VALUES (?, ?, ?, ?, ?, ?)]],
-            { cid, amount, cleanOut, math.floor(Config.Cut * 10000 + 0.5), flagged and 1 or 0, caseId })
+            { cid, amount, cleanOut, math.floor(cut * 10000 + 0.5), flagged and 1 or 0, caseId })
     end)
 
     Bridge.Notify(src, 'Laundromat',
-        ('Washed $%d — $%d landed clean in your account.'):format(amount, cleanOut), 'success')
+        (extraCut > 0.0)
+            and ('Washed $%d for $%d clean. The front skimmed extra; you are too hot to be worth the risk.')
+                :format(amount, cleanOut)
+            or ('Washed $%d — $%d landed clean in your account.'):format(amount, cleanOut),
+        (extraCut > 0.0) and 'warning' or 'success')
 
-    -- Persistent police attention: moving dirty money is a crime, and a run the
-    -- law flagged (police alerted + evidence filed) bumps the launderer harder
-    -- than a quiet wash. Keyed to the character (cid) so it follows them after
-    -- they log. Soft-dep + pcall — a stopped palm6_heat never touches the wash.
+    -- Persistent police attention: moving dirty money is a crime, the SIZE of
+    -- the wash is what makes it loud, and a run the law flagged (police alerted
+    -- + evidence filed) bumps the launderer harder still. Keyed to the character
+    -- (cid) so it follows them after they log. Fires only after the item pull +
+    -- bank credit above committed. Soft-dep + pcall: a stopped palm6_heat never
+    -- touches the wash.
     if GetResourceState('palm6_heat') == 'started' then
         pcall(function()
-            exports.palm6_heat:AddHeat(cid,
-                Config.PlayerHeat.Base + (flagged and Config.PlayerHeat.FlaggedBonus or 0),
-                'launder')
+            exports.palm6_heat:AddHeat(cid, playerHeatFor(amount, flagged), 'launder')
         end)
     end
 
-    dbg(('%s washed $%d -> $%d clean (flagged=%s, heat=%.1f)'):format(cid, amount, cleanOut, tostring(flagged), frontHeat))
+    dbg(('%s washed $%d -> $%d clean (flagged=%s, tier=%s, cut=%.2f, heat=%.1f)'):format(
+        cid, amount, cleanOut, tostring(flagged), tostring(heatTier), cut, frontHeat))
 end
 
 -- ---------------------------------------------------------------------------
@@ -184,13 +290,51 @@ end
 -- ---------------------------------------------------------------------------
 local function cmdDirtyMoney(src)
     if src == 0 then return end
+    -- Read-only, but not free: this command now costs up to THREE DB round-trips
+    -- (the palm6_mdt warrant check, the dirtyWashedToday sum, and the palm6_heat
+    -- GetTier read, all below), and unlike /launder it has no Config.CooldownSec
+    -- behind it. Check-and-set before any yield, same idiom as cmdLaunder.
+    local t = now()
+    if (lastQuote[src] or 0) + Config.QuoteCooldownSec > t then return end
+    lastQuote[src] = t
+
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
     local held = Bridge.CountItem(src, Config.DirtyItem)
+    -- The door has TWO refusals and the quote has to honour both. This is the
+    -- one that actually fires today: Config.BlockWhileWanted ships true and
+    -- palm6_mdt is running, so a wanted character quoted 30% here would walk to
+    -- the machine and be turned away outright. Checked before the daily-sum read
+    -- so a refused quote costs one DB round-trip fewer. Same soft-dep as
+    -- /launder: no palm6_mdt, or the flag off, and this is a no-op.
+    if Config.BlockWhileWanted and Bridge.HasActiveWarrant(cid) then
+        Bridge.Notify(src, 'Dirty Money',
+            ("Holding $%d dirty · the front won't touch a wanted man's cash until you clear your warrant.")
+                :format(held), 'error')
+        return
+    end
     local remaining = math.max(0, Config.DailyCap - dirtyWashedToday(cid))
+    -- Quote the fee this character would ACTUALLY pay, surcharge included.
+    -- Otherwise a hot launderer reads 30% here and gets charged 40% at the
+    -- machine, which looks like a bug rather than a consequence. Same reason
+    -- BOTH door refusals are honoured here (the warrant one above, the tier one
+    -- just below): quoting a fee for a wash the front is going to turn away at
+    -- the door is a worse lie than quoting the wrong fee.
+    -- Config.HeatScrutiny.Refuse ships empty, so this branch is inert until an
+    -- operator fills it in; it exists so that filling it in cannot produce a
+    -- quote that contradicts /launder.
+    local extraCut, _, refused = heatScrutiny(cid)
+    if refused then
+        Bridge.Notify(src, 'Dirty Money',
+            ('Holding $%d dirty · the front knows your face from the news and wants nothing to do with you.')
+                :format(held), 'error')
+        return
+    end
+    local cut = math.min(0.90, Config.Cut + extraCut)
     Bridge.Notify(src, 'Dirty Money',
-        ('Holding $%d dirty · today you can still wash $%d · fee %d%%'):format(
-            held, remaining, math.floor(Config.Cut * 100 + 0.5)), 'inform')
+        ('Holding $%d dirty · today you can still wash $%d · fee %d%%%s'):format(
+            held, remaining, math.floor(cut * 100 + 0.5),
+            (extraCut > 0.0) and ' (the front is charging you extra)' or ''), 'inform')
 end
 
 -- ---------------------------------------------------------------------------
@@ -216,15 +360,32 @@ AddEventHandler('onResourceStart', function(resource)
             .. 'laundering disabled. Nothing to wash.^0'):format(Config.DirtyItem))
         return
     end
-    local runs, washed = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(dirty_in),0) AS s FROM palm6_laundering_runs')
-        runs = r and tonumber(r.c) or 0
-        washed = r and tonumber(r.s) or 0
+    -- Runs on its own thread because ensureSchema has to Wait for oxmysql's
+    -- connection before any query, and the totals below must not run before
+    -- the table is guaranteed to exist. Kept AFTER the dirty-item gate above
+    -- so a disabled laundromat still short-circuits exactly as it did before.
+    -- Nothing is cached at boot (frontHeat starts at 0 by design and every
+    -- read is per-command), so no command needs a bootReady gate.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- table is absent, which is otherwise completely silent: the daily
+        -- ceiling quietly stops applying and no wash is ever recorded.
+        if not SchemaReady then
+            print('^1[palm6_laundering] schema MISSING - the daily wash ceiling is NOT enforced on this box.^0')
+        end
+        local runs, washed = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(dirty_in),0) AS s FROM palm6_laundering_runs')
+            runs = r and tonumber(r.c) or 0
+            washed = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_laundering] laundromat open — $%d washed all-time across %d run(s); fee %d%%'):format(
+            washed, runs, math.floor(Config.Cut * 100 + 0.5)))
     end)
-    print(('[palm6_laundering] laundromat open — $%d washed all-time across %d run(s); fee %d%%'):format(
-        washed, runs, math.floor(Config.Cut * 100 + 0.5)))
 end)
 
 --- Totals for devtest and future consumers.

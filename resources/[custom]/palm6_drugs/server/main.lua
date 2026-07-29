@@ -30,8 +30,133 @@ local xpCache    = {}   -- [cid] = xp (bounded to online players)
 local last       = {}   -- [src] = { [key] = ts } per-player action cooldowns
 local dealerHeat = {}   -- [cid] = heat (server-only, decays)
 local booted     = false
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
 
 math.randomseed(os.time())
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with none of the
+-- palm6_drugs_* tables. Every query in this file is pcall-guarded, so that is
+-- not an error, it is SILENCE, and here silence EATS ITEMS: planting consumes
+-- the seed and soil before the INSERT, loading the rack consumes the buds before
+-- the process row, and the dealer is stocked before his row is written. With no
+-- table the inputs are gone and nothing is recorded, while the console prints a
+-- perfectly healthy "supply chain online" banner with a $0 total. On the live
+-- box these statements are pure no-ops.
+--
+-- The five statements are copied VERBATIM from sql/0039_drugs.sql (plants,
+-- recipes, progression, sales), sql/0040_drugs_drying.sql (processes) and
+-- sql/0042_drugs_dealers.sql (dealers), with the trailing `;` dropped so oxmysql
+-- sees a single statement each. There are no additive ALTERs for this resource.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_plants` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_cid VARCHAR(64) NOT NULL,
+    coord_x DOUBLE NOT NULL,
+    coord_y DOUBLE NOT NULL,
+    coord_z DOUBLE NOT NULL,
+    strain VARCHAR(32) NOT NULL,
+    soil_tier TINYINT UNSIGNED NOT NULL DEFAULT 2,
+    planted_at BIGINT UNSIGNED NOT NULL,
+    ready_at BIGINT UNSIGNED NOT NULL,
+    water_level TINYINT UNSIGNED NOT NULL DEFAULT 100,
+    watered_at BIGINT UNSIGNED NOT NULL,
+    additives JSON NULL,
+    neglected TINYINT(1) NOT NULL DEFAULT 0,
+    stage VARCHAR(16) NOT NULL DEFAULT 'growing',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_drugs_plants_owner (owner_cid),
+    INDEX idx_drugs_plants_plot (coord_x, coord_y, coord_z)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_recipes` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_cid VARCHAR(64) NOT NULL,
+    brand VARCHAR(48) NOT NULL,
+    base VARCHAR(32) NOT NULL,
+    steps_json JSON NULL,
+    effects_json JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_drugs_recipes_owner_brand (owner_cid, brand)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_progression` (
+    owner_cid VARCHAR(64) NOT NULL PRIMARY KEY,
+    xp INT UNSIGNED NOT NULL DEFAULT 0,
+    rank_tier INT UNSIGNED NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_sales` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    channel VARCHAR(16) NOT NULL DEFAULT 'npc',
+    brand VARCHAR(48) NULL,
+    base VARCHAR(32) NULL,
+    quality TINYINT UNSIGNED NOT NULL DEFAULT 2,
+    units INT UNSIGNED NOT NULL,
+    gross INT UNSIGNED NOT NULL,
+    cut_paid INT UNSIGNED NOT NULL DEFAULT 0,
+    net_dirty INT UNSIGNED NOT NULL,
+    region VARCHAR(48) NULL,
+    flagged TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_drugs_sales_citizen_day (citizenid, created_at)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_processes` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_cid VARCHAR(64) NOT NULL,
+    station_id INT UNSIGNED NOT NULL,
+    kind VARCHAR(16) NOT NULL DEFAULT 'dry',
+    input_json JSON NULL,
+    started_at BIGINT UNSIGNED NOT NULL,
+    finish_at BIGINT UNSIGNED NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'running',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_drugs_processes_slot (kind, station_id),
+    INDEX idx_drugs_processes_owner (owner_cid)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_drugs_dealers` (
+    owner_cid          VARCHAR(64) NOT NULL PRIMARY KEY,
+    hired_at           BIGINT UNSIGNED NOT NULL,
+    last_tick_at       BIGINT UNSIGNED NOT NULL,
+    stash_json         JSON NULL,
+    dirty_owed         INT UNSIGNED NOT NULL DEFAULT 0,
+    dirty_earned_total BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    day_key            VARCHAR(10) NOT NULL DEFAULT '',
+    day_dirty          INT UNSIGNED NOT NULL DEFAULT 0,
+    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_drugs] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
 
 local function now() return os.time() end
 
@@ -64,6 +189,49 @@ local function near(src, coords, radius)
     local c = Bridge.GetCoords(src)
     if not c or not coords then return false end
     return Bridge.Distance(c, coords) <= radius
+end
+
+-- ---------------------------------------------------------------------------
+-- Persistent police attention (palm6_heat). Distinct from `dealerHeat` above:
+-- dealerHeat is this resource's own transient corner-selling bust probability,
+-- this is the durable per-character score that drives /heat, the season
+-- Most-Wanted ladder and dispatch priority, and follows the dealer after they
+-- log. Weights mirror palm6_heat's Config.Suggested; they live here as named
+-- locals rather than in shared/config.lua so the numbers sit next to the wire
+-- and are never bare literals in a payout path.
+--
+-- ANTI-FARM: Config.Sell.cooldownSec is 8s, so an unthrottled wire would let a
+-- dealer with a full bag out-run palm6_heat's 0.75/min decay by ~20x and pin
+-- themselves to the cap off one harvest. HEAT_MIN_GAP caps this resource to one
+-- heat add per citizen per REASON per minute, so a long dealing session climbs
+-- steadily instead of instantly. The daily dirty-cash caps bound the session
+-- itself.
+-- ---------------------------------------------------------------------------
+local HEAT_ON_SELL = 3      -- palm6_heat Config.Suggested.drug_sale
+local HEAT_ON_COOK = 6      -- palm6_heat Config.Suggested.drug_lab
+local HEAT_MIN_GAP = 60     -- seconds between heat adds from this resource, per cid+reason
+-- Keyed cid..'|'..reason, NOT cid alone. One shared ledger would let the cheap
+-- action eat the expensive one's charge: a dealer who sells (3) and then
+-- collects a lab (6) inside the same minute would have scored 3 and had the 6
+-- silently swallowed, so the throttle would have been a discount on the heavier
+-- crime. Per-reason keeps the 8s sell cooldown from out-running decay (the
+-- reason this throttle exists) without letting a sale pay for a cook.
+local heatLast     = {}     -- [cid|reason] = ts of the last add (pruned on write)
+
+local function addPlayerHeat(cid, amount, reason)
+    if type(cid) ~= 'string' or cid == '' then return end
+    if GetResourceState('palm6_heat') ~= 'started' then return end
+    local t = now()
+    local key = cid .. '|' .. tostring(reason)
+    if (heatLast[key] or 0) + HEAT_MIN_GAP > t then return end
+    heatLast[key] = t
+    -- Bound the ledger: an entry older than the gap can no longer gate anything.
+    for k, ts in pairs(heatLast) do
+        if ts + HEAT_MIN_GAP < t then heatLast[k] = nil end
+    end
+    pcall(function()
+        exports.palm6_heat:AddHeat(cid, amount, reason)
+    end)
 end
 
 local function normQuality(q)
@@ -931,6 +1099,13 @@ RegisterNetEvent('palm6_drugs:sell', function(slot, item)
         msg = msg .. ' (Daily buyer limit hit — the rest keeps.)'
     end
     Bridge.Notify(src, Config.Sell.label, msg, flagged and 'warning' or 'success')
+
+    -- Persistent police attention: street dealing is a crime. Keyed to the
+    -- seller (cid) so it follows them after they log. Fires only after the
+    -- payout above committed. Soft-dep + pcall (inside addPlayerHeat): a
+    -- stopped palm6_heat never touches the sale path.
+    addPlayerHeat(cid, HEAT_ON_SELL, 'drug_sale')
+
     dbg(('%s sold %dx %s for $%d (flagged=%s)'):format(cid, units, item, total, tostring(flagged)))
 end)
 
@@ -1493,6 +1668,13 @@ RegisterNetEvent('palm6_drugs:cookCollect', function(stationId)
     Bridge.Notify(src, Config.Cook.label,
         ('Collected %dx crystal (%s)%s.'):format(
             yieldN, Config.QualityLabel(quality), (#effects > 0) and ' — came out dirty' or ''), 'success')
+
+    -- Persistent police attention: running a lab is a heavier crime than moving
+    -- a few grams. Keyed to the cook (cid). Fires only after the crystal was
+    -- actually handed over above. A "hands full" bail puts the process back and
+    -- returns before here, so a jammed collect scores nothing. Soft-dep + pcall.
+    addPlayerHeat(cid, HEAT_ON_COOK, 'drug_lab')
+
     dbg(('%s collected %dx meth (q%d) from burner %d'):format(cid, yieldN, quality, stationId))
 end)
 
@@ -1868,33 +2050,52 @@ AddEventHandler('onResourceStart', function(resource)
             :format(#missing, table.concat(missing, ', ')))
     end
 
-    -- A crash mid-harvest can strand a plant at 'harvested'; free those plots.
-    pcall(function()
-        MySQL.query.await("DELETE FROM palm6_drugs_plants WHERE stage = 'harvested'")
-    end)
+    -- Everything DB-shaped runs on this thread because ensureSchema has to Wait
+    -- for oxmysql's connection before it can issue any query, and neither the
+    -- stranded-row recovery nor the banner count may run before the tables are
+    -- guaranteed to exist. The item gates above stay synchronous, so
+    -- Config.Cook.enabled is settled before any player can reach the cook
+    -- station exactly as it was; nothing moved onto this thread populates an
+    -- in-memory cap or cache that a command reads.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
 
-    -- A crash mid-collect can strand a dry process at 'collecting'. The output
-    -- Heavenly buds may or may not have been handed back before the crash, and
-    -- the row state alone can't tell us — reverting to 'running' would let a
-    -- player who already received their buds collect a SECOND free Heavenly
-    -- stack (a high-value dirty-money dupe). Err toward loss instead of dupe:
-    -- delete the stranded rows, exactly as the harvest recovery above does.
-    pcall(function()
-        MySQL.query.await("DELETE FROM palm6_drugs_processes WHERE status = 'collecting'")
-    end)
+        -- A crash mid-harvest can strand a plant at 'harvested'; free those plots.
+        pcall(function()
+            MySQL.query.await("DELETE FROM palm6_drugs_plants WHERE stage = 'harvested'")
+        end)
 
-    booted = true
-    local sales, dirty = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(net_dirty),0) AS s FROM palm6_drugs_sales')
-        sales = r and tonumber(r.c) or 0
-        dirty = r and tonumber(r.s) or 0
+        -- A crash mid-collect can strand a dry process at 'collecting'. The output
+        -- Heavenly buds may or may not have been handed back before the crash, and
+        -- the row state alone can't tell us — reverting to 'running' would let a
+        -- player who already received their buds collect a SECOND free Heavenly
+        -- stack (a high-value dirty-money dupe). Err toward loss instead of dupe:
+        -- delete the stranded rows, exactly as the harvest recovery above does.
+        pcall(function()
+            MySQL.query.await("DELETE FROM palm6_drugs_processes WHERE status = 'collecting'")
+        end)
+
+        booted = true
+        local sales, dirty = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(net_dirty),0) AS s FROM palm6_drugs_sales')
+            sales = r and tonumber(r.c) or 0
+            dirty = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_drugs] supply chain online — %d grow plots, %d strains, %d additives, cook %s; '
+            .. '$%d dirty earned all-time across %d NPC sale(s)'):format(
+            #Config.Grow.plots, #Config.StrainOrder, #Config.AdditiveOrder,
+            Config.Cook.enabled and 'ON' or 'off', dirty, sales))
+        -- Said out loud so the banner above cannot be read as "quiet server":
+        -- with the tables absent every count reads 0 AND every plant/rack/dealer
+        -- interaction silently eats its inputs.
+        if not SchemaReady then
+            print('^1[palm6_drugs] schema MISSING - the whole supply chain is INERT on this box; '
+                .. 'do NOT let players plant, dry, cook or hire until this is fixed.^0')
+        end
     end)
-    print(('[palm6_drugs] supply chain online — %d grow plots, %d strains, %d additives, cook %s; '
-        .. '$%d dirty earned all-time across %d NPC sale(s)'):format(
-        #Config.Grow.plots, #Config.StrainOrder, #Config.AdditiveOrder,
-        Config.Cook.enabled and 'ON' or 'off', dirty, sales))
 end)
 
 --- Totals for devtest and future consumers.

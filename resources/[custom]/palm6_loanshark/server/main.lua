@@ -17,6 +17,55 @@ local borrowLock  = {}   -- [citizenid] = true while a borrow is in flight
 local repayLock   = {}   -- [citizenid] = true while a repay is in flight
 local enabled     = false
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no
+-- palm6_loanshark_loans at all. Every query in this file is pcall-wrapped, so a
+-- missing table is SILENT: /borrow answers "the shark isn't lending right now",
+-- /loaninfo answers "you owe the shark nothing", and the sweep defaults nobody.
+-- On the live box these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0036_loanshark.sql (trailing semicolon dropped,
+-- same as the other resources that carry their own DDL).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_loanshark_loans` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    principal INT UNSIGNED NOT NULL,
+    owed INT UNSIGNED NOT NULL,
+    repaid INT UNSIGNED NOT NULL DEFAULT 0,
+    status ENUM('open', 'repaid', 'defaulted') NOT NULL DEFAULT 'open',
+    warrant_id INT UNSIGNED NULL DEFAULT NULL,
+    borrowed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    due_at TIMESTAMP NOT NULL,
+    closed_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_loanshark_citizen_status (citizenid, status),
+    INDEX idx_palm6_loanshark_due (status, due_at)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_loanshark] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -277,16 +326,27 @@ AddEventHandler('onResourceStart', function(resource)
         return
     end
     enabled = true
-    local open, defaulted = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT SUM(status='open') AS o, SUM(status='defaulted') AS d FROM palm6_loanshark_loans")
-        open = r and tonumber(r.o) or 0
-        defaulted = r and tonumber(r.d) or 0
+    -- The count query has to run after ensureSchema, and ensureSchema has to
+    -- Wait for oxmysql's connection first, so the whole banner moves onto its
+    -- own thread. `enabled` stays synchronous: it gates nothing DB-backed, and
+    -- the sweep loop's first tick is Config.DefaultSweepSec (300s) away.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        local open, defaulted = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT SUM(status='open') AS o, SUM(status='defaulted') AS d FROM palm6_loanshark_loans")
+            open = r and tonumber(r.o) or 0
+            defaulted = r and tonumber(r.d) or 0
+        end)
+        print(('[palm6_loanshark] shark open — %d loan(s) outstanding, %d defaulted; warrants %s, %d%% interest'):format(
+            open, defaulted, Bridge.ResourceStarted('palm6_mdt') and 'via palm6_mdt' or 'OFFLINE (no palm6_mdt)',
+            math.floor(Config.InterestBps / 100)))
+        if not SchemaReady then
+            print('^1[palm6_loanshark] schema MISSING - loans, repayments and the default sweep are INERT on this box.^0')
+        end
     end)
-    print(('[palm6_loanshark] shark open — %d loan(s) outstanding, %d defaulted; warrants %s, %d%% interest'):format(
-        open, defaulted, Bridge.ResourceStarted('palm6_mdt') and 'via palm6_mdt' or 'OFFLINE (no palm6_mdt)',
-        math.floor(Config.InterestBps / 100)))
 end)
 
 --- Totals for devtest and future consumers.

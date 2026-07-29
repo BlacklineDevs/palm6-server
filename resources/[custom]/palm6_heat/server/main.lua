@@ -117,37 +117,86 @@ local function addHeat(citizenid, amount, reason, name)
     if not READY then return nil end
     if type(citizenid) ~= 'string' or citizenid == '' then return nil end
     amount = math.floor(tonumber(amount) or 0)
+    -- DEFENSIVE ONLY, unreachable from any wire that exists today: every one of
+    -- the ten callers passes a config integer or integer arithmetic, so nothing
+    -- can hand us NaN. Kept because NaN survives BOTH guards below (NaN <= 0 is
+    -- false, NaN > cap is false) and math.floor(0/0) is still NaN, so if a
+    -- future caller ever computed one it would reach the INT UNSIGNED column
+    -- unclamped and there would be no other line to stop it. `x ~= x` is true
+    -- only for NaN; math.huge is already caught by the cap.
+    if amount ~= amount then return nil end
     if amount <= 0 then return nil end
     if amount > Config.MaxAddPerCall then amount = Config.MaxAddPerCall end
+    -- Also defensive, and inert under the shipped config: MaxAddPerCall (60) is
+    -- below HeatCap (150), so the line above already clamps harder than this
+    -- one. It only ever fires if an operator raises MaxAddPerCall above
+    -- HeatCap, and then it matters, because the INSERT branch below writes
+    -- `amount` straight into a fresh row with no ON DUPLICATE cap to catch it.
+    if amount > Config.HeatCap then amount = Config.HeatCap end
     reason = trim(reason ~= nil and reason or 'crime')
     if name == nil then name = Bridge.GetNameByCitizenId(citizenid) end
     if name ~= nil then name = trim(name) end
 
-    local eff = 0
-    local ok = pcall(function()
-        local row = MySQL.single.await(
-            'SELECT heat, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age FROM palm6_heat_state WHERE citizenid = ?',
-            { citizenid })
-        if row then eff = decayed(row.heat, row.age) end
-    end)
-    if not ok then return nil end
-
-    local new = eff + amount
-    if new > Config.HeatCap then new = Config.HeatCap end
-
+    -- ATOMIC settle-and-add. The old shape SELECTed the row, decayed it in Lua,
+    -- then wrote `heat = VALUES(heat)`, an ASSIGN and not an increment, so two
+    -- adds landing on the same citizen across that SELECT's yield silently lost
+    -- one of them. With the heat layer now wired into a dozen crime paths the
+    -- race is real, so the decay is expressed in SQL (the same
+    -- FLOOR(age / 60 * rate) shape the sweep below already uses) and settle +
+    -- add + cap all happen inside ONE statement. MySQL evaluates ON DUPLICATE
+    -- assignments left to right, so `updated_at` still holds the OLD timestamp
+    -- while `heat` is computed, which is exactly what the decay term needs.
+    --
+    -- NOT bit-identical to the Lua `decayed()` helper: MySQL evaluates
+    -- `age / 60` as DECIMAL truncated at div_precision_increment (4dp) while
+    -- Lua uses an IEEE double, so at age = 80s and rate = 0.75 SQL floors
+    -- 1.3333 * 0.75 = 0.999975 to 0 where Lua floors 1.0 to 1. The two agree
+    -- everywhere except on that boundary and the drift is at most 1 point,
+    -- which is below the granularity of every tier threshold. Pre-existing on
+    -- the sweep; called out here because this write path now depends on it too.
     local wrote = pcall(function()
         MySQL.query.await([[
             INSERT INTO palm6_heat_state (citizenid, citizen_name, heat, lifetime, last_reason, updated_at)
             VALUES (?, ?, ?, ?, ?, NOW())
             ON DUPLICATE KEY UPDATE
                 citizen_name = COALESCE(VALUES(citizen_name), citizen_name),
-                heat         = VALUES(heat),
+                heat         = LEAST(?, GREATEST(0, CAST(heat AS SIGNED)
+                                     - FLOOR(TIMESTAMPDIFF(SECOND, updated_at, NOW()) / 60 * ?))
+                                     + VALUES(heat)),
                 lifetime     = lifetime + VALUES(lifetime),
                 last_reason  = VALUES(last_reason),
                 updated_at   = NOW()
-        ]], { citizenid, name, new, amount, reason })
+        ]], { citizenid, name, amount, amount, reason, Config.HeatCap, Config.DecayPerMin })
     end)
     if not wrote then return nil end
+
+    -- Read the settled total back so the frozen { heat, tier } return stays
+    -- exact now that Lua no longer computes it. The row was just re-based to
+    -- NOW(), so nothing decays between the write and this read.
+    --
+    -- NO FALLBACK VALUE ON PURPOSE. This used to fall back to `amount`, which
+    -- is only the floor of what the row holds: a citizen sitting at 140 who
+    -- takes a +3 would have been handed { heat = 3, tier = 'CLEAN' }, a tier
+    -- that is not merely stale but wrong in the direction that matters. The
+    -- pre-atomic code returned nil when it could not name the total and this
+    -- keeps that contract: nil means "no reading", not "no write" (the write
+    -- above already landed and is the durable fact).
+    --
+    -- COST: one extra round-trip per AddHeat, i.e. per crime payout across ten
+    -- wires. No caller reads the return today (grep: zero consumers); it is paid
+    -- to keep the documented export contract exact rather than to serve a
+    -- consumer. If that trade ever stops being worth it, drop the read and the
+    -- return together, not the read alone.
+    local new
+    pcall(function()
+        local row = MySQL.single.await(
+            'SELECT heat FROM palm6_heat_state WHERE citizenid = ?', { citizenid })
+        if row and row.heat then new = math.floor(tonumber(row.heat) or 0) end
+    end)
+    if not new then
+        dbg(('+%d heat -> %s (%s) [write ok, read-back failed]'):format(amount, citizenid, reason))
+        return nil
+    end
 
     dbg(('+%d heat -> %s (%s) [%d/%d]'):format(amount, citizenid, reason, new, Config.HeatCap))
     return { heat = new, tier = tierOf(new).tier }
@@ -257,16 +306,51 @@ local function cmdMyHeat(src, _args)
 end
 
 -- ---------------------------------------------------------------------------
--- Sweep — prune rows that have fully decayed to 0. Correctness never depends on
--- this (reads re-derive), it just keeps the table small.
+-- Sweep: settle rows that have fully decayed to 0, then prune the long-dead.
+--
+-- This used to DELETE the fully-decayed row outright, on the reasoning that
+-- correctness never depends on the sweep because reads re-derive heat from
+-- updated_at. That is true of `heat` and FALSE of `lifetime`: lifetime is a
+-- cumulative career total that GetSummary sums and README.md documents as part
+-- of the frozen export contract, and the DELETE destroyed it. Since every
+-- citizen fully cools within ~3h20m at cap, every row was eventually swept, so
+-- lifetime could never mean anything. Zero the heat instead and keep the row.
+--
+-- HONEST SCOPE: GetSummary has no in-repo caller today (its documented consumer,
+-- palm6_economy's crime-layer rollup, is not built). This is a contract fix, not
+-- a bug anyone has felt yet. `lifetime` is published in README.md as part of a
+-- frozen export, and a field that silently resets every few hours cannot be
+-- published. Do not read this comment as "something was visibly broken".
+--
+-- COST: the retained window grows from ~3h20m of rows to SweepRetainDays. That
+-- is not a row-count multiplier: PRIMARY KEY (citizenid) means at most ONE row
+-- per character ever exists, so the ceiling only moves from "characters who
+-- committed a crime in the last 3h20m" to "characters who committed a crime in
+-- the last 30 days". Both are bounded by the size of the playerbase.
+--
+-- The UPDATE does not touch updated_at (the column declares an explicit DEFAULT
+-- and no ON UPDATE clause, so MySQL does not auto-bump it), and even if a
+-- server's sql_mode did bump it, a row at heat 0 decays to 0 either way, so
+-- effective heat is unaffected.
 -- ---------------------------------------------------------------------------
 local function sweep()
     if not READY then return end
     pcall(function()
         MySQL.query.await([[
-            DELETE FROM palm6_heat_state
-            WHERE heat <= FLOOR(TIMESTAMPDIFF(SECOND, updated_at, NOW()) / 60 * ?)
+            UPDATE palm6_heat_state
+            SET heat = 0
+            WHERE heat > 0
+              AND heat <= FLOOR(TIMESTAMPDIFF(SECOND, updated_at, NOW()) / 60 * ?)
         ]], { Config.DecayPerMin })
+    end)
+    -- Long-TTL prune so the table still cannot grow without bound. A row that
+    -- has sat at zero for RetainDays belongs to a citizen who has committed no
+    -- crime in that long; losing their lifetime total is the accepted trade.
+    pcall(function()
+        MySQL.query.await([[
+            DELETE FROM palm6_heat_state
+            WHERE heat = 0 AND updated_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+        ]], { Config.SweepRetainDays })
     end)
 end
 

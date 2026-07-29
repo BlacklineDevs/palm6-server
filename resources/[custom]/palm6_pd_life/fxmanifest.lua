@@ -21,6 +21,7 @@ client_scripts {
 server_scripts {
     'bridge/sv_framework.lua',   -- qbx_core adapter (duty predicate + setter)
     'server/duty.lua',           -- authoritative post + duty registry
+    'server/perm.lua',           -- ACE answer for the /placeped editor
 }
 
 dependencies {

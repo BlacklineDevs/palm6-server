@@ -42,7 +42,7 @@ and `client/`; every qbx/native/ox_lib call lives in `bridge/`.
 | `/evidence suspect <citizenid>` | on-duty police | list cases linked to that citizen |
 | `/casenew <title>` | on-duty police | open a case file |
 | `/caseadd <id> <description>` | on-duty police | attach an evidence entry to a case |
-| `/casesuspect <id> <citizenid>` | on-duty police | link a known suspect |
+| `/casesuspect <id> <citizenid or server id>` | on-duty police | link a known suspect. The server id `palm6_mdt`'s `/id` prints resolves through that resource's `ResolveTarget` export. An all-digit argument that `palm6_mdt` cannot resolve is a dead server id and is **rejected**, so a server id can never land in the citizenid column; a non-numeric argument still stores verbatim, as before. With `palm6_mdt` stopped nothing can be checked, so the argument stores verbatim and the officer is told so |
 | `/casesuspect <id> unknown <descriptors>` | on-duty police | link an unknown-suspect placeholder |
 | `/caseclose <id>` / `/casereopen <id>` | on-duty police | flip case status |
 | `[E]` at the locker | on-duty police, at the station | open the stash |

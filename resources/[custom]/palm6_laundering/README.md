@@ -17,7 +17,11 @@ internal heat model that can call the cops, and logged as an evidence trail.
   cap, your remaining daily ceiling}, removing that many dollars and crediting
   the clean remainder (after the fee) to your **bank**. Per-character cooldown.
 - **`/dirtymoney`** — read-only: how much dirty money you're holding, how much
-  you can still wash today, and the current fee.
+  you can still wash today, and the fee **you** would actually pay, heat
+  surcharge included. If the front would turn you away at the door (an active
+  warrant while `Config.BlockWhileWanted` is on, or a heat tier listed in
+  `Config.HeatScrutiny.Refuse`) it says so instead of quoting a fee for a wash
+  that would be refused.
 
 ## What makes it 1-of-1 (and not a dupe)
 
@@ -69,3 +73,28 @@ Export `GetSummary()` returns `{ totalRuns, totalDirtyWashed, flaggedRuns }`.
 `Config.Cut` (fee), `MinPerRun`/`MaxPerRun`/`DailyCap`, `CooldownSec`,
 `Config.Heat.*`, and `Config.Front.coords` (a Tier-3 Los Santos placeholder —
 verify/retune the laundromat spot in-game).
+
+Two knobs govern this front's relationship with `palm6_heat` (the durable,
+per-character police-attention score, not the transient `Config.Heat` above):
+
+- `Config.PlayerHeat` is what a wash **costs** you in heat. It is
+  amount-proportional (`Base + dirty/1000 * PerThousand`, plus `FlaggedBonus`
+  when the law noticed; `MaxPerRun` is a safety rail that never binds at the
+  shipped numbers, since the $25,000 per-run ceiling already tops the formula
+  out at 13 against a cap of 15). It used to be a flat
+  charge per run, which made the fewest, largest runs the cheapest way to move
+  a haul (a $500 wash and a $25,000 wash scored the same 5), the exact
+  inverse of the stated design, where dumping a whole bank haul at once is
+  supposed to be the loud play. This is a **default-on balance change**: a
+  minimum $500 wash now scores 1 instead of 5. Reverting is config only, one
+  line: put the pre-reshape table back as
+  `Config.PlayerHeat = { Base = 5, FlaggedBonus = 8 }`. Every key is read
+  guarded, so an absent (or zero) `PerThousand` charges exactly `Base` and an
+  absent `MaxPerRun` means no cap, restoring the old flat 5 / 13-when-flagged
+  exactly. `Base` is guarded too rather than mandatory: a table that omits it
+  charges 0 heat per run silently instead of erroring, so always set one.
+- `Config.HeatScrutiny` is what your existing heat **costs you at the front**.
+  A `HOT` or `WANTED` citizen pays `ExtraCut` on top of `Config.Cut` (quoted
+  honestly by `/dirtymoney`), or is refused outright if their tier is listed in
+  `Refuse`. Set `Enabled = false` to restore the old flat-cut behaviour. This is
+  the first live consumer of the `palm6_heat:GetTier` export.

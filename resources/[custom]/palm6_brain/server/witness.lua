@@ -64,7 +64,10 @@ end
 -- ── EVENT SEAM: consume player-crime, produce crime_witnessed ─────────────────
 -- Registered with Social.OnEvent. Runs SYNCHRONOUSLY inside ReportEvent's consumer
 -- loop (which is pcall-isolated on the Social side), so we do NO yields here and
--- stay defensive about every field the client detector supplies.
+-- stay defensive about every field the client detector supplies. The downstream
+-- consumer of the derived event (snitch.lua) holds the same no-yield rule, and
+-- bridge/sv_framework.lua's recordDispatch detaches its yielding police-record
+-- routing into a CreateThread to keep it true across this whole chain.
 local function onSocialEvent(evt)
     if not enabled() then return end
     if type(evt) ~= 'table' or type(evt.kind) ~= 'string' then return end
@@ -100,6 +103,12 @@ local function onSocialEvent(evt)
             kind      = 'crime_witnessed',
             crimeKind = evt.kind,
             cid       = cid,
+            -- The suspect's SERVER id, carried through from the upstream event.
+            -- Only snitch.lua reads it, and only to name the suspect when a
+            -- dispatch is routed onto the shared 911 bus (Config.PoliceBus).
+            -- It is a live id, valid only for this synchronous fan-out - never
+            -- stored in the `memories` append above, which outlives the session.
+            playerSrc = evt.playerSrc,
             coords    = coords,
             witnesses = witnesses,
             disguised = disguised,

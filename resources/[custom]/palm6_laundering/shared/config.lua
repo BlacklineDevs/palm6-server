@@ -58,6 +58,12 @@ Config.MinPerRun  = 500     -- below this there's nothing worth washing
 Config.MaxPerRun  = 25000   -- most dirty $ a single run will take
 Config.DailyCap   = 75000   -- most dirty $ a character can wash per calendar day
 Config.CooldownSec = 45     -- per-character, between runs
+-- /dirtymoney is read-only but costs up to three DB round-trips (the palm6_mdt
+-- warrant check + today's washed sum + the palm6_heat tier read, the last two
+-- being what make the quoted fee honest), so it carries its own light spam guard
+-- rather than riding CooldownSec, which would make the quote unusable between
+-- washes.
+Config.QuoteCooldownSec = 3
 
 -- Refuse to wash for a player with an ACTIVE warrant (palm6_mdt). Closes the
 -- loanshark "borrow dirty, default, launder it clean while wanted" cash-out and
@@ -85,10 +91,76 @@ Config.Heat = {
 -- Persistent PLAYER heat (palm6_heat) — distinct from the front heat above.
 -- Config.Heat is this front's transient bust-probability; PlayerHeat is the
 -- durable, per-character police attention that follows the launderer after they
--- log (drives the /heat board, season Most-Wanted, dispatch priority). A quiet
--- wash adds Base; a run the law flagged (police alerted + evidence filed) adds
--- Base + FlaggedBonus. Soft-dep — if palm6_heat is stopped this is a no-op.
-Config.PlayerHeat = { Base = 5, FlaggedBonus = 8 }
+-- log (drives the /heat board, season Most-Wanted, dispatch priority).
+--
+-- BALANCE CHANGE, default-on. This used to be a FLAT charge per run
+-- (Base = 5, +8 flagged). Flat per run means per-run heat does not move with
+-- the size of the wash, so a $500 wash and a $25,000 wash scored identically
+-- and the cheapest way to move a haul was the FEWEST, LARGEST runs. Against
+-- Config.DailyCap = 75000: three $25,000 runs cost 15 heat total, while the
+-- same $75,000 pushed through 150 minimum-size runs cost 750. That is the exact
+-- inverse of the design intent stated above ("laundering small and slow is the
+-- safe play, laundering a whole bank haul at once is loud"): under the flat
+-- charge, dumping the whole haul in one go was the QUIET play.
+--
+-- The size of the wash is what makes it loud, so the charge is now
+-- amount-proportional:
+--
+--   heat = min(MaxPerRun, floor(Base + dirty/1000 * PerThousand))
+--          + (flagged and FlaggedBonus or 0)
+--
+-- A $25,000 run now scores 13 where a $500 run scores 1, so a haul dumped in
+-- one go finally registers as the loud act the text above describes. Splitting
+-- is still not free (the Base floor means 150 small runs total 150 heat against
+-- 39 for three big ones). The goal was never to make splitting cheap, it was
+-- to stop a single enormous wash being as quiet as a pocket-change one.
+--
+-- Base is a floor so any wash at all registers; FlaggedBonus rides ON TOP of the
+-- cap because "the law actually noticed this one" is a separate fact from size.
+-- MaxPerRun is a SAFETY RAIL, NOT an active guard: a run is already capped at
+-- Config.MaxPerRun = 25000 dollars above, so the formula tops out at
+-- floor(1 + 25 * 0.5) = 13 and the cap of 15 can never bind at the shipped
+-- numbers. It only starts binding if an operator raises Config.MaxPerRun to
+-- $30,000+ or PerThousand to 0.6+. Do not read it as the thing holding a single
+-- wash down; the $25,000 per-run ceiling is.
+-- KNOCK-ON: a minimum $500 wash now scores 1 where the flat charge scored 5.
+--
+-- REVERSAL, config only, no code edit: replace the table below with the
+-- pre-reshape one, which is this single line:
+--     Config.PlayerHeat = { Base = 5, FlaggedBonus = 8 }
+-- EVERY key is read guarded in playerHeatFor(), so that paste is safe: an absent
+-- (or zero) PerThousand makes the charge exactly Base, and an absent MaxPerRun
+-- means no cap. That restores the old flat 5, or 13 on a flagged run, exactly.
+-- Base is guarded too rather than mandatory, so a table that omits it charges 0
+-- heat per run SILENTLY instead of erroring. Always keep a Base set.
+-- Note the old table had NO MaxPerRun key at all: the cap is new with the
+-- reshape, and it would not have bound at Base = 5 either, the same way it does
+-- not bind at the shipped numbers. FlaggedBonus = 8 is the old number,
+-- unchanged.
+-- Soft-dep: if palm6_heat is stopped the whole block is a no-op.
+Config.PlayerHeat = {
+    Base         = 1,
+    PerThousand  = 0.5,
+    MaxPerRun    = 15,
+    FlaggedBonus = 8,
+}
+
+-- Persistent-heat SCRUTINY at the front (palm6_heat GetTier). palm6_heat's own
+-- Config.DispatchPriorityTier has always documented that palm6_laundering would
+-- treat a HOT/WANTED citizen as priority ("extra launder scrutiny"); this is
+-- that promise, wired. A hot launderer is a liability to the front, so the
+-- front takes a bigger skim off them. ExtraCut is ADDED to Config.Cut for the
+-- run (total cut is clamped to 0.90 so a wash can never pay out nothing), and a
+-- tier listed in Refuse is turned away at the door instead.
+--
+-- Soft-dep: if palm6_heat is stopped, or GetTier errors, the surcharge is 0 and
+-- the flat Config.Cut applies exactly as before. Set Enabled = false to restore
+-- the old flat-cut behaviour wholesale.
+Config.HeatScrutiny = {
+    Enabled  = true,
+    ExtraCut = { WARM = 0.0, HOT = 0.10, WANTED = 0.20 },
+    Refuse   = {},   -- e.g. { WANTED = true } to have the front turn them away
+}
 
 -- ---------------------------------------------------------------------------
 -- Evidence (palm6_evidence v2 frozen exports). A flagged run opens/updates a

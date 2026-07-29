@@ -16,12 +16,75 @@
 -- staff-driven flag (a private local `Plates` table with no export, no
 -- persistence, resets on resource restart) — this resource does not (and
 -- cannot, no export exists) write into it. `palm6_chopshop_stolen` is its
--- own independent, persistent, queryable registry; a future palm6_mdt
--- extension could surface it via a `/runplate` command, but that is
--- explicitly out of scope here (no forced integration without a real hook).
+-- own independent, persistent, queryable registry; palm6_mdt now surfaces it
+-- via `/runplate`, reading the additive IsStolen export at the bottom of this
+-- file. That is a READ-ONLY integration in the correct direction: this
+-- resource publishes a frozen-signature export and knows nothing about the
+-- MDT, exactly like GetSummary.
 -- ============================================================================
 
 local lastAction = {} -- [src] = { [key] = ts } — chat-command spam guard
+
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with neither
+-- chop-shop table. Every query in this file is pcall-guarded, so that is not an
+-- error, it is SILENCE: /reportstolen answers "could not file the report",
+-- /sellstolen refuses every car with "this one's clean", the MDT's /runplate
+-- reports every plate as not stolen, and the boot banner reports 0/0 as though
+-- the shop were simply quiet. On the live box these statements are pure no-ops.
+--
+-- Both statements are copied VERBATIM from sql/0032_chopshop.sql (trailing `;`
+-- dropped so oxmysql sees a single statement each). Only these two tables are
+-- created here: `player_vehicles` is qbx_core's, owned by the framework, and
+-- this resource only ever reads/deletes rows in it.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_chopshop_stolen` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    plate VARCHAR(15) NOT NULL,
+    owner_citizenid VARCHAR(64) NOT NULL,
+    status ENUM('active', 'resolved', 'expired') NOT NULL DEFAULT 'active',
+    reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_chopshop_stolen_plate_status (plate, status),
+    INDEX idx_palm6_chopshop_stolen_owner (owner_citizenid)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_chopshop_sales` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    seller_citizenid VARCHAR(64) NOT NULL,
+    plate VARCHAR(15) NOT NULL,
+    vehicle_class TINYINT UNSIGNED NOT NULL,
+    payout INT UNSIGNED NOT NULL,
+    was_stolen TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    sold_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_chopshop_sales_seller (seller_citizenid)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_chopshop] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
 
 local function now() return os.time() end
 
@@ -270,17 +333,69 @@ Bridge.RegisterCommand('sellstolen', function(source) cmdSellStolen(source) end)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local activeReports, totalSales = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT COUNT(*) AS n FROM palm6_chopshop_stolen WHERE status = 'active' AND expires_at > NOW()")
-        activeReports = r and tonumber(r.n) or 0
+    -- The banner now runs on its own thread because ensureSchema has to Wait for
+    -- oxmysql's connection before it can issue any query, and the two counts
+    -- below must not run before the tables are guaranteed to exist. Nothing here
+    -- populates a cache or a cap, so the delay only moves the printing.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        local activeReports, totalSales = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT COUNT(*) AS n FROM palm6_chopshop_stolen WHERE status = 'active' AND expires_at > NOW()")
+            activeReports = r and tonumber(r.n) or 0
+        end)
+        pcall(function()
+            local r = MySQL.single.await('SELECT COUNT(*) AS n FROM palm6_chopshop_sales')
+            totalSales = r and tonumber(r.n) or 0
+        end)
+        print(('[palm6_chopshop] shop open — %d active stolen report(s), %d sale(s) all-time'):format(activeReports, totalSales))
+        -- Said out loud so a fresh box cannot be mistaken for a quiet shop: with
+        -- the tables absent both counts above read 0 and every command no-ops.
+        if not SchemaReady then
+            print('^1[palm6_chopshop] schema MISSING - the stolen registry and the shop are INERT on this box.^0')
+        end
     end)
+end)
+
+-- ADDITIVE export - the police side of the registry. Until now the stolen
+-- table was WRITE-ONLY from a cop's point of view: a citizen could report a
+-- plate stolen and the chop shop could consume the report, but no officer had
+-- any way to ask "is this plate hot?". palm6_mdt's /runplate is the first
+-- consumer. Same never-change-signature rule as GetSummary.
+--
+-- IsStolen(plate: string) -> { stolen: boolean, owner_citizenid: string|nil,
+--   since: string|nil }
+-- `stolen` is true only for a live report: status='active' AND not yet past
+-- expires_at, which is exactly the WHERE clause /sellstolen uses, so the two
+-- agree on what "still hot" means.
+--
+-- They do NOT agree on the lookup KEY, and that is pre-existing, not something
+-- this export introduced. The plate normalisation here (:upper() plus strip of
+-- ALL whitespace) matches the WRITER, /reportstolen. /sellstolen instead reads
+-- its plate off the vehicle entity via Bridge.GetVehiclePlate
+-- (bridge/sv_framework.lua), which only trims TRAILING pad and does not
+-- uppercase. So a report filed with odd casing or an interior space can still
+-- read hot here and clean at the shop. Do not read this export as a guarantee
+-- that the two surfaces classify every plate identically; it is a guarantee
+-- about the staleness rule only.
+-- `since` is the report timestamp (reported_at), stringified for the caller.
+exports('IsStolen', function(plate)
+    local out = { stolen = false, owner_citizenid = nil, since = nil }
+    plate = tostring(plate or ''):upper():gsub('%s+', '')
+    if plate == '' then return out end
+    local row
     pcall(function()
-        local r = MySQL.single.await('SELECT COUNT(*) AS n FROM palm6_chopshop_sales')
-        totalSales = r and tonumber(r.n) or 0
+        row = MySQL.single.await(
+            "SELECT owner_citizenid, reported_at FROM palm6_chopshop_stolen WHERE plate = ? AND status = 'active' AND expires_at > NOW() ORDER BY id DESC LIMIT 1",
+            { plate })
     end)
-    print(('[palm6_chopshop] shop open — %d active stolen report(s), %d sale(s) all-time'):format(activeReports, totalSales))
+    if not row then return out end
+    out.stolen = true
+    out.owner_citizenid = row.owner_citizenid
+    out.since = tostring(row.reported_at)
+    return out
 end)
 
 ---Report/sale counts for devtest and future consumers.

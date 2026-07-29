@@ -20,6 +20,60 @@
 
 local lastAction = {}   -- [src] = { [key] = ts }
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier and palm6_ems:
+-- Wait-for-oxmysql on the caller's thread, per-statement pcall, IF NOT EXISTS
+-- so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_legal_petitions at all. The failure is SILENT and it eats money: the
+-- filer is charged the court fee BEFORE the INSERT, and that INSERT is
+-- pcall'd, so the fee is gone and no petition exists to ever rule on. On the
+-- live box this statement is a pure no-op.
+--
+-- The CREATE TABLE is copied VERBATIM from sql/0026_legal.sql. That file also
+-- carries an ADD COLUMN sealed_at on palm6_mdt_bookings; that column is NOT
+-- created here because this resource never touches the bookings table (all
+-- sibling access is exports-only, see the module header) and palm6_mdt owns
+-- that schema.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_legal_petitions` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    booking_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,          -- the subject of the booking
+    filed_by VARCHAR(64) NOT NULL,           -- who filed (subject or lawyer)
+    filed_by_name VARCHAR(100) NOT NULL DEFAULT '',
+    fee INT UNSIGNED NOT NULL,
+    status ENUM('processing','granted','denied') NOT NULL DEFAULT 'processing',
+    denial_reason VARCHAR(120) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    due_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_legal_petitions_status_due (status, due_at),
+    INDEX idx_palm6_legal_petitions_booking (booking_id),
+    INDEX idx_palm6_legal_petitions_citizen (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_legal] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -43,6 +97,7 @@ local function bookingsFor(cid)
 end
 
 local function hasWarrant(cid)
+    if not Bridge.ResourceStarted('palm6_mdt') then return false end
     local w = false
     pcall(function() w = exports.palm6_mdt:HasActiveWarrant(cid) == true end)
     return w
@@ -313,10 +368,27 @@ Bridge.RegisterCommand('expunge', function(source, args) cmdExpunge(source, args
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local processing, granted = petitionCounts()
-    print(('[palm6_legal] court open — %d petition(s) before the court, %d granted all-time; records %s')
-        :format(processing, granted,
-            Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline'))
+    -- Runs on its own thread because ensureSchema has to Wait for oxmysql's
+    -- connection before any query, and petitionCounts must not run before the
+    -- table is guaranteed to exist. Nothing is cached at boot (every read is
+    -- per-command), so no command needs a bootReady gate; the resolver sweep
+    -- above does not touch the DB until its first Config.Expunge.SweepSec
+    -- tick, which is well after this thread has finished.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- table is absent, which is otherwise completely silent: /expunge
+        -- charges the court fee and then loses the petition.
+        if not SchemaReady then
+            print('^1[palm6_legal] schema MISSING - expungement petitions are LOST after charging on this box.^0')
+        end
+        local processing, granted = petitionCounts()
+        print(('[palm6_legal] court open — %d petition(s) before the court, %d granted all-time; records %s')
+            :format(processing, granted,
+                Bridge.ResourceStarted('palm6_mdt') and 'ONLINE' or 'offline'))
+    end)
 end)
 
 ---Petition counts for devtest and future consumers.

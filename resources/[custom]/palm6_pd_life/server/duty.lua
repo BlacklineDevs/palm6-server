@@ -12,6 +12,46 @@
 local heldBy = {}
 -- src -> postId (reverse lookup for release-on-leave / on-drop).
 local postOf = {}
+-- src -> { [key] = ts }: the house rl() anti-spam idiom (palm6_mdt, palm6_ems,
+-- palm6_chopshop all carry the same shape).
+local lastAction = {}
+-- One console line the first time the duty point cannot be read, so a
+-- misconfigured box is discoverable without spamming on every toggle.
+local warnedNoDutyPoint = false
+
+local function rl(src, key, window)
+    if not window or window <= 0 then return true end
+    lastAction[src] = lastAction[src] or {}
+    local t = os.time()
+    if (lastAction[src][key] or 0) + window > t then return false end
+    lastAction[src][key] = t
+    return true
+end
+
+-- Is this officer standing at the station's duty point? Returns true when the
+-- gate is satisfied OR deliberately not enforced.
+--
+-- FAILS OPEN on a missing contract, on purpose: if qbx_police_overrides is
+-- stopped or its export changes shape, the honest outcome is "we could not
+-- check" and every officer keeps working. Failing closed would lock the whole
+-- department out of duty (and therefore out of MDT, evidence, citations and
+-- EMS billing) over a config read.
+local function atDutyPoint(src)
+    if not Config.DutyGate.Enabled then return true end
+    local pt = Bridge.GetDutyPoint()
+    if not pt then
+        if not warnedNoDutyPoint then
+            warnedNoDutyPoint = true
+            print('^3[palm6_pd_life] DutyGate is ON but qbx_police_overrides:GetDutyToggle() could not be read - the station gate is INERT (failing open).^0')
+        end
+        return true
+    end
+    local c = Bridge.GetCoords(src)
+    if not c then return true end   -- no ped to measure: never block on that
+    local dx, dy, dz = c.x - pt.x, c.y - pt.y, c.z - pt.z
+    local radius = math.max(pt.radius or 0.0, Config.DutyGate.MinRadius)
+    return (dx * dx + dy * dy + dz * dz) <= (radius * radius)
+end
 
 local function isKnownPost(postId)
     for _, e in ipairs(Config.Rooms or {}) do
@@ -71,8 +111,15 @@ end)
 -- --- standalone on/off duty toggle (police, anywhere in station) ------------
 RegisterNetEvent('palm6_pd_life:toggleDuty', function()
     local src = source
+    if not rl(src, 'toggleDuty', Config.DutyGate.CooldownSec) then return end
     if not Bridge.IsPolice(src) then
         Bridge.Notify(src, 'PD', 'You are not police.', 'error')
+        return
+    end
+    -- Server-derived proximity: the client sends nothing, the server reads its
+    -- own ped position and the station contract. No-op while DutyGate is off.
+    if not atDutyPoint(src) then
+        Bridge.Notify(src, 'PD', 'You need to be at the station duty desk to change duty.', 'error')
         return
     end
     local nowOn = not Bridge.IsOnDutyPolice(src)
@@ -87,9 +134,11 @@ RegisterNetEvent('palm6_pd_life:toggleDuty', function()
     end
 end)
 
--- Free a post if its officer disconnects.
+-- Free a post if its officer disconnects (and drop their rate-limit slot, so
+-- the table cannot grow across a long uptime).
 AddEventHandler('playerDropped', function()
     releasePost(source, true)
+    lastAction[source] = nil
 end)
 
 -- A late-joining client asks which posts are currently held so it can pre-cull

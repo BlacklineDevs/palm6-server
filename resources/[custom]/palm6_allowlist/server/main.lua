@@ -14,6 +14,47 @@
 
 local roleCache = {}  -- [discordId] = { roles = {set}, at = ts }
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Same shape as palm6_courier/palm6_ems:
+-- per-statement pcall, everything IF NOT EXISTS so re-runs are harmless.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- `allowlist` table. dbAllowed() is pcall-guarded, so a missing table is not an
+-- error - it is SILENCE: every manually allowlisted identifier is quietly
+-- ignored and the connect gate falls through to the Discord-role path alone.
+-- On the live box these statements are pure no-ops.
+--
+-- The DDL is copied VERBATIM from sql/0009_allowlist.sql (trailing `;` dropped
+-- so oxmysql sees a single statement).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `allowlist` (
+    `id`         INT AUTO_INCREMENT PRIMARY KEY,
+    `identifier` VARCHAR(100) NOT NULL UNIQUE,
+    `note`       VARCHAR(255) DEFAULT NULL,
+    `enabled`    TINYINT(1) NOT NULL DEFAULT 1,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_allowlist] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function dbAllowed(license, discordId)
     if not license and not discordId then return false end
     -- pcall-guarded: oxmysql .await THROWS on any query error (missing `allowlist`
@@ -134,9 +175,18 @@ end)
 -- Boot banner — surface a misconfigured gate at STARTUP (a misconfig otherwise
 -- only shows up as mass player denials on a live founding night). Reports how
 -- many roles are configured and whether the bot token/guild convars are set (the
--- Discord-role admit path is dead without them).
+-- Discord-role admit path is dead without them), plus whether the `allowlist`
+-- table exists.
+--
+-- The banner now waits ~3s because ensureSchema() has to let oxmysql establish
+-- its connection before it can issue any query. Nothing here populates a cache
+-- or a cap, so the delay only moves the printing; the connect gate's behaviour
+-- during those 3s is unchanged (dbAllowed stays pcall-guarded and falls through
+-- to the Discord-role path exactly as it did before).
 -- ---------------------------------------------------------------------------
 CreateThread(function()
+    Wait(3000) -- let oxmysql establish its connection first
+    ensureSchema()
     local roleCount = 0
     for _ in pairs(Config.AllowedRoles) do roleCount = roleCount + 1 end
     local tokenSet = GetConvar(Config.BotTokenConvar, '') ~= ''
@@ -145,6 +195,9 @@ CreateThread(function()
     print(('[palm6_allowlist] AllowedRoles: %d role(s) configured'):format(roleCount))
     print(('[palm6_allowlist] %s: %s'):format(Config.BotTokenConvar, tokenSet and 'SET' or 'UNSET'))
     print(('[palm6_allowlist] %s: %s'):format(Config.GuildIdConvar, guildSet and 'SET' or 'UNSET'))
+    if not SchemaReady then
+        print('^1[palm6_allowlist] schema MISSING - the `allowlist` table could not be created, so DB-allowlisted identifiers are IGNORED on this box; only the Discord-role path can admit anyone.^0')
+    end
     if roleCount > 0 and (not tokenSet or not guildSet) then
         print('[palm6_allowlist] WARNING: roles configured but a bot convar is UNSET -> the Discord-role admit path CANNOT work; role-holders will be denied. Set both convars in txAdmin.')
     elseif roleCount == 0 then

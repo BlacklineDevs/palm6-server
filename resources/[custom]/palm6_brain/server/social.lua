@@ -48,7 +48,26 @@ local NAMES = {
 -- A persona is stable per pedKey within a session (cached). Archetype + name are
 -- derived DETERMINISTICALLY from the key (so the same ped is the same character
 -- each time you talk to it); mood is rolled per session for a little variance.
+--
+-- BOUNDED (David's "never grow unbounded" rule, same discipline as gossip.lua's
+-- MAX_ITEMS and alibi.lua's MAX_ALIBIS): pedKey comes off the wire, so an
+-- unbounded cache is a memory faucet a client can open. We keep the last
+-- MAX_PERSONAS keys in insertion order and evict FIFO. Eviction is cheap and
+-- lossless in practice: archetype + name are derived DETERMINISTICALLY from the
+-- key, so a re-requested ped comes back as the same character. Only the rolled
+-- `mood` (and any Social.SetMood nudge on it) is lost, which is session flavour.
 local personaCache = {}   -- pedKey -> { archetype, mood, name }
+local personaOrder = {}   -- insertion order of the live keys (FIFO eviction)
+local MAX_PERSONAS = 512  -- hard ceiling on cached personas (NEVER unbounded)
+
+local function cachePersona(pedKey, p)
+    personaCache[pedKey] = p
+    personaOrder[#personaOrder + 1] = pedKey
+    -- We only ever exceed the cap by one, so this loop runs at most once.
+    while #personaOrder > MAX_PERSONAS do
+        personaCache[table.remove(personaOrder, 1)] = nil
+    end
+end
 
 function Social.GetPersona(pedKey)
     pedKey = tostring(pedKey or '')
@@ -66,7 +85,7 @@ function Social.GetPersona(pedKey)
     local mood  = moods[math.random(#moods)]
 
     local p = { archetype = arche, mood = mood, name = name }
-    personaCache[pedKey] = p
+    cachePersona(pedKey, p)
     return p
 end
 

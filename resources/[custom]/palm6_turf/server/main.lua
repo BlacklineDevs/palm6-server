@@ -13,6 +13,78 @@
 local zones   = {}  -- [id] = { label, coords, owner_gang, captured_by, captured_at }
 local pending = {}  -- [src] = { zoneId, gangName, holdUntil }
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+local bootReady   = false  -- flipped once the boot seed+load has actually populated `zones`
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- CREATE ... IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- palm6_turf table. Every query here is pcall-wrapped, so the failure is
+-- SILENT and the resource looks perfectly healthy: loadZones falls back to
+-- Config, so the boot banner still prints the right zone count and the blips
+-- still appear. Every zone just reads as unowned forever and every capture is
+-- discarded on the next restart, so turf ownership (and palm6_protection's
+-- collections on top of it) quietly stops persisting. On the live box (0013 +
+-- 0051 already applied by hand) these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0013_turf.sql. NOT included: sql/0049's
+-- identity reset, which is a data UPDATE rather than schema and is owned by
+-- palm6_dbmigrate (it re-runs it every boot).
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- The table THIS resource owns and can answer for. Only these feed SchemaReady.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_turf` (
+    zone_id VARCHAR(50) NOT NULL PRIMARY KEY,
+    owner_gang VARCHAR(50) DEFAULT NULL,
+    captured_by VARCHAR(64) DEFAULT NULL,
+    captured_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists, so folding it into SchemaReady would make a healthy
+    -- MySQL box print `schema MISSING` on every boot and train operators to
+    -- ignore the banner. Same split as palm6_courier and palm6_mdt.
+    --
+    -- Copied VERBATIM from sql/0051_turf_rep_at.sql. It is repeated here (it
+    -- also lives in palm6_dbmigrate) because dbmigrate and this resource boot
+    -- on independent threads: whichever runs second is a no-op and neither can
+    -- lose the race. Without rep_at, loadZones reads nil and the anti-farm
+    -- cooldown falls back to 0, which is the pre-0051 in-memory behaviour.
+    local alters = {
+        [[
+ALTER TABLE `palm6_turf`
+    ADD COLUMN IF NOT EXISTS `rep_at` BIGINT NOT NULL DEFAULT 0
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_turf] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_turf] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function ensureZones()
     for _, z in ipairs(Config.Zones) do
         pcall(function()
@@ -58,9 +130,29 @@ end
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    ensureZones()
-    loadZones()
-    print(('[palm6_turf] loaded %d turf zone(s)'):format(#Config.Zones))
+    -- The whole boot sequence runs on this thread because ensureSchema has to
+    -- Wait for oxmysql's connection before it can issue any query, and neither
+    -- ensureZones nor loadZones may run before the table is guaranteed to
+    -- exist. That Wait is why bootReady exists: until the load lands, `zones`
+    -- is EMPTY, and an ungated tag request would silently no-op on a nil zone
+    -- instead of telling the player why. The final syncAll repairs any client
+    -- that asked for a sync during the window and got an empty set.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It is the only line that can report the fresh-box
+        -- case: loadZones falls back to Config, so the "loaded N zone(s)" line
+        -- below prints the same number whether or not the table exists.
+        if not SchemaReady then
+            print('^1[palm6_turf] schema MISSING - turf ownership does NOT persist on this box.^0')
+        end
+        ensureZones()
+        loadZones()
+        bootReady = true
+        print(('[palm6_turf] loaded %d turf zone(s)'):format(#Config.Zones))
+        syncAll()
+    end)
 end)
 
 RegisterNetEvent('palm6_turf:requestSync', function()
@@ -70,6 +162,13 @@ end)
 RegisterNetEvent('palm6_turf:requestTag', function(zoneId)
     local src = source
     if not Bridge.GetCitizenId(src) then return end
+    -- `zones` is empty until the boot load lands (~3s after resource start,
+    -- because ensureSchema has to wait for oxmysql). Without this gate the
+    -- nil-zone check below would refuse the tag with NO message at all.
+    if not bootReady then
+        Bridge.Notify(src, 'Turf', 'Turf is still loading. Try again in a moment.', 'error')
+        return
+    end
     local z = zones[zoneId]
     if not z then return end
 

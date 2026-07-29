@@ -44,6 +44,17 @@ Config.SerialPrefix = 'GR'
 -- the character so it follows them after they log (drives /heat, season
 -- Most-Wanted, dispatch priority). Soft-dep — a no-op if palm6_heat is stopped.
 -- Mirrors palm6_heat Config.Suggested.gun_deal.
+--
+-- FLAT PER PURCHASE IS DELIBERATE, and this note exists so nobody "fixes" it
+-- into being amount-proportional the way palm6_laundering's had to be. That one
+-- was broken because a launder RUN takes a variable $500..$25,000, so a flat
+-- charge scored a whole-haul dump exactly as quietly as a pocket-change wash,
+-- which made the fewest, largest runs the cheapest way to move dirty money. A
+-- buy here grants exactly ONE weapon (server/main.lua) and cannot be batched,
+-- so run size is not a dial the player can turn: six guns cost six times the
+-- heat no matter how they are bought. The crime being scored is possession of
+-- an untraceable weapon, not the size of the transaction, so price is correctly
+-- not a factor.
 Config.HeatOnBuy = 10
 
 -- Discoverable dealer NPC at the drop point (presentation only — the buy still

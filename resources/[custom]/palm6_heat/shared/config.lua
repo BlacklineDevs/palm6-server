@@ -44,9 +44,11 @@ Config.Tiers = {
     { min = 0,   tier = 'CLEAN',  label = 'Clean',     color = { 150, 160, 175 } },
 }
 
--- Consumers (palm6_dispatch, palm6_laundering) treat a citizen at/above this
--- tier as "priority": louder dispatch, extra launder heat, etc. Exposed via the
--- GetTier export; this is just the documented threshold, not enforced here.
+-- Consumers treat a citizen at/above this tier as "priority": louder dispatch,
+-- extra launder scrutiny, etc. Exposed via the GetTier export; this is just the
+-- documented threshold, not enforced here. LIVE consumer today:
+-- palm6_laundering (Config.HeatScrutiny: the front skims extra off a HOT or
+-- WANTED launderer). palm6_dispatch is still planned, not built.
 Config.DispatchPriorityTier = 'HOT'
 
 -- ---------------------------------------------------------------------------
@@ -74,20 +76,45 @@ Config.RateLimits = {   -- seconds between repeats of a command, per source
 Config.TextClamp = 48   -- max length of a stored/displayed reason string
 
 -- ---------------------------------------------------------------------------
--- Housekeeping. Rows that have fully decayed to 0 are pruned so the table stays
--- small; correctness never depends on this (reads always re-derive from
--- updated_at), it is pure cleanup.
+-- Housekeeping. Rows that have fully decayed are SETTLED to heat = 0, not
+-- deleted: `heat` re-derives from updated_at on every read, but `lifetime` is a
+-- cumulative career total that GetSummary sums and the README documents as part
+-- of the frozen export contract, and deleting the row destroyed it. A separate
+-- long-TTL prune keeps the table from growing without bound.
 -- ---------------------------------------------------------------------------
 Config.SweepIntervalMs = 300000  -- 5 min
+Config.SweepRetainDays = 30      -- delete a settled (heat = 0) row only after it
+                                 -- has sat untouched this long, i.e. a citizen
+                                 -- who has committed no crime in a month
 
 -- ---------------------------------------------------------------------------
 -- SUGGESTED heat weights (REFERENCE ONLY — not enforced here).
--- palm6_heat is shipped UNWIRED: it exposes AddHeat and nothing calls it yet.
--- When wiring a crime resource, have it call
+--
+-- This block used to say palm6_heat "ships UNWIRED" and that nothing calls
+-- AddHeat. That has not been true for a long time. As of this writing the
+-- export is wired in TEN resources:
+--     palm6_robbery      atm_robbery     palm6_chopshop     chopshop
+--     palm6_smuggling    smuggle_run     palm6_gunrunning   gun_deal
+--     palm6_laundering   launder         palm6_protection   shakedown
+--     palm6_drugs        drug_sale + drug_lab
+--     palm6_counterfeit  counterfeit     palm6_ransom       kidnap_ransom
+--     palm6_witnesses    reported_crime / shots_fired / intimidation
+-- and GetTier is read by palm6_laundering (the front skims harder off a HOT or
+-- WANTED launderer). palm6_witnesses is the important one: the heaviest crimes
+-- (murder, bank, jewellery, house robbery) live in qbx_* resources that are not
+-- in this repo, and its policeAlert shadow-listener is the only portable hook
+-- that reaches them.
+--
+-- When wiring a NEW crime resource, have it call
 --     exports.palm6_heat:AddHeat(citizenid, amount, reason, name)
--- at the moment it pays out / commits the crime. These are sane starting
--- amounts (a petty ATM job barely registers; a bank heist maxes you out fast).
--- Kept here so every wirer pulls from one table instead of inventing numbers.
+-- at the moment it pays out / commits the crime, keyed to the ACTOR's own
+-- citizenid, inside the soft-dep shape every existing wire uses:
+--     if GetResourceState('palm6_heat') == 'started' then
+--         pcall(function() exports.palm6_heat:AddHeat(cid, weight, 'reason') end)
+--     end
+-- These are sane starting amounts (a petty ATM job barely registers; a bank
+-- heist maxes you out fast). Kept here so every wirer pulls from one table
+-- instead of inventing numbers.
 -- ---------------------------------------------------------------------------
 Config.Suggested = {
     drug_sale        = 3,
@@ -95,7 +122,15 @@ Config.Suggested = {
     gun_deal         = 10,
     smuggle_run      = 12,
     counterfeit      = 8,
-    launder          = 5,
+    launder          = 5,   -- REFERENCE ONLY, and no longer what palm6_laundering
+                            -- charges: that wire is amount-proportional (see its
+                            -- Config.PlayerHeat), because a launder run takes a
+                            -- variable $500..$25,000 and a flat per-run charge
+                            -- made one huge wash as quiet as a tiny one. Under
+                            -- that wire a quiet wash spans 1 ($500) to 13
+                            -- ($25,000) and hits exactly 5 at ~$8,000; 5 stays
+                            -- here as the anchor a new FLAT-charge wirer would
+                            -- size against, not as a value anything reads.
     shakedown        = 6,
     atm_robbery      = 8,
     store_robbery    = 15,

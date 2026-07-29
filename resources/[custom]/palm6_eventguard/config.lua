@@ -19,13 +19,29 @@ Config.KickThreshold = 3
 -- events (money is server-authoritative via qbx_core AddMoney/RemoveMoney;
 -- OnJobUpdate is an internal TriggerEvent), so those guards were inert
 -- since they shipped.
+--
+-- Caveat corrected 2026-07-28: that "Qbox never net-registers them" rationale
+-- was true of Qbox but NOT of this layer. palm6_whitelist_jobs and
+-- palm6_onboarding were each calling RegisterNetEvent on
+-- QBCore:Server:OnJobUpdate / QBCore:Server:OnPlayerLoaded in their own
+-- bridges, which OPENS a server-internal name to the network for every
+-- listener on the box, not just theirs. Both were swapped to AddEventHandler
+-- (the correct primitive for a server-raised event) in the same pass that
+-- added the budgets below, so the claim above is now true layer-wide. If a
+-- future bridge ever net-registers a framework-internal name again, the right
+-- fix is to change the bridge, not to add a budget here.
 Config.Events = {
     -- palm6 custom layer events
     ['palm6_courier:post']     = { calls = 5,  window_seconds = 60  },
-    ['palm6_courier:accept']   = { calls = 10, window_seconds = 60  },
     ['palm6_courier:pickup']   = { calls = 20, window_seconds = 60  },
     ['palm6_courier:complete'] = { calls = 20, window_seconds = 60  },
-    ['palm6_courier:cancel']   = { calls = 10, window_seconds = 60  },
+    -- palm6_courier:accept and :cancel are GONE, not merely unbudgeted. Both were
+    -- registered net events that no client ever raised, so they were unowned
+    -- network entry points into a money flow; they were deleted rather than
+    -- hardened. Accept now runs only through /courier accept, which carries its
+    -- own per-source rate limit (acceptPosting's lastAccept) because this budget
+    -- never covered the command path. Leaving dead budgets here would tell the
+    -- next auditor those names are still live entry points.
 
     -- palm6_robbery — ATM two-phase flow. `complete` is the money-touching
     -- event (Bridge.AddCash payout); `start`/`cancel` are budgeted too since
@@ -108,13 +124,15 @@ Config.Events = {
     -- money-touching events are `deposit`/`withdraw` (vault, re-validated +
     -- atomic server-side) and `create` (charges the founder's bank); the
     -- membership events (`invite`/`acceptInvite`/`declineInvite`/`leave`/`kick`/
-    -- `promote`/`demote`/`disband`) all re-check rank server-side. `requestMenu`
-    -- is read-only but fans a full DB-backed roster snapshot per call, so it
-    -- gets a blunt call-count budget as defense-in-depth (same reasoning as
-    -- ox_inventory:openInventory below). ensure order in custom.cfg MUST put
-    -- palm6_eventguard before palm6_gangs so these guards register first in the
-    -- handler chain (same requirement as palm6_robbery/turf/drugs above).
-    ['palm6_gangs:requestMenu']    = { calls = 20, window_seconds = 30 },
+    -- `promote`/`demote`/`disband`) all re-check rank server-side. ensure order in
+    -- custom.cfg MUST put palm6_eventguard before palm6_gangs so these guards
+    -- register first in the handler chain (same requirement as
+    -- palm6_robbery/turf/drugs above).
+    --   palm6_gangs:requestMenu USED to be budgeted here. The net event was
+    -- deleted: no client raised it, so it was an unowned network entry point that
+    -- fanned a full DB-backed roster snapshot per call. The menu is reached
+    -- through the gang command and in-handler pushMenu calls instead, neither of
+    -- which is a network entry point.
     ['palm6_gangs:create']         = { calls = 5,  window_seconds = 60 },
     ['palm6_gangs:disband']        = { calls = 5,  window_seconds = 60 },
     ['palm6_gangs:invite']         = { calls = 15, window_seconds = 60 },
@@ -170,6 +188,22 @@ Config.Events = {
     ['palm6_flashdrop:consign:buy']    = { calls = 15, window_seconds = 60 },
     ['palm6_flashdrop:consign:list']   = { calls = 15, window_seconds = 60 },
     ['palm6_flashdrop:fence:sell']     = { calls = 15, window_seconds = 60 },
+    -- The other half of each two-phase flow was left unbudgeted when the four
+    -- above shipped, which is the wrong half to guard: `startCheckout` is what
+    -- RESERVES a drop slot, `craft:start` is what CONSUMES the materials, and
+    -- `consign:cancel` is what RETURNS a listed pair to inventory. Guarding only
+    -- the payout side lets a flood exhaust stock/slots without ever reaching a
+    -- budgeted event. Sized to match their already-budgeted siblings; each still
+    -- re-validates ownership + price + cooldown server-side on its own.
+    ['palm6_flashdrop:startCheckout']  = { calls = 15, window_seconds = 60 },
+    ['palm6_flashdrop:craft:start']    = { calls = 15, window_seconds = 60 },
+    ['palm6_flashdrop:craft:finish']   = { calls = 15, window_seconds = 60 },
+    ['palm6_flashdrop:consign:cancel'] = { calls = 15, window_seconds = 60 },
+    ['palm6_flashdrop:reportStolen']   = { calls = 10, window_seconds = 60 },
+    -- fence:menu is a read-only snapshot that fans a DB read + inventory scan
+    -- per call - same "blunt budget as defense-in-depth" reasoning as the
+    -- palm6_drugs menu events above.
+    ['palm6_flashdrop:fence:menu']     = { calls = 20, window_seconds = 60 },
 
     -- palm6_counterfeit — counterfeit-cash chain. `printer:finish` collects a
     -- printed run, `sink:spend` launders/spends fake bills, `fence:pass` passes to
@@ -178,10 +212,30 @@ Config.Events = {
     ['palm6_counterfeit:printer:feed']   = { calls = 20, window_seconds = 60 },
     ['palm6_counterfeit:sink:spend']     = { calls = 20, window_seconds = 60 },
     ['palm6_counterfeit:fence:pass']     = { calls = 20, window_seconds = 60 },
+    -- Same "only the payout half was budgeted" gap as palm6_flashdrop above.
+    -- `place` consumes a printer item into a persisted world printer,
+    -- `printer:start` consumes the loaded paper/ink into a run, `printer:pickup`
+    -- reclaims the printer item, and `pen:finish` resolves the counterfeit-pen
+    -- check that decides whether a bill passes. All four are item-touching and
+    -- were reachable at an unbounded rate. `place` is the tightest: it is a
+    -- one-off per printer and it writes a persisted world object.
+    ['palm6_counterfeit:place']          = { calls = 10, window_seconds = 60 },
+    ['palm6_counterfeit:printer:start']  = { calls = 15, window_seconds = 60 },
+    ['palm6_counterfeit:printer:pickup'] = { calls = 15, window_seconds = 60 },
+    ['palm6_counterfeit:pen:finish']     = { calls = 15, window_seconds = 60 },
 
     -- palm6_witnesses — `payoff` pays a witness to recant (bank cash out),
     -- server-validated with its own cooldown. Blunt budget as defense-in-depth.
     ['palm6_witnesses:payoff'] = { calls = 15, window_seconds = 60 },
+    -- canvass:finish / press:finish are the RESOLVE half of the two-phase
+    -- canvass and press flows: each consumes the pending server-side entry and
+    -- grants the statement (canvass) or the recant (press). The `:start` half is
+    -- self-limiting because a second start just overwrites the pending entry;
+    -- the finish half is what actually resolves, so it is what needs the bound.
+    -- Both re-check a min AND max elapsed against the SERVER clock, so these
+    -- budgets are defense-in-depth on top, not the authority.
+    ['palm6_witnesses:canvass:finish'] = { calls = 15, window_seconds = 60 },
+    ['palm6_witnesses:press:finish']   = { calls = 15, window_seconds = 60 },
 
     -- ox_inventory shop purchase fan-out — recipe-shipped net event.
     -- ox_inventory does its own per-event data validation (Utils.LogExploit);
@@ -317,4 +371,90 @@ Config.Events = {
     -- canned line now (LLM later); a generous budget covers a normal conversation
     -- pace, the light per-src anti-spam handles the rest. Inert while dark.
     ['palm6_brain:say']                   = { calls = 40, window_seconds = 60 },
+
+    -- palm6_brain Phase 1+ - the two remaining client-addressable brain events.
+    -- `talk:say` is the LLM-backed dialogue path: every accepted call can fire an
+    -- outbound PerformHttpRequest, so an unbudgeted flood costs real money as
+    -- well as thread time. Sized to match its `:say` sibling above (a normal
+    -- conversation pace is nowhere near 40/min). `crime:report` feeds
+    -- palm6_brain's OWN dispatch fan-out - a routed blip on every on-duty
+    -- officer over the private palm6_brain:dispatch client event - so it is
+    -- tighter. Note that is NOT the same thing as the shared 911 bus below:
+    -- palm6_brain does not touch police:server:policeAlert, so its dispatches
+    -- are absent from palm6_mdt's /calls log and from palm6_witnesses'
+    -- incidents unless palm6_brain Config.PoliceBus.Enabled is flipped on (it
+    -- ships off). Both events have their own light per-src anti-spam
+    -- in-resource; these are the blunt outer bound. NOTE: palm6_brain is LIVE in
+    -- production (shared/config.lua, grep `Config.Enabled = true`), so these are
+    -- not inert.
+    ['palm6_brain:talk:say']              = { calls = 40, window_seconds = 60 },
+    ['palm6_brain:crime:report']          = { calls = 20, window_seconds = 60 },
+
+    -- police:server:policeAlert - the recipe-shipped 911 event. TWO custom
+    -- resources register a second handler on it (palm6_mdt/bridge/sv_framework.lua
+    -- persists the call into palm6_mdt_calls; palm6_witnesses/server/main.lua
+    -- opens a witness incident), and BOTH are ensured after palm6_eventguard
+    -- (custom.cfg:112 vs :146 and :179), so the guard really is first in this
+    -- chain and its CancelEvent() really does kill the alert for them. One
+    -- forged flood would otherwise write DB rows AND spawn incidents across the
+    -- whole police stack.
+    --
+    -- SIZING - read before you tighten this. Two very different producer sets
+    -- raise this name:
+    --   * SERVER-side (the sanctioned custom path): seven producers in this
+    --     tree - palm6_business, palm6_counterfeit, palm6_drugs,
+    --     palm6_laundering, palm6_protection, palm6_smuggling, palm6_witnesses,
+    --     all via their bridge/sv_framework.lua. These are now genuinely exempt,
+    --     but ONLY because guard() was fixed to use the repo's real server-raise
+    --     predicate (nil / <= 0 / 65535). The old `src == 0` test let a server
+    --     raise that surfaced as 65535 count against this budget, which is how a
+    --     4/60 cap could cancel a REAL 911 and then kick a phantom src.
+    --   * CLIENT-side: the out-of-repo qbx robbery resources (storerobbery,
+    --     houserobbery, jewellery, bankrobbery) raise this from the client, so a
+    --     client-facing bound is still wanted to cap the flood exploit.
+    -- 40/60s is therefore sized for the CLIENT half only, and generously: a busy
+    -- night of legitimate qbx robberies is nowhere near it, while a scripted
+    -- flood blows through it instantly.
+    --
+    -- class = 'drop_only' is deliberate: over-budget alerts are dropped but
+    -- never recorded and never kicked. A false 3-strike kick on the 911 path is
+    -- a far worse outcome than a dropped duplicate alert, and this event has
+    -- producers we cannot see from this repo.
+    ['police:server:policeAlert']         = { calls = 40, window_seconds = 60, class = 'drop_only' },
+
+    -- palm6_replay:uploadBuffer - one of the tighter budgets in this file (the
+    -- tightest is palm6_onboarding:acceptRules at 3/60), because it carries by
+    -- far the largest payload (a whole telemetry frame buffer) and lands in a DB
+    -- write. A legitimate client uploads once per capture, and the upload is
+    -- server-solicited and bounded by Config.Incident.GlobalPerMinuteCap, so 10
+    -- per minute is already generous; the point is that a modified client cannot
+    -- use it as a bandwidth/DB amplifier.
+    ['palm6_replay:uploadBuffer']         = { calls = 10, window_seconds = 60 },
+
+    -- palm6_racing:checkpoint - the one HIGH-FREQUENCY gameplay event outside
+    -- fc_combat. class='drop_only' selects the guard's DROP-WITHOUT-KICK branch
+    -- (see server/main.lua guard()). That is the correct model for this event
+    -- because the race authority is already server-side (next-checkpoint-in-order
+    -- + MinCheckpointMs + a server-coord proximity check that FAILS CLOSED), and
+    -- a false 3-strike kick would eject a legitimate racer mid-race - a far worse
+    -- outcome than a dropped checkpoint.
+    --
+    -- 120/60s sizing: do NOT justify it with the resource's own
+    -- Config.Race.CheckpointEventMs throttle (palm6_racing/server/main.lua:376).
+    -- That throttle lives in the RegisterNetEvent handler, which runs AFTER this
+    -- guard in the chain, so it cannot bound what the guard counts. The real
+    -- bound is client-side: palm6_racing/client/main.lua:65-70 sends one event
+    -- per checkpoint behind a `race.pending` latch with a 3s retry, so a legit
+    -- racer emits at most ~20/min. 120/60s leaves six times that headroom and
+    -- still bounds a flood.
+    ['palm6_racing:checkpoint']           = { calls = 120, window_seconds = 60, class = 'drop_only' },
+
+    -- palm6_pd_life - the police duty/post surface. Being ON DUTY is the gate for
+    -- MDT, evidence, citations, seizure, blotter, heat and EMS, so duty-state
+    -- churn is worth bounding even though each handler re-checks Bridge.IsPolice
+    -- server-side. `requestHeld` is a client-load pull that fans a snapshot back
+    -- per call (same shape and budget as palm6_onboarding:checkStatus above).
+    ['palm6_pd_life:toggleDuty']          = { calls = 10, window_seconds = 60 },
+    ['palm6_pd_life:takePost']            = { calls = 15, window_seconds = 60 },
+    ['palm6_pd_life:requestHeld']         = { calls = 10, window_seconds = 60 },
 }

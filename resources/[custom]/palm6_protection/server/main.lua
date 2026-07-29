@@ -16,6 +16,62 @@ local lastAction  = {}   -- [src] = ts of last /shakedown (spam guard)
 AddEventHandler('playerDropped', function() lastAction[source] = nil end)  -- reclaim on disconnect
 local collectLock = {}   -- [business_id] = true while a shakedown is in flight
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating table). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a new box boots with no
+-- palm6_protection_collections. The collection cooldown is not held in memory,
+-- it is derived from MAX(created_at) in that table, and the query is
+-- pcall-wrapped: with the table absent cooldownRemaining() returns 0 for every
+-- business FOREVER, so every business is permanently ready to collect and the
+-- racket becomes an unlimited dirty-cash faucet with nothing printed anywhere.
+-- On the live box this statement is a pure no-op.
+--
+-- DDL copied VERBATIM from sql/0035_protection.sql (trailing semicolon
+-- dropped, same as the other resources that carry their own DDL).
+--
+-- Only the table this resource OWNS is created here. palm6_turf (read through
+-- Bridge for zone ownership) and the palm6_evidence case tables (written
+-- through that resource's frozen exports) belong to those resources and are
+-- created by their own boot DDL, the same way palm6_courier and
+-- palm6_evidence each create only their own.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_protection_collections` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    gang VARCHAR(50) NOT NULL,
+    business_id VARCHAR(50) NOT NULL,
+    zone_id VARCHAR(50) NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    amount INT UNSIGNED NOT NULL,
+    flagged TINYINT(1) NOT NULL DEFAULT 0,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_protection_business_time (business_id, created_at),
+    INDEX idx_palm6_protection_gang (gang)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_protection] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 math.randomseed(os.time())
 
 local function now() return os.time() end
@@ -55,7 +111,16 @@ local function ownedBusinessAt(src)
     if not Config.ExtortOwned then return nil end
     local c = Bridge.GetCoords(src)
     if not c then return nil end
-    local biz = exports.palm6_business:BusinessAtCoords(c.x, c.y, c.z, Config.OwnedRadius)
+    -- Cross-resource calls are SOFT here, same as fileEvidence() below: if
+    -- palm6_business is not on the box (or throws), the bare export call would
+    -- hard-error the whole /shakedown handler. Returning nil already means "no
+    -- owned target", so the flow degrades cleanly to the hardcoded Config
+    -- businesses instead of dying.
+    if not Bridge.ResourceStarted('palm6_business') then return nil end
+    local biz
+    pcall(function()
+        biz = exports.palm6_business:BusinessAtCoords(c.x, c.y, c.z, Config.OwnedRadius)
+    end)
     if not biz then return nil end
     local zone = nearestZone({ x = biz.x, y = biz.y, z = biz.z })
     if not zone then return nil end
@@ -192,7 +257,17 @@ local function cmdShakedown(src)
     -- hand-off fails, the drain is refunded so no money is lost. Any failure voids
     -- the claim so the business isn't falsely locked for a payout that never happened.
     if business.isOwned then
-        local taken = exports.palm6_business:Extort(business.bizId, amount, cid, 'Shakedown')
+        -- Soft-guarded, like every other cross-resource call in this file. A
+        -- throw here would abort the handler with the durable claim row still
+        -- written and collectLock still held, locking the business out of every
+        -- future shakedown until a restart. pcall so the failure lands in the
+        -- existing voidClaim() branch below, which already unwinds both.
+        local taken
+        if Bridge.ResourceStarted('palm6_business') then
+            pcall(function()
+                taken = exports.palm6_business:Extort(business.bizId, amount, cid, 'Shakedown')
+            end)
+        end
         if not taken or taken < 1 then
             voidClaim()
             Bridge.Notify(src, 'Protection', ("%s's register came up dry."):format(business.label), 'error')
@@ -203,7 +278,13 @@ local function cmdShakedown(src)
             -- Refund the drain. It only fails if the owner CLOSED the business in the
             -- gap (its row is gone) — then the amount is destroyed (deflationary, rare,
             -- non-exploitable). Meter it rather than swallow it, per the money-safety note.
-            if not exports.palm6_business:RefundExtortion(business.bizId, amount, 'shakedown-void') then
+            local refunded
+            if Bridge.ResourceStarted('palm6_business') then
+                pcall(function()
+                    refunded = exports.palm6_business:RefundExtortion(business.bizId, amount, 'shakedown-void')
+                end)
+            end
+            if not refunded then
                 print(('^3[palm6_protection] shakedown void: $%d could not be refunded to business %s ')
                     :format(amount, tostring(business.bizId))
                     .. '(closed mid-shakedown) — destroyed.^0')
@@ -288,16 +369,28 @@ AddEventHandler('onResourceStart', function(resource)
             .. 'protection racket disabled.^0'):format(Config.Payout))
         return
     end
-    local turf = Bridge.ResourceStarted('palm6_turf')
-    local total, collected = 0, 0
-    pcall(function()
-        local r = MySQL.single.await(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM palm6_protection_collections')
-        total = r and tonumber(r.c) or 0
-        collected = r and tonumber(r.s) or 0
+    -- The count has to run after ensureSchema, and ensureSchema has to Wait for
+    -- oxmysql's connection first, so the banner moves onto its own thread.
+    -- Nothing is cached in memory at boot (the cooldown is a live query), so
+    -- there is no boot window to gate.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        local turf = Bridge.ResourceStarted('palm6_turf')
+        local total, collected = 0, 0
+        pcall(function()
+            local r = MySQL.single.await(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM palm6_protection_collections')
+            total = r and tonumber(r.c) or 0
+            collected = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_protection] racket open — %d business(es), %d shakedown(s) all-time ($%d); turf link %s'):format(
+            #Config.Businesses, total, collected, turf and 'ONLINE' or 'OFFLINE (no owners → nothing collectable)'))
+        if not SchemaReady then
+            print('^1[palm6_protection] schema MISSING - collection cooldowns cannot be enforced ' ..
+                  'and every shakedown is uncapped on this box.^0')
+        end
     end)
-    print(('[palm6_protection] racket open — %d business(es), %d shakedown(s) all-time ($%d); turf link %s'):format(
-        #Config.Businesses, total, collected, turf and 'ONLINE' or 'OFFLINE (no owners → nothing collectable)'))
 end)
 
 --- Totals for devtest and future consumers.

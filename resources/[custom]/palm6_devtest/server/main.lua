@@ -514,67 +514,42 @@ end
 
 -- Each started palm6 resource's tables must exist. One information_schema
 -- round-trip, then set lookups — no per-table queries.
-local REQUIRED_TABLES = {
-    palm6_allowlist   = { 'allowlist' },
-    palm6_bounty      = { 'palm6_bounty_contracts' },
-    palm6_clout       = { 'palm6_clout_streamers', 'palm6_clout_deals', 'palm6_clout_vod' },
-    palm6_counterfeit = { 'palm6_counterfeit_printers', 'palm6_counterfeit_batches',
-                          'palm6_counterfeit_wads', 'palm6_counterfeit_hops',
-                          'palm6_counterfeit_leads', 'palm6_counterfeit_heat' },
-    palm6_courier     = { 'courier_postings' },
-    palm6_eventguard  = { 'event_violations' },
-    palm6_fightclub   = { 'palm6_fightclub_matches', 'palm6_fightclub_bets' },
-    palm6_evidence    = { 'palm6_evidence', 'palm6_evidence_cases', 'palm6_evidence_suspects' },
-    palm6_flashdrop   = { 'palm6_flashdrop_drops', 'palm6_flashdrop_serials',
-                          'palm6_flashdrop_provenance', 'palm6_flashdrop_listings' },
-    palm6_gangs       = { 'palm6_gangs', 'palm6_gang_members', 'palm6_gang_vault_log' },
-    palm6_grind       = { 'grind_skill' },
-    palm6_gunrunning  = { 'palm6_gunrunning_sales' },
-    palm6_chopshop    = { 'palm6_chopshop_stolen', 'palm6_chopshop_sales' },
-    palm6_laundering  = { 'palm6_laundering_runs' },
-    palm6_numbers     = { 'palm6_numbers_bets', 'palm6_numbers_draws' },
-    palm6_protection  = { 'palm6_protection_collections' },
-    palm6_loanshark   = { 'palm6_loanshark_loans' },
-    palm6_seizure     = { 'palm6_seizure_forfeitures' },
-    palm6_smuggling   = { 'palm6_smuggling_runs' },
-    palm6_drugs       = { 'palm6_drugs_plants', 'palm6_drugs_recipes', 'palm6_drugs_progression', 'palm6_drugs_sales', 'palm6_drugs_processes', 'palm6_drugs_dealers' },
-    palm6_citations   = { 'palm6_citations' },
-    palm6_insurance   = { 'palm6_insurance_policies', 'palm6_insurance_claims' },
-    palm6_legal       = { 'palm6_legal_petitions' },
-    palm6_mdt         = { 'palm6_mdt_bolos', 'palm6_mdt_reports',
-                          'palm6_mdt_warrants', 'palm6_mdt_bookings',
-                          'palm6_mdt_calls' },
-    palm6_onboarding  = { 'palm6_onboarding' },
-    palm6_pumpcoin    = { 'palm6_pumpcoin_coins', 'palm6_pumpcoin_holdings', 'palm6_pumpcoin_trades' },
-    palm6_ransom      = { 'palm6_ransom_cases' },
-    palm6_replay      = { 'palm6_replay_scenes', 'palm6_replay_participants' },
-    palm6_staff       = { 'audit_log' },
-    palm6_turf        = { 'palm6_turf' },
-    palm6_witnesses   = { 'palm6_witnesses_incidents', 'palm6_witnesses' },
-}
-
+--
+-- The REQUIRED_TABLES map used to live HERE, which was the bug: this whole
+-- resource is gated behind the `palm6:devtest` convar that custom.cfg tells
+-- operators to leave unset, so the layer's only missing-table assertion never
+-- ran in production. The map now lives in palm6_perf/server/tables.lua (always
+-- on, prints its own boot banner) and this test reads it back through the
+-- export. ONE authority - a table added to the map is covered in both places,
+-- and there is no second copy to drift.
 local function testTables()
-    local present = {}
-    local ok = pcall(function()
-        local rows = MySQL.query.await(
-            'SELECT table_name AS t FROM information_schema.tables WHERE table_schema = DATABASE()') or {}
-        for _, r in ipairs(rows) do present[r.t or r.T] = true end
+    if not resourceUp('palm6_perf') then
+        fail('tables - palm6_perf not started (it owns the REQUIRED_TABLES authority)')
+        return
+    end
+
+    local report
+    local queried = pcall(function()
+        report = exports.palm6_perf:CheckSchema()
     end)
-    if not check(ok and next(present) ~= nil, 'tables — information_schema readable') then return end
+    if not check(queried and type(report) == 'table', 'tables - palm6_perf:CheckSchema() returns a report') then return end
+    if not check(not report.err, ('tables - information_schema readable%s')
+        :format(report.err and (': ' .. tostring(report.err)) or '')) then return end
+
+    local required
+    pcall(function() required = exports.palm6_perf:GetRequiredTables() end)
+    if not check(type(required) == 'table', 'tables - palm6_perf:GetRequiredTables() returns the map') then return end
 
     local resources = {}
-    for resource in pairs(REQUIRED_TABLES) do resources[#resources + 1] = resource end
+    for resource in pairs(required) do resources[#resources + 1] = resource end
     table.sort(resources)
     for _, resource in ipairs(resources) do
         if resourceUp(resource) then
-            local missing = {}
-            for _, t in ipairs(REQUIRED_TABLES[resource]) do
-                if not present[t] then missing[#missing + 1] = t end
-            end
-            check(#missing == 0, #missing == 0
-                and ('tables — %s: all %d present'):format(resource, #REQUIRED_TABLES[resource])
-                or ('tables — %s MISSING %s — apply the matching sql/ migration')
-                    :format(resource, table.concat(missing, ', ')))
+            local missing = report.missing and report.missing[resource]
+            check(not missing, (not missing)
+                and ('tables - %s: all %d present'):format(resource, #required[resource])
+                or ('tables - %s MISSING %s - apply the matching sql/ migration')
+                    :format(resource, table.concat(missing or {}, ', ')))
         end
     end
 end

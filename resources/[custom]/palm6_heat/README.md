@@ -49,29 +49,79 @@ exports.palm6_heat:GetSummary()        --> { tracked, warm, hot, wanted, lifetim
 and `name` is optional (falls back to an online citizenid→name lookup, never
 touching the qbx `players` schema — the name is denormalised onto our row).
 
-## Wiring (this ships UNWIRED)
+## Wiring (this is WIRED; earlier revisions of this file said otherwise)
 
-Nothing calls `AddHeat` yet — same as every palm6 civic resource shipped first,
-wired second. To wire a crime resource, add ONE line where it pays out / commits
-the crime, using a weight from `Config.Suggested`:
+`AddHeat` is called from **ten** resources. This section used to claim the
+resource "ships UNWIRED"; that has not been true for a long time, and the stale
+claim is what let heat drift into being a leaderboard nobody felt.
+
+| Resource | Reason string | Fires on |
+|---|---|---|
+| `palm6_robbery` | `atm_robbery` | successful ATM job |
+| `palm6_chopshop` | `chopshop` | committed vehicle sale (+bonus if reported stolen) |
+| `palm6_smuggling` | `smuggle_run` | committed delivery payout |
+| `palm6_gunrunning` | `gun_deal` | committed black-market weapon purchase |
+| `palm6_laundering` | `launder` | committed wash, **amount-proportional** (does *not* use `Config.Suggested.launder`; see its `Config.PlayerHeat`) |
+| `palm6_protection` | `shakedown` | collected extortion payment |
+| `palm6_drugs` | `drug_sale`, `drug_lab` | street sale / lab collect (1 add per cid **per reason** per min) |
+| `palm6_counterfeit` | `counterfeit` | completed print cycle (after the jam bail) |
+| `palm6_ransom` | `kidnap_ransom` | the ransom **demand**, never the payout |
+| `palm6_witnesses` | `reported_crime`, `shots_fired`, `intimidation` | a persisted incident |
+
+`palm6_witnesses` is the load-bearing one. The heaviest crimes (murder, the
+bank job, jewellery, house robbery) live in `qbx_*` resources that are **not in
+this repo**, so there is no file to add a line to. They all funnel through
+`police:server:policeAlert`, which `palm6_witnesses` already shadow-listens on,
+making its `finalizeIncident` the only portable hook that reaches them.
+
+That alert is a *shared* bus, not a qbx-only one: seven in-repo resources raise
+it as well, and most of them already call `AddHeat` on the same code path. So
+`palm6_witnesses` suppresses its own `reported_crime` charge for any alert that
+arrived from a server-side `TriggerEvent` (which every in-repo emitter uses) and
+only scores client-fired alerts. See `palm6_witnesses/shared/config.lua`
+`Config.Heat`. **If you add a `Bridge.PoliceAlert` call to a resource, you own
+its heat wire**. The witness layer will not price it for you.
+
+To wire a NEW crime resource, add ONE block where it pays out / commits the
+crime, keyed to the **actor's own** citizenid, using a weight from
+`Config.Suggested` and the soft-dep shape every existing wire uses:
 
 ```lua
 -- e.g. in palm6_robbery on a successful ATM job:
-exports.palm6_heat:AddHeat(citizenid, 8, 'atm_robbery', playerName)
+if GetResourceState('palm6_heat') == 'started' then
+    pcall(function()
+        exports.palm6_heat:AddHeat(citizenid, 8, 'atm_robbery', playerName)
+    end)
+end
 ```
 
 Suggested weights live in one place (`Config.Suggested`) so every wirer pulls
 from the same table: a petty ATM barely registers (3–8), a bank heist maxes you
 out fast (55). Adding heat is loose-coupled and non-breaking — if `palm6_heat`
-is stopped, the `exports.palm6_heat:AddHeat` call is a harmless no-op.
+is stopped, the whole block is a no-op.
 
-### Two consumers this unblocks
+**Anti-farm is the wirer's job.** Every wire must sit *after* the payout is
+committed, must key to the actor (never a client-supplied citizenid, so nobody
+can heat up a rival), and must be bounded by something: a per-character
+cooldown, a daily cap, a consumable, or its own throttle. Where the owning
+resource's cooldown was too loose to carry a heat wire (`palm6_drugs`, whose
+sell cooldown is 8s), the wire carries its own.
 
-- **`palm6_season` Most-Wanted ladder** (currently commented out because no
-  durable wanted score existed): re-enable it to read `GetTop` / `GetSummary`.
-- **`palm6_dispatch` (planned)** and **`palm6_laundering`**: treat a citizen at
-  or above `Config.DispatchPriorityTier` (`HOT`) as priority — louder dispatch,
-  extra launder scrutiny — via `GetTier`.
+### Consumers
+
+- **`palm6_laundering`** (live): reads `GetTier` and skims extra off a `HOT` or
+  `WANTED` launderer. See its `Config.HeatScrutiny`.
+- **`palm6_season` Most-Wanted ladder**: reads `GetTop` (`noPrize` ladder F).
+- **`palm6_dispatch`** (planned, not built): would treat a citizen at or above
+  `Config.DispatchPriorityTier` (`HOT`) as priority.
+
+## Housekeeping
+
+The 5-minute sweep **settles** a fully-decayed row to `heat = 0` rather than
+deleting it: `heat` re-derives from `updated_at` on every read, but `lifetime`
+is a cumulative career total that `GetSummary` returns as part of this contract,
+and deleting the row destroyed it. A settled row is deleted only after
+`Config.SweepRetainDays` (30) of no crime at all.
 
 ## Schema (self-created at boot, idempotent)
 

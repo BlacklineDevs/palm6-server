@@ -121,6 +121,45 @@ local function cmdSeizures(src)
 end
 
 -- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_mdt/server/main.lua:
+-- Wait(3000) for oxmysql, per-statement pcall, CREATE TABLE IF NOT EXISTS.
+-- sql/ files are applied BY HAND (deploy/README.md; CI never touches the DB),
+-- so a fresh box that missed one left every query here pcall-swallowed into
+-- silence - /seizures reporting zeros and every forfeiture row vanishing,
+-- instead of "schema MISSING". Re-runs are harmless no-ops on the live box,
+-- which already has this table.
+--
+-- The statement below is copied VERBATIM from the matching sql/ file so the
+-- two can never diverge:
+--   palm6_seizure_forfeitures   <- sql/0037_seizure.sql
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_seizure_forfeitures` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    officer_citizenid VARCHAR(64) NOT NULL,
+    suspect_citizenid VARCHAR(64) NOT NULL,
+    amount INT UNSIGNED NOT NULL,
+    evidence_case_id INT UNSIGNED NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_palm6_seizure_suspect (suspect_citizenid),
+    INDEX idx_palm6_seizure_officer (officer_citizenid)
+);
+        ]],
+    }
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_seizure] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Commands + boot
 -- ---------------------------------------------------------------------------
 Bridge.RegisterCommand('seizedirty', function(source) cmdSeizeDirty(source) end)
@@ -132,16 +171,24 @@ AddEventHandler('onResourceStart', function(resource)
         print(('^1[palm6_seizure] FATAL: item "%s" is not registered in ox_inventory — forfeiture disabled.^0'):format(Config.DirtyItem))
         return
     end
-    local count, total = 0, 0
-    pcall(function()
-        local r = MySQL.single.await("SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM palm6_seizure_forfeitures")
-        count = r and tonumber(r.c) or 0
-        total = r and tonumber(r.s) or 0
+    -- Schema + the counts that read it move into a thread so the DDL lands
+    -- before anything SELECTs. Nothing above this point touches the DB.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+
+        local count, total = 0, 0
+        pcall(function()
+            local r = MySQL.single.await("SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM palm6_seizure_forfeitures")
+            count = r and tonumber(r.c) or 0
+            total = r and tonumber(r.s) or 0
+        end)
+        print(('[palm6_seizure] forfeiture online — %d seizure(s), $%d taken out of circulation; warrant gate %s, evidence %s, schema %s'):format(
+            count, total,
+            Bridge.ResourceStarted('palm6_mdt') and 'via palm6_mdt' or (Config.RequireWarrant and 'OFFLINE (mdt down → no seizures)' or 'disabled'),
+            Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline',
+            schemaOk and 'OK' or '^1MISSING^0'))
     end)
-    print(('[palm6_seizure] forfeiture online — %d seizure(s), $%d taken out of circulation; warrant gate %s, evidence %s'):format(
-        count, total,
-        Bridge.ResourceStarted('palm6_mdt') and 'via palm6_mdt' or (Config.RequireWarrant and 'OFFLINE (mdt down → no seizures)' or 'disabled'),
-        Bridge.ResourceStarted('palm6_evidence') and 'ONLINE' or 'offline'))
 end)
 
 --- Totals for devtest and future consumers.

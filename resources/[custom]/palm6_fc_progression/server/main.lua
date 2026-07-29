@@ -45,6 +45,83 @@ local function dbg(msg)
     print('[palm6_fc_progression] ' .. msg)
 end
 
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same pattern as palm6_mdt/palm6_courier/
+-- palm6_ems: Wait(3000) for oxmysql on a thread, per-statement pcall, CREATE
+-- TABLE IF NOT EXISTS. sql/ files are applied BY HAND (deploy/README.md) and CI
+-- never touches the DB, so a restored backup or a fresh box can boot without
+-- these three tables. Every write here is pcall-wrapped, so that loss is
+-- SILENT: rep/rank/unlocks quietly stop existing while the console says
+-- nothing. Re-running is a harmless no-op on the live box, which already has
+-- them.
+--
+-- Each statement is copied VERBATIM from sql/0066_fightclub_defjam.sql (only
+-- the trailing semicolon dropped, since each is one MySQL.query call) so the
+-- two can never diverge:
+--   palm6_fc_progression, palm6_fc_unlocks, palm6_fc_daily <- sql/0066
+--
+-- DELIBERATELY NOT CREATED HERE, and this is not an oversight:
+--   * palm6_fightclub_matches (read for the anti-farm windows and the
+--     rep_awarded claim) is palm6_fightclub's table, created by that
+--     resource's own migration path. A second copy of someone else's DDL is a
+--     divergence waiting to happen.
+--   * the 0066 ALTERs that add rep_awarded/is_pve to that table are likewise
+--     palm6_fightclub's, and ADD COLUMN IF NOT EXISTS is MariaDB-only syntax
+--     that THROWS on MySQL 8 even when the column is present.
+--   * palm6_fc_pve_cooldowns exists in 0066 but no query in this resource
+--     touches it, so creating it here would be creating an unused table.
+--
+-- There are no additive ALTERs on the three tables this resource owns, so
+-- nothing is excluded from schemaOk here.
+-- ---------------------------------------------------------------------------
+local schemaOk = true
+
+local function ensureSchema()
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_fc_progression` (
+    citizenid VARCHAR(64) NOT NULL PRIMARY KEY,
+    rep INT NOT NULL DEFAULT 0,
+    wins INT NOT NULL DEFAULT 0,
+    losses INT NOT NULL DEFAULT 0,
+    rank_tier INT NOT NULL DEFAULT 0,
+    pve_wins INT NOT NULL DEFAULT 0,
+    pve_losses INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_fc_unlocks` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    unlock_id VARCHAR(48) NOT NULL,
+    unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_fc_unlock (citizenid, unlock_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_fc_daily` (
+    citizenid VARCHAR(64) NOT NULL,
+    day_bucket VARCHAR(10) NOT NULL,
+    pvp_rep_wins INT NOT NULL DEFAULT 0,
+    pve_rep_wins INT NOT NULL DEFAULT 0,
+    distinct_opponents INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (citizenid, day_bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            schemaOk = false
+            print(('^1[palm6_fc_progression] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    return schemaOk
+end
+
 -- Reserved sentinel guard: reject any non-string cid or a '__'-prefixed cid
 -- (e.g. '__CPU__') so a mis-plumbed seam can never create a phantom row.
 local function isReserved(cid)
@@ -428,6 +505,17 @@ end)
 -- ---------------------------------------------------------------------------
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
+    -- Schema FIRST, on its own thread. Wait(3000) is the house oxmysql-connect
+    -- wait and is strictly less than the reconcile's Wait(8000) below, so the
+    -- three CREATEs have landed before anything here SELECTs. Nothing in this
+    -- resource holds an in-memory cap or cache that this thread populates (the
+    -- daily caps are read straight out of palm6_fc_daily on each award), so no
+    -- command or seam needs to be gated on it.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        print(('[palm6_fc_progression] schema %s'):format(schemaOk and 'OK' or '^1MISSING^0'))
+    end)
     CreateThread(function()
         Wait(8000)
         local pending = {}

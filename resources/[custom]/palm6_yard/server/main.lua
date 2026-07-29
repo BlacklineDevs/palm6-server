@@ -39,6 +39,82 @@ local function dbg(msg)
     if Config.Debug then print('[palm6_yard] ' .. msg) end
 end
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Mirrors palm6_ems/server/main.lua's
+-- ensureSchema: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- every statement IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with none of
+-- the four yard tables. Every query here is pcall-wrapped, so the failure is
+-- SILENT and it fails OPEN on the guards that matter: the persisted labor
+-- cooldown never records, so relog-to-reset-labor is back; the sentence
+-- baseline never persists, so the 50% shave cap resets on every task; the
+-- commissary daily cap reads 0 bought forever; and the bail re-arrest cooldown
+-- other systems consult always answers "no cooldown". The console prints
+-- "prison economy online" throughout. On the live box (0047 already applied by
+-- hand) these statements are pure no-ops.
+--
+-- DDL copied VERBATIM from sql/0047_yard.sql. Those statements carry no
+-- ENGINE/CHARSET clause, so these do not either.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- The tables THIS resource owns and can answer for. Only these feed
+    -- SchemaReady. NOT included: xt_prison, the jail clock itself, which is
+    -- created and owned by the xt-prison resource (see the note at the top of
+    -- sql/0047_yard.sql). This resource only reaches it through the bridge.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS palm6_yard_sentence (
+    citizenid        VARCHAR(64) NOT NULL PRIMARY KEY,
+    baseline_minutes INT         NOT NULL DEFAULT 0,
+    shaved_minutes   INT         NOT NULL DEFAULT 0,
+    updated_at       BIGINT      NOT NULL DEFAULT 0
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS palm6_yard_labor (
+    citizenid       VARCHAR(64) NOT NULL PRIMARY KEY,
+    last_task_at    BIGINT      NOT NULL DEFAULT 0,
+    tasks_completed INT         NOT NULL DEFAULT 0
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS palm6_yard_commissary_log (
+    citizenid VARCHAR(64) NOT NULL,
+    item      VARCHAR(64) NOT NULL,
+    ymd       INT         NOT NULL,
+    qty       INT         NOT NULL DEFAULT 0,
+    PRIMARY KEY (citizenid, item, ymd)
+)
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS palm6_yard_bail (
+    id               INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid        VARCHAR(64) NOT NULL,
+    amount           INT         NOT NULL,
+    released_minutes INT         NOT NULL,
+    rearrest_until   BIGINT      NOT NULL DEFAULT 0,
+    created_at       BIGINT      NOT NULL DEFAULT 0,
+    INDEX idx_palm6_yard_bail_cid (citizenid)
+)
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_yard] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 -- A finite, non-negative number? Guards every money / time computation.
 local function sane(n)
     return type(n) == 'number' and n == n and n >= 0 and n < math.huge
@@ -381,30 +457,52 @@ end)
 -- ===========================================================================
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
+    -- The WHOLE boot sequence runs on this thread, not just the schema step.
+    -- ensureSchema has to Wait for oxmysql's connection before it can issue any
+    -- query, and `enabled` is this resource's existing boot gate: doLabor,
+    -- buyCommissary and postBail all refuse while it is false. Flipping it only
+    -- after the boot work completes is what keeps the Wait from opening a
+    -- window where labor runs with no persisted cooldown table behind it. The
+    -- cost is that the yard is closed for the first ~3s after an
+    -- `ensure palm6_yard`, the same state it already reports when a required
+    -- item is missing.
+    CreateThread(function()
+        Wait(3000) -- let oxmysql establish its connection first
 
-    for _, c in ipairs(Config.Commissary.Items) do commissaryIndex[c.item] = c end
+        for _, c in ipairs(Config.Commissary.Items) do commissaryIndex[c.item] = c end
 
-    if not Bridge.ResourceStarted('xt-prison') then
-        print('^1[palm6_yard] FATAL: the jail system is not started — the yard has no sentence to work on. Disabled.^0')
-        return
-    end
+        if not Bridge.ResourceStarted('xt-prison') then
+            print('^1[palm6_yard] FATAL: the jail system is not started — the yard has no sentence to work on. Disabled.^0')
+            return
+        end
 
-    local missing = {}
-    for _, item in ipairs(Config.RequiredItems) do
-        if not Bridge.ItemExists(item) then missing[#missing + 1] = item end
-    end
-    if #missing > 0 then
-        table.sort(missing)
-        print(('^1[palm6_yard] FATAL: %d required item(s) not registered in the item registry — yard disabled. '
-            .. 'Add to the shared items file: %s^0'):format(#missing, table.concat(missing, ', ')))
-        return
-    end
+        local missing = {}
+        for _, item in ipairs(Config.RequiredItems) do
+            if not Bridge.ItemExists(item) then missing[#missing + 1] = item end
+        end
+        if #missing > 0 then
+            table.sort(missing)
+            print(('^1[palm6_yard] FATAL: %d required item(s) not registered in the item registry — yard disabled. '
+                .. 'Add to the shared items file: %s^0'):format(#missing, table.concat(missing, ', ')))
+            return
+        end
 
-    enabled = true
-    print(('[palm6_yard] prison economy online — labor pay $%d/%ds (shave %d min, cap %d%%), '
-        .. '%d commissary item(s), bail floor $%d')
-        :format(Config.Labor.Pay, Config.Labor.CooldownSec, Config.Labor.ShaveMinutes,
-            math.floor(Config.Labor.ShaveCapPct * 100), #Config.Commissary.Items, Config.Bail.Floor))
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It is the only line that can report the fresh-box
+        -- case: every yard query is pcall'd, so a missing table prints exactly
+        -- the same "prison economy online" line a healthy box prints.
+        if not SchemaReady then
+            print('^1[palm6_yard] schema MISSING - labor cooldowns, shave caps, commissary caps ' ..
+                  'and bail re-arrest cooldowns are ALL unenforced on this box.^0')
+        end
+
+        enabled = true
+        print(('[palm6_yard] prison economy online — labor pay $%d/%ds (shave %d min, cap %d%%), '
+            .. '%d commissary item(s), bail floor $%d')
+            :format(Config.Labor.Pay, Config.Labor.CooldownSec, Config.Labor.ShaveMinutes,
+                math.floor(Config.Labor.ShaveCapPct * 100), #Config.Commissary.Items, Config.Bail.Floor))
+    end)
 end)
 
 AddEventHandler('playerDropped', function()

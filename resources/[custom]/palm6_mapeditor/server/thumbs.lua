@@ -12,12 +12,34 @@
 
 local THUMB_BASE = 'https://cdn.rage.mp/public/odb/imgs-small/'
 local MAX_ACTIVE = 16
+local MAX_QUEUE  = 512    -- backlog ceiling: beyond this, drop the request
+-- Must stay ABOVE the whole prop catalog (5,295), or the no-eviction policy below
+-- stops making sense: the tail of the catalog would never be admitted and would
+-- re-fetch from cdn.rage.mp on every browse for the life of the process. Peds and
+-- vehicles use generative tiles (html/app.js makeEntCard) and never request a
+-- thumbnail, so props ARE the whole working set and this bounds it with headroom.
+local MAX_CACHE  = 6144
 
 local cache = {}       -- [model] = dataURI (string) | false (no image)
+local cacheN = 0       -- entry count of `cache` (pairs() has no O(1) length)
 local waiters = {}     -- [model] = { src, ... } clients awaiting this fetch
 local queue = {}
 local active = 0
 local logged = false   -- one-time diagnostic of the first fetch
+
+-- Writes are the only path that grows the cache, so bound it here. Once full we
+-- stop ADMITTING new models rather than evicting. That is only defensible while
+-- MAX_CACHE exceeds the catalog (it does, see above), which makes the cap a
+-- runaway-memory backstop rather than a working eviction policy. Misses past the
+-- cap still resolve normally, they simply aren't remembered, and the queue cap
+-- below bounds how many can be in flight.
+local function cacheSet(model, result)
+    if cache[model] == nil then
+        if cacheN >= MAX_CACHE then return end
+        cacheN = cacheN + 1
+    end
+    cache[model] = result
+end
 
 local B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local function base64(data)
@@ -45,7 +67,7 @@ local function thumbUrl(model)
 end
 
 local function resolve(model, result)
-    cache[model] = result
+    cacheSet(model, result)
     local list = waiters[model]; waiters[model] = nil
     if list then
         for _, s in ipairs(list) do
@@ -93,6 +115,12 @@ end
 
 RegisterNetEvent('palm6_mapeditor:thumb:req', function(model)
     local src = source
+    -- ACE first, the same gate every other write surface in this resource uses
+    -- (live.lua / entities.lua / main.lua). Only /propui asks for thumbnails and
+    -- /propui needs /mapedit, so no legitimate non-admin ever reaches here, but
+    -- a cache miss fires an outbound HTTP request to a third-party CDN from the
+    -- box's own IP, which is not something an unauthenticated client should drive.
+    if not (src == 0 or IsPlayerAceAllowed(src, Config.Ace)) then return end
     if type(model) ~= 'string' or #model == 0 or #model > 64 or not model:match('^[%w_]+$') then return end
     if cache[model] ~= nil then
         TriggerClientEvent('palm6_mapeditor:thumb:res', src, model, cache[model])
@@ -102,6 +130,16 @@ RegisterNetEvent('palm6_mapeditor:thumb:req', function(model)
         waiters[model][#waiters[model] + 1] = src
         return
     end
+    -- Backlog ceiling. Checked BEFORE the waiters entry so a dropped request can't
+    -- leave a waiter list that nothing will ever resolve.
+    -- A drop is NOT retried: html/app.js requestThumb marks the model in a
+    -- permanent per-session thumbSent map, and its 12s safety-net timeout then
+    -- writes thumbData[model] = false, so a dropped model shows the fallback tile
+    -- for the rest of that client's session. That is the accepted cost (the grid
+    -- itself stays intact and nothing hangs), but it is a session-long cosmetic
+    -- loss, not a transient one, which is why MAX_QUEUE is set well above any
+    -- plausible single-scroll burst.
+    if #queue >= MAX_QUEUE then return end
     waiters[model] = { src }
     queue[#queue + 1] = model
     pump()

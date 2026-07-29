@@ -87,8 +87,30 @@ Config.Triggers = {
     -- Auto-flag scenes when other palm6 resources fire their incident events.
     -- Consumed read-only — palm6_replay never modifies those resources.
     -- Remove an entry to detach; add entries to flag more systems.
+    --
+    -- TRUST BOUNDARY (fixed 2026-07-28): this listed 'palm6_robbery:start', the
+    -- raw CLIENT-triggerable net event palm6_robbery/client/main.lua fires the
+    -- moment a player walks up to an ATM - before ANY of the server's start gates
+    -- (police count, weapon, per-ATM cooldown, proximity) have run. Any modified
+    -- client could therefore mint replay scenes at will, for robberies that were
+    -- rejected or never happened. The correct signal is 'palm6_robbery:started',
+    -- which palm6_robbery/server/main.lua raises with TriggerEvent ONLY after
+    -- every gate passed (grep `TriggerEvent('palm6_robbery:started'`).
+    -- palm6_witnesses already had this right: its shared/config.lua
+    -- Config.Hooks.palm6Robbery entry, and the comment above the
+    -- AddEventHandler for it in server/main.lua (grep `palm6Robbery.event`),
+    -- document the same reasoning. Cited by symbol, not line number - the line
+    -- numbers in both files have drifted since this comment was written.
+    --
+    -- Names listed here are subscribed through Bridge.OnForeignNetEvent, which
+    -- FAILS CLOSED: every entry is an AddEventHandler unless it carries an
+    -- explicit `clientRaised = true`, so adding a name here can never quietly
+    -- open it to the network. Only set clientRaised on an event the owning
+    -- resource's own CLIENT raises with TriggerServerEvent (that name is already
+    -- open, so a second handler adds no surface) - and never on a ':started'
+    -- style signal, which is server-raised after gates by convention.
     AutoFlagEvents = {
-        { event = 'palm6_robbery:start', type = 'robbery', label = 'Robbery in progress' },
+        { event = 'palm6_robbery:started', type = 'robbery', label = 'Robbery in progress' },
     },
 }
 

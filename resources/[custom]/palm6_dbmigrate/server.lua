@@ -10,6 +10,217 @@
 -- ===========================================================================
 
 local STATEMENTS = {
+    -- =======================================================================
+    -- BASE TABLES FOR EVERY ALTER BELOW.
+    --
+    -- This block exists because of a fresh-box failure mode that is INVISIBLE
+    -- on the live server. Eleven of the ALTER/UPDATE statements further down
+    -- target tables this file never created: their CREATE lives only in a
+    -- sql/NNNN_*.sql that is applied BY HAND (deploy/README.md), and CI never
+    -- touches the DB. On the prod box that is fine, the tables are already
+    -- there. On a restored backup or a brand-new box every one of those ALTERs
+    -- errors, the owning resource's queries then fail silently (nearly every
+    -- one is pcall-wrapped), and half the economy quietly does nothing.
+    --
+    -- These are placed FIRST so they are guaranteed to run before the ALTER
+    -- that depends on them, regardless of what gets appended below later.
+    --
+    -- EVERY statement here is copied VERBATIM from its sql/ file (only the
+    -- trailing semicolon is dropped, since each entry is one MySQL.query call).
+    -- Do NOT hand-edit these to "improve" them: a divergence between this file
+    -- and sql/ is undetectable on the live box and only explodes on the fresh
+    -- box this block exists to protect. If a column needs to change, add an
+    -- idempotent ALTER below instead, the way 0068-0073 already do.
+    --
+    -- NOT covered here (reported, deliberately not invented): palm6_lottery_draws
+    -- (0059 ALTER) and palm6_season_rewards (0061 ALTER) have NO sql/ file - their
+    -- owning resources self-create them on their own boot thread. On a fresh box
+    -- those two ALTERs can lose the race and FAIL once; the next boot fixes them,
+    -- and the loud FAIL summary at the bottom of this file now makes that visible.
+    -- =======================================================================
+    -- 0006 (sql/0006_courier.sql) - ALTERed by 0050 picked_up + 0056 settled.
+    { name = '0006 courier_postings', sql = [[
+CREATE TABLE IF NOT EXISTS `courier_postings` (
+    `id`                 INT AUTO_INCREMENT PRIMARY KEY,
+    `poster_citizenid`   VARCHAR(50) NOT NULL,
+    `courier_citizenid`  VARCHAR(50) DEFAULT NULL,
+    `bounty`             INT NOT NULL,
+    `pickup_x`           DOUBLE NOT NULL,
+    `pickup_y`           DOUBLE NOT NULL,
+    `pickup_z`           DOUBLE NOT NULL,
+    `dropoff_x`          DOUBLE NOT NULL,
+    `dropoff_y`          DOUBLE NOT NULL,
+    `dropoff_z`          DOUBLE NOT NULL,
+    `label`              VARCHAR(100) DEFAULT 'Package',
+    `status`             ENUM('open','taken','complete','cancelled','expired') NOT NULL DEFAULT 'open',
+    `created_at`         DATETIME NOT NULL,
+    `accepted_at`        DATETIME DEFAULT NULL,
+    `completed_at`       DATETIME DEFAULT NULL,
+    KEY `idx_status_created` (`status`, `created_at`),
+    KEY `idx_poster`         (`poster_citizenid`),
+    KEY `idx_courier`        (`courier_citizenid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0013 (sql/0013_turf.sql) - read by the 0049 UPDATE, ALTERed by 0051 rep_at.
+    { name = '0013 palm6_turf', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_turf` (
+    zone_id VARCHAR(50) NOT NULL PRIMARY KEY,
+    owner_gang VARCHAR(50) DEFAULT NULL,
+    captured_by VARCHAR(64) DEFAULT NULL,
+    captured_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0014 (sql/0014_pumpcoin.sql) - ALTERed by 0063 delist settlement.
+    { name = '0014 palm6_pumpcoin_coins', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_coins` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(32) NOT NULL,
+    ticker VARCHAR(8) NOT NULL,
+    emoji VARCHAR(16) NOT NULL,
+    creator_citizenid VARCHAR(64) NOT NULL,
+    creator_name VARCHAR(100) NOT NULL,
+    -- Bonding-curve parameters, frozen at mint time.
+    base_price DECIMAL(12,2) NOT NULL,
+    curve_k INT UNSIGNED NOT NULL,
+    -- Units currently on the curve (includes the dev premine). Total units
+    -- held across all holders always equals this number.
+    supply_sold INT UNSIGNED NOT NULL DEFAULT 0,
+    -- Units premined to the creator's hidden dev wallet at mint.
+    dev_allocation INT UNSIGNED NOT NULL DEFAULT 0,
+    -- 1 when the creator's gang held enough turf at mint (palm6_turf synergy).
+    verified TINYINT(1) NOT NULL DEFAULT 0,
+    status ENUM('live','rugged','delisted') NOT NULL DEFAULT 'live',
+    rugged_at TIMESTAMP NULL DEFAULT NULL,
+    -- 1 once the post-rug anonymity window has elapsed and the creator's
+    -- identity has been broadcast.
+    revealed TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    delisted_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_pumpcoin_coins_status (status),
+    INDEX idx_palm6_pumpcoin_coins_creator (creator_citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    { name = '0014 palm6_pumpcoin_holdings', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_pumpcoin_holdings` (
+    coin_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    units INT UNSIGNED NOT NULL DEFAULT 0,
+    PRIMARY KEY (coin_id, citizenid),
+    INDEX idx_palm6_pumpcoin_holdings_citizenid (citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0016 (sql/0016_clout.sql) - ALTERed by 0060 deals.paid.
+    { name = '0016 palm6_clout_deals', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_clout_deals` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    milestone INT UNSIGNED NOT NULL,
+    payout INT UNSIGNED NOT NULL DEFAULT 0,
+    unlocked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    claimed_at TIMESTAMP NULL DEFAULT NULL,
+    UNIQUE KEY uq_clout_deal (citizenid, milestone)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0017 (sql/0017_flashdrop.sql) - ALTERed by 0062 consignment settlement.
+    -- Only the listings table is registered here because only listings is
+    -- ALTERed; palm6_flashdrop's other three tables still have no self-create
+    -- and no dbmigrate entry (reported, out of this block's scope).
+    { name = '0017 palm6_flashdrop_listings', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_flashdrop_listings` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    uid CHAR(16) NOT NULL,
+    seller_citizenid VARCHAR(64) NOT NULL,
+    seller_name VARCHAR(100) NOT NULL,
+    price INT UNSIGNED NOT NULL,
+    status ENUM('active','sold','cancelled') NOT NULL DEFAULT 'active',
+    buyer_citizenid VARCHAR(64) DEFAULT NULL,
+    listed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_flashdrop_listings_status (status),
+    INDEX idx_palm6_flashdrop_listings_seller (seller_citizenid, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0021 (sql/0021_insurance.sql) - policies ALTERed by 0064 tier + 0065
+    -- status ENUM, claims ALTERed by 0057 credited_at + its index.
+    { name = '0021 palm6_insurance_policies', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_insurance_policies` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    plate VARCHAR(15) NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    vehicle_model VARCHAR(50) NOT NULL,
+    vehicle_value INT UNSIGNED NOT NULL,
+    premium_paid INT UNSIGNED NOT NULL,
+    coverage INT UNSIGNED NOT NULL,
+    deductible INT UNSIGNED NOT NULL,
+    status ENUM('active','lapsed','cancelled') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    INDEX idx_palm6_insurance_policies_plate (plate, status),
+    INDEX idx_palm6_insurance_policies_cid (citizenid),
+    INDEX idx_palm6_insurance_policies_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    { name = '0021 palm6_insurance_claims', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_insurance_claims` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    policy_id INT UNSIGNED NOT NULL,
+    plate VARCHAR(15) NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    kind ENUM('damage','total_loss','theft') NOT NULL,
+    assessed INT UNSIGNED NOT NULL,
+    risk_score TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    risk_factors TEXT DEFAULT NULL,
+    status ENUM('processing','paid','flagged_paid') NOT NULL DEFAULT 'processing',
+    case_id INT UNSIGNED DEFAULT NULL,
+    filed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    due_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_insurance_claims_cid (citizenid),
+    INDEX idx_palm6_insurance_claims_status_due (status, due_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0027 (sql/0027_bounty.sql) - ALTERed by 0055 contracts.settled.
+    { name = '0027 palm6_bounty_contracts', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_bounty_contracts` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    kind ENUM('state','private') NOT NULL,
+    target_citizenid VARCHAR(64) NOT NULL,
+    target_name VARCHAR(100) NOT NULL DEFAULT '',
+    poster_citizenid VARCHAR(64) DEFAULT NULL,
+    poster_name VARCHAR(100) DEFAULT NULL,
+    amount INT UNSIGNED NOT NULL,
+    reason VARCHAR(200) NOT NULL DEFAULT '',
+    status ENUM('active','claimed','cancelled','expired') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    claimed_by_citizenid VARCHAR(64) DEFAULT NULL,
+    claimed_by_name VARCHAR(100) DEFAULT NULL,
+    claimed_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_bounty_target (target_citizenid, kind, status),
+    INDEX idx_palm6_bounty_poster (poster_citizenid, status),
+    INDEX idx_palm6_bounty_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0029 (sql/0029_ransom.sql) - ALTERed by 0058 cases.payout_credited.
+    { name = '0029 palm6_ransom_cases', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_ransom_cases` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    kidnapper_citizenid VARCHAR(64) NOT NULL,
+    kidnapper_name VARCHAR(100) NOT NULL DEFAULT '',
+    victim_citizenid VARCHAR(64) NOT NULL,
+    victim_name VARCHAR(100) NOT NULL DEFAULT '',
+    amount INT UNSIGNED NOT NULL,
+    instructions VARCHAR(140) NOT NULL DEFAULT '',
+    status ENUM('active','paid','expired') NOT NULL DEFAULT 'active',
+    evidence_case_id INT UNSIGNED DEFAULT NULL,
+    paid_by_citizenid VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_ransom_cases_status (status),
+    INDEX idx_palm6_ransom_cases_victim (victim_citizenid),
+    INDEX idx_palm6_ransom_cases_kidnapper (kidnapper_citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4]] },
+    -- 0030 (sql/0030_onboarding.sql) - ALTERed by 0045 starter-grant flags.
+    { name = '0030 palm6_onboarding', sql = [[
+CREATE TABLE IF NOT EXISTS `palm6_onboarding` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    citizenid VARCHAR(64) NOT NULL,
+    accepted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    starter_cash_granted TINYINT(1) NOT NULL DEFAULT 0,
+    UNIQUE KEY uniq_palm6_onboarding_citizenid (citizenid)
+)]] },
     { name = '0040 palm6_drugs_processes', sql = [[
 CREATE TABLE IF NOT EXISTS `palm6_drugs_processes` (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -640,6 +851,10 @@ CreateThread(function()
     print('[palm6_dbmigrate] ============================================')
     print('[palm6_dbmigrate] applying pending idempotent migrations...')
     local ok, fail = 0, 0
+    -- Collect the failures so the summary can NAME them. A single FAIL line was
+    -- previously buried in ~90 consecutive OK lines and scrolled past unread,
+    -- which on a fresh box is exactly the line that matters.
+    local failures = {}
     for _, stmt in ipairs(STATEMENTS) do
         local success, err = pcall(function() MySQL.query.await(stmt.sql) end)
         if success then
@@ -647,7 +862,8 @@ CreateThread(function()
             print(('[palm6_dbmigrate]   OK   %s'):format(stmt.name))
         else
             fail = fail + 1
-            print(('[palm6_dbmigrate]   FAIL %s -> %s'):format(stmt.name, tostring(err)))
+            failures[#failures + 1] = ('%s -> %s'):format(stmt.name, tostring(err))
+            print(('^1[palm6_dbmigrate]   FAIL %s -> %s^0'):format(stmt.name, tostring(err)))
         end
     end
     -- verification: confirm the meth-lab-critical table exists
@@ -655,6 +871,25 @@ CreateThread(function()
     local vok, vres = pcall(function() return MySQL.query.await("SHOW TABLES LIKE 'palm6_drugs_processes'") end)
     if vok and vres and #vres > 0 then present = true end
     print(('[palm6_dbmigrate] done: %d ok, %d failed. palm6_drugs_processes present = %s'):format(ok, fail, tostring(present)))
-    print('[palm6_dbmigrate] SAFE TO REMOVE this resource now (all statements are IF NOT EXISTS).')
+    if fail > 0 then
+        -- Loud, red, and repeated at the END of the run. Every statement in this
+        -- file is idempotent, so a non-zero fail count is never noise: it means
+        -- a table the rest of the layer assumes is missing or has drifted, and
+        -- the owning resource will fail SILENTLY (its queries are pcall-wrapped).
+        print('^1[palm6_dbmigrate] ============================================^0')
+        print(('^1[palm6_dbmigrate] %d MIGRATION STATEMENT(S) FAILED - the custom layer is NOT fully provisioned.^0'):format(fail))
+        for _, f in ipairs(failures) do
+            print(('^1[palm6_dbmigrate]   FAILED: %s^0'):format(f))
+        end
+        print('^1[palm6_dbmigrate] Fix these before trusting any economy resource on this box.^0')
+        print('^1[palm6_dbmigrate] ============================================^0')
+    else
+        -- The old line here said "SAFE TO REMOVE this resource now". That is no
+        -- longer true: this file is now the ONLY provisioner for eleven base
+        -- tables whose CREATE lives solely in a hand-applied sql/ file. Removing
+        -- it leaves a fresh box unable to build them at all.
+        print('[palm6_dbmigrate] all statements OK (idempotent). KEEP this resource ensured:')
+        print('[palm6_dbmigrate] it is the only automatic provisioner for the base tables above.')
+    end
     print('[palm6_dbmigrate] ============================================')
 end)

@@ -66,7 +66,7 @@ Bridge-pattern (see `docs/GTA6-READINESS.md`): all logic is in `server/` and
 | Weapon damage | `weaponDamageEvent` (networked game event) | highest trust available, but still client-emittable — flag-only like the rest |
 | Player downed | client death report (baseevents) | flag-only; never pays/grants anything |
 | Shots fired | client report, **server-read position** | per-player cooldown + global cap |
-| Robbery | `palm6_robbery:start` (read-only subscription) | add more hooks in config |
+| Robbery | `palm6_robbery:started` (server-raised after every start gate passes) | read-only subscription; add more hooks in config |
 | Bodycam / manual | officer / staff command | job + ace gated, cooldowns |
 
 All triggers funnel through the same funnel: global scenes-per-minute cap →
@@ -88,7 +88,10 @@ junk scenes, size-capped and signed with their own identity.
   `ShotAnnotateWindowMs` (window for forcing server-observed shots onto
   uploaded frames).
 - `Config.Triggers` — toggle each trigger; `AutoFlagEvents` subscribes to
-  other resources' incident events (ships with `palm6_robbery:start`).
+  other resources' incident events (ships with `palm6_robbery:started`).
+  Entries subscribe with `AddEventHandler` unless they carry an explicit
+  `clientRaised = true`, so a new entry can never open a name to the network
+  by omission.
 - `Config.Access` — `Jobs` list + `OnDuty`; optional `RequiredItem` (see
   below).
 - `Config.Playback` — `SceneQueryRadius`, `StartRadius` (stand-at-the-scene
@@ -169,10 +172,13 @@ on an on-duty police character standing at the spot.
 - **palm6_evidence** — `/replayattach` inserts a REPLAY EXHIBIT row into its
   `palm6_evidence` table (schema from `sql/0012_evidence.sql`); guarded so
   absence degrades gracefully. The resource itself is never modified.
-- **palm6_robbery** — subscribes to its existing `palm6_robbery:start` net
-  event as an incident signal (a second `RegisterNetEvent` handler; the
-  owning resource is untouched). Add more hooks via
-  `Config.Triggers.AutoFlagEvents`.
+- **palm6_robbery** — subscribes to its `palm6_robbery:started` signal as an
+  incident trigger. That name is raised SERVER-side with `TriggerEvent` only
+  after every start gate passed, so the subscription is a plain
+  `AddEventHandler` and the name is never opened to the network (its
+  client-triggerable sibling `palm6_robbery:start` is the wrong signal — it
+  fires before any gate runs). The owning resource is untouched. Add more
+  hooks via `Config.Triggers.AutoFlagEvents`.
 - **palm6_turf** — no clean incident event exists today (turf tagging is
   non-violent); intentionally not hooked. Any future `palm6_*` conflict
   event can be added as one config line.

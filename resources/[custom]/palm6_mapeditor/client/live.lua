@@ -25,7 +25,16 @@
 --   /mapworldrestore   restore the nearest persisted world-erase (everywhere)
 -- ============================================================================
 
-local liveObjs = {}    -- [id] = { obj, model, x, y, z, rx, ry, rz }
+-- liveObjs holds a RECORD for every live prop the server has streamed us, whether
+-- or not it currently has an entity in the world: `obj` is the handle while the
+-- prop is spawned and nil in two cases, BOTH of which happen with Config.LiveCull
+-- off as well as on: the distance ring has culled it, or its model never streamed
+-- (Game.SpawnObject gives up after ~2s) so it has no entity this session.
+-- Everything that reads the map rather than the world (the outliner, the
+-- Performance panel, /maplivegrab's id lookup, the map export) reads these
+-- records, so culling never shrinks what the editor thinks the map contains, and
+-- a prop that failed to spawn is counted and listed rather than silently dropped.
+local liveObjs = {}    -- [id] = { obj, model, map, x, y, z, rx, ry, rz }
 local liveHides = {}   -- [id] = { x, y, z, radius, model }  (world-prop erases)
 local spawning = {}    -- [id] = true while a spawn for this id is mid-model-load
 local canceled = {}    -- [id] = true if removed WHILE its spawn was mid-load
@@ -33,11 +42,12 @@ local syncGen = 0      -- bumped on every full re-sync; in-flight spawns of an
                        -- older gen abort so two full syncs can't fight (leak)
 local stopping = false
 
+-- The prop is gone from the map: drop the entity AND the record.
 local function despawn(id)
     if spawning[id] then canceled[id] = true end   -- cancel an in-flight spawn (no DB row will exist)
     local r = liveObjs[id]
     if not r then return end
-    Game.DeleteObject(r.obj)
+    Game.DeleteObject(r.obj)                       -- no-op when the ring already culled it
     liveObjs[id] = nil
 end
 
@@ -48,27 +58,68 @@ end
 
 local function finite(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
 
--- Spawn one live prop from a server record. Idempotent AND yield-safe: the model
--- load inside Game.SpawnObject yields, so we (a) skip if the id is already live
--- or already being spawned (kills the double-sync duplicate/leak), and (b) after
--- the load, drop the object if a newer full re-sync has superseded us (gen). A
--- record with non-numeric coords is skipped, not allowed to throw the batch.
-local function spawn(rec, gen)
+-- Remember a server record without touching the world. A record with non-numeric
+-- coords is skipped, not allowed to throw the batch. An id we already hold is
+-- left alone: overwriting it would orphan the entity handle in the old table.
+local function remember(rec)
     if type(rec) ~= 'table' or not rec.id or type(rec.model) ~= 'string' then return end
     if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
-    if liveObjs[rec.id] or spawning[rec.id] then return end
-    spawning[rec.id] = true
-    canceled[rec.id] = nil
-    local obj = Game.SpawnObject(rec.model, rec.x, rec.y, rec.z)   -- yields on model load
-    spawning[rec.id] = nil
-    if not obj then canceled[rec.id] = nil; return end   -- bad/removed model — skip, don't crash the batch
-    -- Drop it if it was removed mid-load (canceled), superseded by a newer full
-    -- sync (gen), already spawned, or the resource is stopping.
-    if canceled[rec.id] or stopping or (gen and gen ~= syncGen) or liveObjs[rec.id] then
-        Game.DeleteObject(obj); canceled[rec.id] = nil; return
+    if liveObjs[rec.id] then return end
+    liveObjs[rec.id] = { obj = nil, model = rec.model, map = rec.map, x = rec.x, y = rec.y, z = rec.z, rx = rec.rx, ry = rec.ry, rz = rec.rz }
+end
+
+-- Give a record we already hold an entity in the world. Idempotent AND yield-safe:
+-- the model load inside Game.SpawnObject yields, so we (a) skip if the id is
+-- already live or already being spawned (kills the double-sync duplicate/leak),
+-- and (b) after the load, drop the object if a newer full re-sync has superseded
+-- us (gen) or the record itself went away or was replaced (`cur ~= r`, which is
+-- what catches a full re-sync that cleared `spawning` out from under us).
+local function materialize(id, gen)
+    local r = liveObjs[id]
+    if not r or r.obj or spawning[id] then return end
+    spawning[id] = true
+    canceled[id] = nil
+    local obj = Game.SpawnObject(r.model, r.x, r.y, r.z)   -- yields on model load
+    spawning[id] = nil
+    if not obj then canceled[id] = nil; return end   -- bad/removed model — skip, don't crash the batch
+    -- Drop it if it was removed or culled mid-load (canceled), superseded by a
+    -- newer full sync (gen / cur ~= r), already spawned, or the resource is stopping.
+    local cur = liveObjs[id]
+    if canceled[id] or stopping or (gen and gen ~= syncGen) or cur ~= r or r.obj then
+        Game.DeleteObject(obj); canceled[id] = nil; return
     end
-    Game.SetObjectTransform(obj, rec.x, rec.y, rec.z, rec.rx or 0.0, rec.ry or 0.0, rec.rz or 0.0)
-    liveObjs[rec.id] = { obj = obj, model = rec.model, map = rec.map, x = rec.x, y = rec.y, z = rec.z, rx = rec.rx, ry = rec.ry, rz = rec.rz }
+    Game.SetObjectTransform(obj, r.x, r.y, r.z, r.rx or 0.0, r.ry or 0.0, r.rz or 0.0)
+    r.obj = obj
+end
+
+-- The ring pushed this prop out of range: drop the entity, KEEP the record.
+-- The `spawning` branch cannot fire as the code stands (the ring thread is the
+-- only materialize caller while the ring is on, and it is one coroutine, so it is
+-- never inside materialize's yield when it calls this). It is kept as the cheap
+-- guard for whoever adds a second materialize caller: it hands the id to the same
+-- cancel handshake the server-side removal path uses, so materialize deletes the
+-- object it just made instead of leaking it, and the next tick re-spawns it if
+-- the player came back.
+local function unmaterialize(id)
+    local r = liveObjs[id]
+    if not r then return end
+    if spawning[id] then canceled[id] = true; return end
+    if not r.obj then return end
+    Game.DeleteObject(r.obj)
+    r.obj = nil
+end
+
+-- Take a server record: always remember it; spawn it now only when the ring is
+-- off. With the ring on, the ring thread owns every spawn, so a streamed batch
+-- and the ring can never both be loading the same id.
+local function spawn(rec, gen)
+    if type(rec) ~= 'table' then return end
+    remember(rec)
+    if Config.LiveCull then return end
+    -- Not conditional on remember() having accepted it: materialize is a no-op
+    -- for an unknown id, and for a KNOWN id whose earlier spawn failed (model
+    -- stream timeout) a re-sync retrying it is the pre-existing behaviour.
+    materialize(rec.id, gen)
 end
 
 -- ---- server -> client ------------------------------------------------------
@@ -109,6 +160,47 @@ RegisterNetEvent('palm6_mapeditor:live:removeBatch', function(ids)
     if Live then Live.push() end
 end)
 
+-- ---- distance ring (Config.LiveCull) ---------------------------------------
+-- Spawn only the props near the player and despawn the rest, so a map at the
+-- 6000-prop cap costs every player only what is actually around them. Records
+-- are untouched; only entities come and go.
+--
+-- Two rules keep this from fighting the sync guards:
+--   1. While the ring is on it is the ONLY caller of materialize for a streamed
+--      record (spawn() returns early), so a batch and the ring can never load
+--      the same id at once.
+--   2. It walks a SNAPSHOT of the ids, not liveObjs itself, because materialize
+--      yields and a batch arriving during that yield would otherwise add keys to
+--      the table mid-`pairs` (undefined in Lua). A record that disappeared during
+--      the yield simply reads back nil and is skipped.
+CreateThread(function()
+    while true do
+        if not (Config.LiveCull and next(liveObjs) ~= nil) then
+            Wait(1000)
+        else
+            local px, py, pz = Game.PlayerPos()
+            local inD = Config.EntityDrawDist * Config.EntityDrawDist
+            local outD = (Config.EntityDrawDist + (Config.LiveCullPad or 0.0)) ^ 2
+            local budget = Config.LiveCullPerTick or 25
+            local ids = {}
+            for id in pairs(liveObjs) do ids[#ids + 1] = id end   -- no yield in here
+            for i = 1, #ids do
+                local r = liveObjs[ids[i]]
+                if r then
+                    local d = (r.x - px) ^ 2 + (r.y - py) ^ 2 + (r.z - pz) ^ 2
+                    if r.obj then
+                        if d > outD then unmaterialize(ids[i]) end
+                    elseif d <= inD and budget > 0 then
+                        budget = budget - 1
+                        materialize(ids[i], nil)   -- yields; guarded per the note above
+                    end
+                end
+            end
+            Wait(Config.LiveCullTickMs or 750)
+        end
+    end
+end)
+
 -- ---- world-erase streaming -------------------------------------------------
 local function applyHide(rec)
     if type(rec) ~= 'table' or not rec.id or type(rec.model) ~= 'number' then return end
@@ -139,7 +231,9 @@ RegisterNetEvent('palm6_mapeditor:live:revs', function(map, list)
 end)
 
 -- Server renamed a map: relabel the streamed props in place (no respawn) so the
--- outliner map-picker reflects the new name, then re-push the outliner.
+-- outliner map-picker reflects the new name, then re-push the outliner. The
+-- matching light relabel lives in the lights section below (liveLights is
+-- declared there, so it is not in scope for this closure).
 RegisterNetEvent('palm6_mapeditor:live:mapRenamed', function(oldName, newName)
     if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
     for _, r in pairs(liveObjs) do if r.map == oldName then r.map = newName end end
@@ -157,7 +251,7 @@ local function applyLight(rec)
     if type(rec) ~= 'table' or not rec.id then return end
     if not (finite(rec.x) and finite(rec.y) and finite(rec.z)) then return end
     liveLights[rec.id] = {
-        x = rec.x, y = rec.y, z = rec.z,
+        map = rec.map, x = rec.x, y = rec.y, z = rec.z,
         r = rec.r or 255, g = rec.g or 200, b = rec.b or 140,
         range = rec.range or 8.0, intensity = rec.intensity or 5.0, kind = rec.kind or 'point',
     }
@@ -173,6 +267,16 @@ RegisterNetEvent('palm6_mapeditor:live:lightRemove', function(id) if id then liv
 RegisterNetEvent('palm6_mapeditor:live:lightRemoveBatch', function(ids)
     if type(ids) ~= 'table' then return end
     for _, id in ipairs(ids) do liveLights[tonumber(id)] = nil end
+end)
+
+-- Second handler on the rename/merge broadcast (the prop half is above): keep the
+-- streamed lights' map tags in step, because Live.lightsForMap selects on them
+-- and the live-map export would otherwise lose every light after a rename.
+-- AddEventHandler, not RegisterNetEvent: the name is already a registered net
+-- event, this just adds another local listener.
+AddEventHandler('palm6_mapeditor:live:mapRenamed', function(oldName, newName)
+    if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
+    for _, l in pairs(liveLights) do if l.map == oldName then l.map = newName end end
 end)
 
 CreateThread(function()
@@ -251,14 +355,45 @@ RegisterNetEvent('palm6_mapeditor:live:exportIds', function(mapName, ids)
     if not (MapEd and MapEd.buildExports) then return end
     local want = {}
     for _, id in ipairs(ids) do want[tonumber(id)] = true end
-    local recs = {}
-    for id, r in pairs(liveObjs) do if want[id] then recs[#recs + 1] = r end end
-    if #recs == 0 then Game.Notify('live map not streamed in yet — move nearer / retry', 'error'); return end
+    -- Only records that currently HAVE an entity can be exported: the ymap and
+    -- Blender writers read each prop's rotation off the live object
+    -- (client/main.lua buildYmap/buildSollumz -> Game.GetObjectQuat), so a record
+    -- with no entity would silently export flat. Count those instead of shipping
+    -- wrong rotations.
+    local recs, missing = {}, 0
+    for id, r in pairs(liveObjs) do
+        if want[id] then
+            if r.obj then recs[#recs + 1] = r else missing = missing + 1 end
+        end
+    end
+    if missing > 0 and Config.LiveCull then
+        Game.Notify(('%d prop(s) of "%s" are distance-culled, and rotation is read off the live object, so exporting now would write them flat. Set Config.LiveCull = false, restart the resource, and retry.'):format(missing, tostring(mapName)), 'error')
+        return
+    end
+    -- Nothing exportable. Say WHICH nothing: "not streamed in yet" is only true
+    -- when we hold no records for the map at all. If we hold records but every one
+    -- of them failed to spawn, retrying does not help and the generic message sent
+    -- the user chasing a stream that already gave up.
+    if #recs == 0 then
+        if missing > 0 then
+            Game.Notify(('all %d prop(s) of "%s" failed to spawn on your client (model load), so there is nothing to export'):format(missing, tostring(mapName)), 'error')
+        else
+            Game.Notify('live map not streamed in yet — move nearer / retry', 'error')
+        end
+        return
+    end
+    if missing > 0 then
+        Game.Notify(('%d prop(s) of "%s" never spawned on your client and are MISSING from this export'):format(missing, tostring(mapName)), 'error')
+    end
     local ents = (Entities and Entities.exportList) and Entities.exportList(mapName) or {}
-    local lua, js, ymap, py = MapEd.buildExports(recs, {}, mapName, ents)
+    -- Lights were hardcoded to {} here, which silently dropped every light from
+    -- every live-map export (and defeated buildLua/buildJson's own default,
+    -- because an empty table is truthy).
+    local lgs = (Live and Live.lightsForMap) and Live.lightsForMap(mapName) or {}
+    local lua, js, ymap, py = MapEd.buildExports(recs, lgs, mapName, ents)
     Game.SetClipboard(lua)
     TriggerServerEvent('palm6_mapeditor:save', mapName, lua, js, ymap, py)
-    Game.Notify(('exporting live map "%s" — %d props, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #ents), 'inform')
+    Game.Notify(('exporting live map "%s": %d props, %d lights, %d entities (.lua/.json/.ymap.xml/.py)'):format(mapName, #recs, #lgs, #ents), 'inform')
 end)
 
 RegisterCommand('mapwipe', function(_, args)
@@ -303,6 +438,23 @@ function Live.push()
     SendNUIMessage({ action = 'live', props = list })
 end
 
+-- Lights on a named live map, for /mapexportlive. The server tags every wired
+-- light with its map (wireLight in server/live.lua), so this mirrors the prop
+-- filter in live:exportIds. Without it the export hardcoded an empty light list,
+-- and because {} is truthy in Lua the `lg = lg or lightList()` default in
+-- client/main.lua never fired, so every exported live map shipped dark.
+function Live.lightsForMap(name)
+    local out = {}
+    if type(name) ~= 'string' then return out end
+    for _, l in pairs(liveLights) do
+        if l.map == name then
+            out[#out + 1] = { x = l.x, y = l.y, z = l.z, r = l.r, g = l.g, b = l.b,
+                range = l.range, intensity = l.intensity, kind = l.kind }
+        end
+    end
+    return out
+end
+
 -- Export a named live map to files from the NUI (same path as /mapexportlive):
 -- ask the server for the map's prop ids, then live:exportIds builds + saves.
 function Live.exportMap(name)
@@ -320,20 +472,23 @@ end
 function Live.revRestore(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revRestore', n) end end
 function Live.revDelete(id) local n = tonumber(id); if n then TriggerServerEvent('palm6_mapeditor:live:revDelete', n) end end
 
--- Rename a live map (props + lights via live.lua, entities via entities.lua).
+-- Rename a live map. ONE server event: server/live.lua relabels props + lights +
+-- snapshots, then raises the entity half itself once its guards pass. The client
+-- used to fire the entity rename as a second, independent server event, so a
+-- rename the prop half refused (name collision, DB not ready, no ACE) still
+-- relabelled the entity table.
 function Live.renameMap(oldName, newName)
     if type(oldName) ~= 'string' or type(newName) ~= 'string' then return end
     if oldName == '' or newName == '' or oldName == newName then return end
     TriggerServerEvent('palm6_mapeditor:live:renameMap', oldName, newName)
-    TriggerServerEvent('palm6_mapeditor:ent:renameMap', oldName, newName)
 end
 
--- Merge one live map into another (relabels props/lights/entities from -> into).
+-- Merge one live map into another. Same single-event shape as rename: the server
+-- relabels props/lights/snapshots and drives the entity half after its cap check.
 function Live.mergeMap(fromName, intoName)
     if type(fromName) ~= 'string' or type(intoName) ~= 'string' then return end
     if fromName == '' or intoName == '' or fromName == intoName then return end
     TriggerServerEvent('palm6_mapeditor:live:mergeMap', fromName, intoName)
-    TriggerServerEvent('palm6_mapeditor:ent:renameMap', fromName, intoName)   -- entity UPDATE allows any target
 end
 
 -- Counts for the Performance panel: props / lights / world-erases currently on

@@ -18,11 +18,27 @@
 
 local open = false
 
+-- Never take NUI focus on top of an entity carry. Focus swallows the
+-- Enter/Backspace the carry loop is waiting on, so the carry stalls: it resumes
+-- as soon as the NUI closes (closeBrowser restores focus), but while it is
+-- stalled the entity exists nowhere but the server's in-memory backup, which a
+-- restart or a crash would have to rescue. Applies to ALL THREE focus entry
+-- points, not just /propui: /maphelp and /maplog are bound to bare H and L by
+-- default, so they are far more likely to be hit mid-carry than a typed command.
+local function carryBlocked()
+    if Entities and Entities.isCarrying and Entities.isCarrying() then
+        Game.Notify('drop the entity you are carrying first', 'error')
+        return true
+    end
+    return false
+end
+
 local function openBrowser()
     if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then
         Game.Notify('open the editor first (/mapedit)', 'error')
         return
     end
+    if carryBlocked() then return end
     if open then return end
     open = true
     SetNuiFocus(true, true)
@@ -72,6 +88,13 @@ local function closeBrowser()
 end
 
 RegisterCommand('propui', function()
+    -- No editor-state guard here on purpose. openBrowser() already refuses when
+    -- the editor is closed AND tells the player why ("open the editor first
+    -- (/mapedit)"). A guard at this level would only swallow that message, which
+    -- is a worse experience for zero security gain: the browser grabs NUI focus
+    -- inside openBrowser, so nothing can open without passing its check anyway.
+    -- Closing an already-open browser stays unconditional so focus can always be
+    -- released even if the editor was shut underneath it.
     if open then closeBrowser() else openBrowser() end
 end, false)
 
@@ -81,6 +104,7 @@ local function openHelp()
     -- Silent no-op outside the editor: the default keybind is H (a common key),
     -- so it must never notify or act unless the map editor is actually open.
     if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then return end
+    if not open and carryBlocked() then return end   -- H is a bare keybind: never grab focus mid-carry
     if not open then
         open = true
         SetNuiFocus(true, true)
@@ -98,6 +122,7 @@ RegisterKeyMapping('maphelp', 'Map editor: controls & commands', 'keyboard', 'H'
 -- action the editor reported this session). Same focus handling as /propui.
 local function openLog()
     if not (MapEd and MapEd.isEditing and MapEd.isEditing()) then return end
+    if not open and carryBlocked() then return end   -- L is a bare keybind: never grab focus mid-carry
     local log = (Game.GetActivityLog and Game.GetActivityLog()) or {}
     if not open then
         open = true

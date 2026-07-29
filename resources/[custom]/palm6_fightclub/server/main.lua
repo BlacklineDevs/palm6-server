@@ -26,6 +26,122 @@ local lastAction = {}    -- [src] = { [key] = ts } — chat-command spam guard
 -- strands. Declared here so OpenMatch (defined above the boot check) can read it.
 local moneyMirrorFailed = false
 
+local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
+
+-- ---------------------------------------------------------------------------
+-- Boot DDL (self-creating tables). Same shape as palm6_courier and
+-- palm6_ems: Wait-for-oxmysql on the caller's thread, per-statement pcall,
+-- everything IF NOT EXISTS so re-runs are harmless no-ops.
+--
+-- Why this exists: sql/ is applied BY HAND (deploy/README.md) and CI never
+-- touches the DB, so a restored backup or a brand new box boots with no
+-- fightclub tables at all. Every query in this file is pcall-wrapped, so the
+-- failure is SILENT: /fcmatches prints an empty board, /fcbet takes nothing,
+-- and settleMatch quietly recovers no stranded money. On the live box these
+-- statements are pure no-ops.
+--
+-- The CREATE TABLEs are copied VERBATIM from sql/0028_fightclub.sql (0066
+-- re-states the same two tables byte-identically). The ALTERs come from
+-- sql/0054_fightclub_settlement.sql and sql/0066_fightclub_defjam.sql. They
+-- are repeated here (they also live in palm6_dbmigrate) because dbmigrate and
+-- this resource boot on independent threads: whichever runs second is a no-op
+-- and neither can lose the race. The DEFAULT values are load-bearing and must
+-- NOT be changed - settled DEFAULT 1 and rep_awarded DEFAULT 1 are what stop
+-- the boot reconcile from re-paying the entire match history exactly once.
+-- ---------------------------------------------------------------------------
+local function ensureSchema()
+    -- Statements THIS resource owns and can answer for. Only these feed
+    -- SchemaReady. See the ALTER note below for why they are kept separate.
+    local stmts = {
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_fightclub_matches` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    fighter1_citizenid VARCHAR(64) NOT NULL,
+    fighter1_name VARCHAR(100) NOT NULL DEFAULT '',
+    fighter2_citizenid VARCHAR(64) NOT NULL,
+    fighter2_name VARCHAR(100) NOT NULL DEFAULT '',
+    status ENUM('betting','live','resolved') NOT NULL DEFAULT 'betting',
+    winner_citizenid VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    betting_ends_at TIMESTAMP NULL DEFAULT NULL,
+    live_started_at TIMESTAMP NULL DEFAULT NULL,
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_palm6_fightclub_matches_status (status),
+    INDEX idx_palm6_fightclub_matches_f1 (fighter1_citizenid),
+    INDEX idx_palm6_fightclub_matches_f2 (fighter2_citizenid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_fightclub_bets` (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    match_id INT UNSIGNED NOT NULL,
+    citizenid VARCHAR(64) NOT NULL,
+    fighter TINYINT UNSIGNED NOT NULL,
+    amount INT UNSIGNED NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_palm6_fightclub_bet (match_id, citizenid),
+    INDEX idx_palm6_fightclub_bets_match (match_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ]],
+    }
+
+    -- Best effort, deliberately NOT part of SchemaReady. `ADD COLUMN IF NOT
+    -- EXISTS` is MariaDB-only: on MySQL 8 it THROWS even when the column
+    -- already exists. Folding these into SchemaReady would make a perfectly
+    -- healthy MySQL box print `schema MISSING` on every single boot, which is
+    -- the permanent false alarm that trains an operator to ignore the banner.
+    -- The two CREATE TABLEs above are what SchemaReady answers for; these
+    -- columns are additive and their absence is reported on its own line.
+    -- Same pattern as palm6_courier and palm6_mdt's schemaOk.
+    local alters = {
+        [[
+ALTER TABLE `palm6_fightclub_bets`
+    ADD COLUMN IF NOT EXISTS `paid` TINYINT NOT NULL DEFAULT 0
+        ]],
+        [[
+ALTER TABLE `palm6_fightclub_matches`
+    ADD COLUMN IF NOT EXISTS `purse_paid` TINYINT NOT NULL DEFAULT 0
+        ]],
+        [[
+ALTER TABLE `palm6_fightclub_matches`
+    ADD COLUMN IF NOT EXISTS `settled` TINYINT NOT NULL DEFAULT 1
+        ]],
+        [[
+ALTER TABLE `palm6_fightclub_matches`
+    ADD COLUMN IF NOT EXISTS `style1`         VARCHAR(24) NULL,
+    ADD COLUMN IF NOT EXISTS `style2`         VARCHAR(24) NULL,
+    ADD COLUMN IF NOT EXISTS `fighter1_model` VARCHAR(48) NULL,
+    ADD COLUMN IF NOT EXISTS `fighter2_model` VARCHAR(48) NULL,
+    ADD COLUMN IF NOT EXISTS `method`         VARCHAR(16) NULL,
+    ADD COLUMN IF NOT EXISTS `entry_pot`      INT     NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS `entry_paid1`    TINYINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS `entry_paid2`    TINYINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS `rep_awarded`    TINYINT NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS `is_pve`         TINYINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS `cpu_tier`       TINYINT NULL,
+    ADD COLUMN IF NOT EXISTS `cpu_fighter`    VARCHAR(48) NULL
+        ]],
+    }
+
+    local failed = 0
+    for _, sql in ipairs(stmts) do
+        local ok, err = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            failed = failed + 1
+            print(('^1[palm6_fightclub] schema init FAILED -> %s^0'):format(tostring(err)))
+        end
+    end
+    for _, sql in ipairs(alters) do
+        local ok = pcall(function() MySQL.query.await(sql) end)
+        if not ok then
+            print('^3[palm6_fightclub] additive ALTER skipped (expected on MySQL 8, ' ..
+                  'harmless if the column already exists)^0')
+        end
+    end
+    SchemaReady = (failed == 0)
+    return SchemaReady
+end
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -652,18 +768,31 @@ Bridge.RegisterCommand('fcmatches', function(source) cmdFcMatches(source) end)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    local openN = 0
-    pcall(function()
-        local r = MySQL.single.await(
-            "SELECT COUNT(*) AS n FROM palm6_fightclub_matches WHERE status IN ('betting', 'live')")
-        openN = r and tonumber(r.n) or 0
-    end)
-    -- Open betting/live rows are NOT auto-resolved here; T6 owns the live-strand
-    -- no-contest (LiveVoidMatch) at its own boot. This only reports + recovers
-    -- interrupted payouts.
-    print(('[palm6_fightclub] money authority up — %d match(es) still open'):format(openN))
+    -- The whole boot sequence runs on this thread because ensureSchema has to
+    -- Wait for oxmysql's connection before any query can run, and the open-match
+    -- count must not run before the table is guaranteed to exist. Total delay
+    -- before reconcileUnsettled is unchanged at 8s (3000 + 5000).
     CreateThread(function()
-        Wait(8000)
+        Wait(3000) -- let oxmysql establish its connection first
+        ensureSchema()
+        -- Banner FIRST, with nothing that can throw between it and
+        -- ensureSchema(). It exists to diagnose the fresh-box case where the
+        -- tables are absent, which is otherwise completely silent: every query
+        -- in this file is pcall'd, so the board just reports zero forever.
+        if not SchemaReady then
+            print('^1[palm6_fightclub] schema MISSING - betting and settlement are INERT on this box.^0')
+        end
+        local openN = 0
+        pcall(function()
+            local r = MySQL.single.await(
+                "SELECT COUNT(*) AS n FROM palm6_fightclub_matches WHERE status IN ('betting', 'live')")
+            openN = r and tonumber(r.n) or 0
+        end)
+        -- Open betting/live rows are NOT auto-resolved here; T6 owns the live-strand
+        -- no-contest (LiveVoidMatch) at its own boot. This only reports + recovers
+        -- interrupted payouts.
+        print(('[palm6_fightclub] money authority up — %d match(es) still open'):format(openN))
+        Wait(5000)
         reconcileUnsettled()
         -- F5/F9 money-mirror drift guard, FAIL-CLOSED. The HUD/sportsbook quotes
         -- odds off fc_core's MIRRORED WinnerPursePct / Betting.RakePct, and fc_combat
