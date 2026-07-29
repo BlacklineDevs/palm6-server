@@ -61,6 +61,15 @@ end
 local function decayed(storedHeat, ageSec)
     local h = math.floor(tonumber(storedHeat) or 0)
     local age = tonumber(ageSec) or 0
+    -- A NEGATIVE age must decay by zero, never by a negative amount. age comes
+    -- from TIMESTAMPDIFF(SECOND, updated_at, NOW()), which goes negative whenever
+    -- updated_at is in the future, i.e. after a backwards clock correction on the
+    -- DB host. Without this clamp `lost` is negative and heat goes UP on read:
+    -- decayed(100, -60) returned 101, and decayed(150, -3600) returned 195
+    -- against a cap of 150. Nothing downstream re-clamps to HeatCap, so the
+    -- inflated value flowed straight through tierOf into GetHeat/GetTop/
+    -- GetSummary. Found by the tests/ suite, not in production.
+    if age < 0 then age = 0 end
     local lost = math.floor((age / 60.0) * Config.DecayPerMin)
     local eff = h - lost
     if eff < 0 then eff = 0 end

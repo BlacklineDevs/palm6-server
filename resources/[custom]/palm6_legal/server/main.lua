@@ -532,9 +532,16 @@ local function cmdSentence(src, args)
     -- sweeps every online player, so it is called only when a row is actually
     -- going to be written.
     if Config.Sentencing.Audit and auditFirstSeen(src, rec.bookingId) then
+        -- Same fallback the printed header uses. palm6_mdt_bookings.citizen_name
+        -- is nullable and the row can carry an empty string, and `%s` on nil
+        -- renders the literal text "nil" into the staff audit line and its
+        -- Discord post. The citizenid beside it is the field that identifies the
+        -- subject; the name is only there to be readable.
+        local auditName = (rec.citizenName and rec.citizenName ~= '')
+            and rec.citizenName or 'unknown citizen'
         auditLog('legal_sentence_review', src, Bridge.GetSourceByCitizenId(rec.citizenid),
             ('booking #%d on %s (%s): recommended %d %s + $%d from [%s], %d prior(s) counted, multiplier %d%%')
-            :format(rec.bookingId, rec.citizenName, rec.citizenid,
+            :format(rec.bookingId, auditName, rec.citizenid,
                 r.sentence, r.unit, r.fine, table.concat(rec.codes, ' '),
                 r.priors, r.multPct))
     end

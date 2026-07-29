@@ -278,8 +278,14 @@ function MapDiff.props(a, b, opts)
                         if aAlive[i] then
                             local d = dist2(A[i], q)
                             scanned = scanned + 1
-                            -- `<` not `<=`: first (lowest-index) candidate wins a
-                            -- tie, so the same two sets always diff identically.
+                            -- `<` not `<=`: the FIRST candidate reached at that
+                            -- distance wins a tie. Scan order is fixed (bucket
+                            -- offsets in a fixed nested order, entries inside a
+                            -- bucket in ascending list index), so the winner is
+                            -- deterministic and the same two sets always diff
+                            -- identically. It is NOT necessarily the lowest list
+                            -- index overall, because an earlier-scanned bucket
+                            -- can hold a higher-indexed entry.
                             if d <= rad2 and (not bestD or d < bestD) then best, bestD = i, d end
                         end
                     end

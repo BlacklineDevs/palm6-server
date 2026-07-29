@@ -28,9 +28,16 @@ local lastCapture = {}   -- [citizenid] = ts — per-hunter capture cooldown
 -- only to fire the "the city raised the price on your head" notify on an
 -- INCREASE, so a premium decaying tier by tier cannot spam the target every
 -- sweep. Rebuilt against the live warrant set at the end of every sync, so it
--- can never hold more entries than there are open state contracts; a restart
--- clears it, which costs at most one repeated notify per target.
+-- can never hold more entries than there are open state contracts. A restart
+-- clears it, which USED to cost one repeated notify per target; the
+-- heatBonusPrimed gate below now makes the first post-boot sweep seed silently,
+-- so it costs none.
 local stateHeatBonus = {}
+
+-- False until the first sweep after boot has finished seeding stateHeatBonus.
+-- Gates the "the city raised the price on your head" notify so a restart cannot
+-- re-announce a premium that was already on the contract before the reboot.
+local heatBonusPrimed = false
 
 local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
 
@@ -651,7 +658,7 @@ local function syncStateContracts()
                 -- which case the guarded write matched nothing and "the city
                 -- raised the price on your head" would be a flat lie about a
                 -- contract that is already settled.
-                if refreshed == 1 and bonus > (stateHeatBonus[cid] or 0) then
+                if heatBonusPrimed and refreshed == 1 and bonus > (stateHeatBonus[cid] or 0) then
                     local s = Bridge.GetSourceByCitizenId(cid)
                     if s then
                         Bridge.Notify(s, 'Bounty Board',
@@ -692,6 +699,15 @@ local function syncStateContracts()
     for known in pairs(stateHeatBonus) do
         if not liveTargets[known] then stateHeatBonus[known] = nil end
     end
+
+    -- The FIRST sweep after a boot only seeds the ledger; it never notifies.
+    -- stateHeatBonus is memory-only, so after a restart every already-premium
+    -- target reads as "0 before, N now" and gets told the city raised the price
+    -- on their head again, for a premium that has been sitting on their contract
+    -- since before the reboot. The seeding pass above has now recorded the
+    -- current bonus for every live target, so from the second sweep onward a
+    -- notify means an actual INCREASE, which is what the message claims.
+    heatBonusPrimed = true
 
     -- Expire state contracts for anyone whose warrants all cleared without
     -- being captured - no player money involved, nothing to refund. With

@@ -281,7 +281,30 @@ function Sentencing.Calculate(codes, priors)
     end
 
     -- 5. Priors multiplier, integer percent, capped.
-    local given = math.max(0, math.floor(tonumber(priors) or 0))
+    --
+    -- math.floor on a non-finite float returns a FLOAT, not an integer, and it
+    -- survives math.max. The arithmetic below still worked (math.min(inf, cap)
+    -- is the cap), but the breakdown line formats `given` with %d, and in Lua
+    -- 5.3+ string.format('%d', math.huge) RAISES "number has no integer
+    -- representation". This file exists to never throw at a caller (that is what
+    -- Sentencing.Failure is for), so an infinite or over-large priors count is
+    -- normalised to the cap here rather than being allowed to reach %d.
+    -- In-repo callers cannot produce it (priorsFor is a SELECT COUNT(*)), but
+    -- CalculateSentence is an exported entry point any resource may call with
+    -- anything. NaN is already absorbed: math.max(0, nan) returns 0.
+    -- Found by the tests/ suite.
+    -- Only values with NO integer representation are normalised. A legitimate
+    -- over-cap count (8 priors against a cap of 5) must stay 8, because the
+    -- breakdown reports "of 8, capped at 5" and clamping it here would silently
+    -- delete that line's meaning.
+    local rawPriors = math.max(0, math.floor(tonumber(priors) or 0))
+    local given = math.tointeger and math.tointeger(rawPriors) or nil
+    if given == nil then
+        -- NaN reads as 0 priors (no evidence of any), anything else without an
+        -- integer representation is inf or too large to be a real count, so it
+        -- is treated as the cap: the multiplier is capped there regardless.
+        given = (rawPriors ~= rawPriors) and 0 or priorsCap
+    end
     local counted = math.min(given, priorsCap)
     local multPct = 100 + counted * stepPct
     result.priorsGiven = given

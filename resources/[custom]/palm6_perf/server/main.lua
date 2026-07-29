@@ -271,7 +271,23 @@ exports('RunDiag', diagLines)
 
 -- The required-table map, so palm6_devtest (and anything else) reads the ONE
 -- authority instead of keeping a second copy that drifts.
-exports('GetRequiredTables', function() return RequiredTables end)
+--
+-- Returns a COPY, TWO levels deep. Handing out the live table by reference would
+-- let any consumer mutate the authority for every other reader, and the whole
+-- point of this export is that there is exactly one list. The shape is
+-- resource -> { tableName, ... }, so a one-level copy would still share every
+-- inner array and a consumer doing table.insert on its "copy" would silently
+-- extend the real list. Read rarely (a boot check and /diag), so the cost of
+-- copying a hundred-odd short arrays is irrelevant.
+exports('GetRequiredTables', function()
+    local copy = {}
+    for resource, tableNames in pairs(RequiredTables) do
+        local names = {}
+        for i = 1, #tableNames do names[i] = tableNames[i] end
+        copy[resource] = names
+    end
+    return copy
+end)
 
 -- Last schema-check result, or nil if it has not run. Read-only snapshot.
 exports('GetSchemaReport', function() return SchemaReport end)

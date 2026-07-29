@@ -30,9 +30,16 @@ local pending = {}  -- [src] = { zoneId, gangName, holdUntil }
 --   * gangOpenAt / gangRepelAt / gangNotifyAt are mirrored into
 --     palm6_turf_brakes (sql/0074_turf_brakes.sql) and reloaded at boot, so a
 --     reboot no longer cuts a gang's remaining cooldown short.
--- The in-memory tables below stay the read path: nothing on a gate, a tick or a
--- notify ever touches the DB. The DB is written once per brake CHANGE, on its
--- own thread, and read once at boot.
+-- The in-memory tables below are the only READ path for a brake: no gate, tick
+-- or notify ever queries palm6_turf_brakes, which is read exactly once, at boot.
+-- WRITES are a different matter and this comment used to deny them. The three
+-- paths that CHANGE a brake (opening a contest, losing one with a defender
+-- present, pinging a defender) each queue one row. persistBrake hands that write
+-- to its own coroutine and never awaits it, so none of those paths BLOCKS on the
+-- DB, but a write is still issued on each of them.
+--
+-- Separately, and unrelated to the brakes: the defenders-online gate does read
+-- the DB, through palm6_gangs. See presenceCache below for what that costs.
 -- ---------------------------------------------------------------------------
 local contests     = {}  -- [zoneId] = live contest (see openContest)
 local gangOpenAt   = {}  -- [attackerGangId]   = ts that gang last OPENED a contest
@@ -47,8 +54,10 @@ local gangRepelAt  = {}  -- [attackerGangId]   = ts that gang was DRIVEN OFF a z
 local conflictBootAt = 0
 
 -- Cached {gangName -> {srcs}} snapshot of everyone online. Rebuilt at most once
--- per Config.Conflict.PresenceCacheSec because it costs one palm6_gangs DB read
--- per online player. Callers that must be authoritative pass maxAge 0.
+-- per Config.Conflict.PresenceCacheSec because it costs TWO palm6_gangs DB reads
+-- per online player: Bridge.GetGang -> exports.palm6_gangs:GetGang, which is
+-- memberRow then gangRow, neither cached (same count memoGang states below).
+-- Callers that must be authoritative pass maxAge 0.
 local presenceCache = { at = 0, byGang = nil }
 
 local function conflictOn()
@@ -220,8 +229,11 @@ end
 --     swept with a wrong one;
 --   * raising a cooldown in Config immediately extends the rows already stored,
 --     because the window is applied at sweep time and not frozen at write time;
---   * a future-dated set_at fails the predicate and is kept, so a clock skew
---     cannot delete a brake early.
+--   * a future-dated set_at fails the `set_at < cutoff` predicate, so ordinary
+--     clock skew cannot delete a brake early. It is NOT kept forever: the second
+--     arm of the delete (see the body) collects anything stamped more than a
+--     full window ahead of now, because such a row is unreachable by the first
+--     arm and would otherwise re-arm the gang on every boot.
 -- Runs on its own thread at a low frequency: never in the ticker, never on a
 -- gate. Every statement is pcall'd, so a DB hiccup skips a sweep and nothing
 -- else - the table is disposable, only ever growing until the next pass.
@@ -401,8 +413,9 @@ end
 -- which is already re-validated against the server's own startedAt clock.
 -- ===========================================================================
 
--- Everyone online, bucketed by player-run gang NAME. One palm6_gangs DB read
--- per online player, so it is cached; pass maxAge 0 to force a fresh read.
+-- Everyone online, bucketed by player-run gang NAME. Two palm6_gangs DB reads
+-- per online player (see presenceCache), so it is cached; pass maxAge 0 to
+-- force a fresh read.
 local function presenceSnapshot(maxAge)
     local now = os.time()
     local ttl = maxAge or (Config.Conflict.PresenceCacheSec or 15)

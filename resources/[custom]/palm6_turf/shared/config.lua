@@ -175,8 +175,9 @@ Config.Conflict = {
     RequireDefenderOnline = true,
     MinDefendersOnline    = 1,
 
-    -- How long a defenders-online headcount may be reused. The headcount is a
-    -- DB read per online player, so the pre-check at [E] serves it from a short
+    -- How long a defenders-online headcount may be reused. The headcount costs
+    -- TWO palm6_gangs DB reads per online player (GetGang is memberRow then
+    -- gangRow, neither cached), so the pre-check at [E] serves it from a short
     -- cache; the authoritative check when the contest actually opens forces a
     -- fresh read (maxAge 0).
     PresenceCacheSec = 15,
