@@ -97,11 +97,16 @@ module.exports = [
         check: 'ensure-list',
         key: 'palm6_threads',
         reason:
-            'Deliberately NOT ensured, and custom.cfg says so at length. The Stage A spike '
-            + "is REPLACEMENT-style: its stream/ folder overwrites the BASE GAME's male "
-            + 'jbib drawable 0, so ensuring it would repaint that torso for every male '
-            + 'freemode character on the server. It becomes ensurable only once Phase 1 '
-            + 'converts it to a true addon-DLC pack with its own SHOP_PED_APPAREL_META_FILE.',
+            'RETIRED 2026-07-29, not merely unensured, and it must never be ensured. The '
+            + "Stage A spike was REPLACEMENT-style: its stream/ folder overwrote the BASE "
+            + "GAME's male jbib drawable 0, so every police work outfit rendered as nothing "
+            + 'for everyone while it ran on the live box. It is now inert - no stream/ '
+            + 'folder, no scripts declared, and an unresolvable `dependency` line in '
+            + 'fxmanifest.lua - and custom.cfg carries `stop palm6_threads`. The directory '
+            + 'and its manifest are kept so the tombstone and the incident record stay in '
+            + 'the tree, which is why this check still sees it. A future custom-clothing '
+            + 'pack must be a NEW addon-DLC resource with its own SHOP_PED_APPAREL_META_FILE; '
+            + 'see docs/CUSTOM-CLOTHING.md.',
     },
     {
         check: 'ensure-list',

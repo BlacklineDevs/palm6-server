@@ -6,9 +6,21 @@ author 'EvThatGuy'
 version '0.5.0'
 description 'palm6 mdt — police mobile data terminal (BOLOs, warrants, bookings, case files, reports, 911 log, charge catalogue)'
 
--- Server-only on purpose: every command reads server state and replies in
--- chat. There is nothing for a client script to do and therefore nothing
--- for a modified client to abuse (palm6_discord precedent).
+-- Server-only historically: every command reads server state and replies in
+-- chat. W4 Cylex-parity adds a minimal client tablet NUI scaffold (F5 / /mdt)
+-- that does not yet replace chat authority — it opens the shell only.
+ui_page 'web/index.html'
+
+files {
+    'web/index.html',
+}
+
+client_scripts {
+    'shared/config.lua',
+    'client/nui.lua',
+    'client/positions.lua',
+}
+
 server_scripts {
     '@oxmysql/lib/MySQL.lua',
     'shared/config.lua',

@@ -1,25 +1,123 @@
+-- ============================================================================
+-- palm6_threads is RETIRED. 2026-07-29. It must never run again in this shape.
+--
+-- READ THIS FIRST, BEFORE THE REST OF THE FILE
+--   Deleting a file from this repo does NOT remove it from the live server.
+--   The deploy workflow (.github/workflows/deploy-custom-layer.yml:148) runs
+--   `mirror --reverse` with MIRROR_DELETE defaulting to 'false'
+--   (deploy-custom-layer.yml:39), so the upload is ADDITIVE. It overwrites the
+--   files it carries and it deletes nothing. deploy/README.md:184 says the same
+--   thing in plain words.
+--
+--   Consequence, and it is the whole reason this header was rewritten: the
+--   stream/ folder was deleted from this repo, and both hazard files are still
+--   sitting in resources/[custom]/palm6_threads/stream/ ON THE LIVE BOX. They
+--   will still be there after the next deploy. See HOST-CLEANUP-REQUIRED.md in
+--   this directory for the one manual step that actually removes them.
+--
+-- WHAT IT WAS
+--   A Stage A custom-clothing spike (Phase 0 of the "Threads" player-designed
+--   clothing idea, docs/superpowers/plans/2026-07-22-palm6-threads-phase0-
+--   pipeline-spike.md). Its only question was "does a .ytd built headlessly by
+--   tools/threads-pipeline render on a ped". It streamed two loose files:
+--       mp_m_freemode_01^jbib_000_u.ydd            (a copy of Rockstar's own
+--                                                   base male-torso geometry)
+--       mp_m_freemode_01^jbib_diff_000_a_uni.ytd   (our 6 KB generated texture)
+--   and shipped a client command /threads_spike that wore component 11,
+--   drawable 0, texture 0 so the generated texture could be eyeballed.
+--
+-- WHY IT IS RETIRED
+--   Those two filenames carry NO DLC segment, so they are not additions, they
+--   are REPLACEMENTS. FiveM mounts anything under a resource's stream/ folder
+--   into the global streaming store by name, so streaming them overwrote base
+--   male-torso jbib drawable 0 for every male freemode ped on the server, not
+--   just for whoever ran the command.
+--
+--   On 2026-07-29 the resource was found RUNNING on the live box (started by
+--   the panel-managed server.cfg, which is outside this repo) while David
+--   reported that every police work outfit rendered as nothing for everyone.
+--   Every base-torso outfit had lost its drawable. That is production down,
+--   caused by this resource, and it is the second attempt at this feature to
+--   fail. custom.cfg carries an explicit `stop palm6_threads`.
+--
+-- WHY IT WAS RETIRED RATHER THAN CONVERTED TO ADDON-DLC
+--   Converting it correctly needs four things this repo does not have, and
+--   none of them can be faked from a text editor:
+--     1. A garment .ydd that is actually NEW. The one here is Rockstar's base
+--        torso, so an addon pack of it would add a duplicate of a garment the
+--        game already has. A real pack needs Blender + Sollumz work.
+--     2. A component .ymt / SHOP_PED_APPAREL_META_FILE. The plan's Task 6 was
+--        to generate it with gtautil `genpeddefs --fivem`. gtautil was never
+--        acquired: tools/threads-pipeline/README.md still lists it as "TODO
+--        (Task 6 / Stage B)". There is no meta/ folder in this resource.
+--     3. The addon naming scheme. Every streamed file has to be renamed into a
+--        pack namespace (mp_m_freemode_01_<packname>^...), and the .ydd's and
+--        .ytd's INTERNAL asset names have to agree with the .ymt. Those are
+--        binary RAGE resources; they cannot be renamed by renaming the file.
+--     4. An in-game test. There is no local FXServer, so the only way to know
+--        whether a pack is correct is to put it on the live box, which is
+--        exactly how this went wrong twice.
+--   A half-built addon pack fails the same way a replacement pack does, so
+--   guessing at it is not cheaper than admitting it is not built. See
+--   docs/CUSTOM-CLOTHING.md for the honest path to a real pack.
+--
+-- WHAT REPLACED IT
+--   Nothing streams clothing on PALM6 any more, on purpose. Uniform work now
+--   uses CAPTURE-AND-REAPPLY: read what a real ped is already wearing with the
+--   collection natives, store it, and push it back with
+--   SetPedCollectionComponentVariation. That touches one ped at a time and
+--   adds no assets, so it cannot take the server down.
+--   Read docs/CUSTOM-CLOTHING.md BEFORE adding any clothing asset here.
+--
+-- WHAT ACTUALLY KEEPS THIS STOPPED, IN ORDER OF HOW MUCH IT IS WORTH
+--   1. `stop palm6_threads` in custom.cfg. This is a line the server EXECUTES,
+--      custom.cfg execs last (after the panel's ensures), and the deploy
+--      uploads custom.cfg verbatim (UPLOAD_CUSTOM_CFG defaults 'true',
+--      deploy-custom-layer.yml:36,152). It is the only control that is known
+--      to act on the live box today. Treat it as the lock. Do not remove it.
+--   2. This manifest, which the deploy OVERWRITES in place. The old manifest
+--      on the box is replaced by this one, so the tombstone and the
+--      unresolvable dependency below travel to the server even though the
+--      stream/ deletion does not. This is why the directory must stay in the
+--      repo: delete it here and the deploy has nothing to upload over the old
+--      manifest, and the box keeps the ORIGINAL, dangerous one forever.
+--   3. The dependency below names a resource that does not exist. FiveM is
+--      documented to refuse a resource whose declared dependency it cannot
+--      resolve. This is UNVERIFIED on this build and we do not intend to
+--      verify it, because the only way to test it is to start the resource,
+--      and starting the resource is the outage. Belt, not braces. Never rely
+--      on it alone.
+--   4. No scripts are declared, so /threads_spike no longer exists. This stops
+--      the command. It never stopped the streaming, and the streaming was the
+--      hazard.
+--   5. No stream/ folder IN THIS REPO. This protects a fresh checkout and any
+--      future host. It does NOT protect the current live box, because the
+--      deploy does not delete. Do not describe this as the decisive lock; the
+--      previous version of this header did, and it was wrong.
+--
+-- DO NOT delete the dependency line. DO NOT delete this directory. DO NOT
+-- re-add a stream/ folder. DO NOT add an `ensure palm6_threads` to custom.cfg.
+-- If you want custom clothing, build a NEW resource by following
+-- docs/CUSTOM-CLOTHING.md.
+-- ============================================================================
+
 fx_version 'cerulean'
 game 'gta5'
 
 name 'palm6_threads'
-description 'PALM6 Threads - player custom clothing (Phase 0 spike)'
+description 'RETIRED 2026-07-29 - replacement-style clothing spike that broke prod. Do not start. See docs/CUSTOM-CLOTHING.md'
 author 'MGT'
-version '0.0.1'
+version '0.0.3-retired'
 
-shared_script 'shared/config.lua'
-client_script 'client/debug.lua'
+-- Intentionally unresolvable. No resource by this name exists anywhere, and
+-- none may ever be created. FiveM is documented to refuse to start a resource
+-- whose declared dependency it cannot find, which is meant to keep this stopped
+-- even if something outside this repo (the panel server.cfg did exactly this on
+-- 2026-07-29) tries to ensure it. Unverified on this build on purpose: testing
+-- it means starting the resource, and on the live box the stream/ folder is
+-- still present, so starting it is the outage. custom.cfg's `stop` is the lock.
+dependency 'palm6_threads_IS_RETIRED_DO_NOT_START'
 
--- Stage A spike is REPLACEMENT-style, not addon-DLC, so NO SHOP_PED_APPAREL_META_FILE
--- is needed: we overwrite the base game's existing male-torso jbib drawable 0. The base
--- game's own shop meta already declares that slot, so it stays selectable at a fixed,
--- deterministic index (component 11, drawable 0, texture 0) with no appended-index guessing.
---
--- stream/ contents (auto-mounted, no manifest entry needed):
---   mp_m_freemode_01^jbib_000_u.ydd           -- known-good Rockstar torso geometry (base .ydd)
---   mp_m_freemode_01^jbib_diff_000_a_uni.ytd  -- OUR YtdBuild-generated texture (internal
---                                                name 'jbib_diff_000_a_uni', the exact name
---                                                the base .ydd looks up -> hash 0x7CDD0A9B)
---
--- Phase 1 (real per-character addon delivery via illenium-appearance) will switch to a true
--- addon-DLC pack with its own SHOP_PED_APPAREL_META_FILE; that scaffold is intentionally
--- omitted here to keep the spike's only variable "does our .ytd render".
+-- No shared_script, no client_script, no server_script, no stream/, no
+-- data_file. This resource deliberately has no behaviour left. Everything it
+-- used to do is documented above and in docs/CUSTOM-CLOTHING.md.

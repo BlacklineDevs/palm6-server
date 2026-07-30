@@ -1,17 +1,29 @@
--- Local client debug command for the Stage A spike: wear the generated garment so we
--- can eyeball whether our CodeWalker-built .ytd renders on the ped. Visual check only,
--- no persistence, no net event. Gated behind Config.Enabled and removed before Phase 1.
--- (Real per-character delivery goes through illenium-appearance persistence in Phase 1.)
-
-RegisterCommand('threads_spike', function()
-    if not Config.Enabled then
-        print('[palm6_threads] disabled (Config.Enabled=false)')
-        return
-    end
-    local ped = PlayerPedId()
-    local s = Config.Spike
-    SetPedComponentVariation(ped, s.component, s.drawable, s.texture, 2)
-    print(('[palm6_threads] applied comp=%d draw=%d tex=%d'):format(s.component, s.drawable, s.texture))
-end, false)
-
--- Clean up nothing on stop (no state held); resource is inert until Enabled.
+-- ============================================================================
+-- RETIRED 2026-07-29. This file is a tombstone. It contains no code.
+--
+-- palm6_threads was a REPLACEMENT-style clothing spike that overwrote the base
+-- game's male-torso jbib drawable 0 server-wide. On 2026-07-29 it was found
+-- running on the live box while every police work outfit rendered as nothing
+-- for everyone. See fxmanifest.lua for the full write-up and
+-- docs/CUSTOM-CLOTHING.md for the approach that replaces it.
+--
+-- This file is NOT declared in fxmanifest.lua and is never loaded. It used to
+-- register an ungated client command /threads_spike that ran:
+--
+--     SetPedComponentVariation(ped, 11, 0, 0, 2)
+--
+-- Two things about that line are worth keeping as a warning.
+--
+-- 1. It was not the command that broke production. The command only changed
+--    the local player's own ped, which is safe. The damage was done by the two
+--    files under stream/, which FiveM mounted globally at resource start
+--    whether or not anyone ever typed the command. Config.Enabled = false did
+--    not protect anything: it gated the Lua, and the Lua was never the hazard.
+--    A clothing resource is dangerous the moment it is STARTED, not the moment
+--    it is USED.
+--
+-- 2. The last argument is paletteId = 2. illenium-appearance and every other
+--    appearance path on this server pass 0. Do not copy the 2 into new code.
+--
+-- DO NOT restore this file to working code. DO NOT add it back to the manifest.
+-- ============================================================================

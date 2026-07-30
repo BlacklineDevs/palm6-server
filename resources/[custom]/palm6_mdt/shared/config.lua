@@ -81,7 +81,8 @@ Config.Charges = {
     -- Master flag. false = /charges is not registered, and the
     -- CalculateSentence / RecommendForBooking exports return nil. Existing
     -- behaviour is bit-for-bit unchanged.
-    Enabled = false,
+    -- Cylex-parity build-all (2026-07-29): enable the catalogue/advisory layer.
+    Enabled = true,
 
     -- Command name for the in-game catalogue reader. Configurable for the same
     -- reason Config.Identify.Command is: the live box runs ~157 resources this

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Palm6 MDT</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --panel: #121a28;
+        --gold: #e8a54b;
+        --steel: #8b9bb4;
+        --line: rgba(255, 255, 255, 0.1);
+        --text: #f3f5f8;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        display: none;
+        position: absolute;
+        inset: 6vh 8vw;
+        background: linear-gradient(180deg, #0e1624, var(--bg));
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      #root.open { display: flex; flex-direction: column; }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--gold);
+      }
+      button {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--text);
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      main { padding: 20px 22px; flex: 1; }
+      .note {
+        color: var(--steel);
+        font-size: 13px;
+        line-height: 1.5;
+        max-width: 52rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 18px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 12px;
+      }
+      .card strong { display: block; color: var(--gold); margin-bottom: 6px; }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <header>
+        <h1>Palm6 MDT</h1>
+        <button id="closeBtn" type="button">Close</button>
+      </header>
+      <main>
+        <p class="note" id="status">
+          Tablet scaffold online. Live lookups and writes still use chat MDT
+          commands (/warrant, /bolo, /runplate, /book, /charges). NUI actions
+          will attach to the same server authority next.
+        </p>
+        <div class="grid">
+          <div class="card"><strong>Warrants / BOLOs</strong>Use /warrant and /bolo</div>
+          <div class="card"><strong>Citizens / plates</strong>Use /id and /runplate</div>
+          <div class="card"><strong>Charges</strong>Use /charges (catalogue enabled)</div>
+        </div>
+      </main>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const status = document.getElementById("status");
+      const resource = (typeof GetParentResourceName === "function")
+        ? GetParentResourceName()
+        : "palm6_mdt";
+
+      function post(name, data) {
+        return fetch(`https://${resource}/${name}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=UTF-8" },
+          body: JSON.stringify(data || {}),
+        }).then((r) => r.json()).catch(() => ({ ok: false }));
+      }
+
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (data.action === "open") {
+          root.classList.add("open");
+          post("ready").then((res) => {
+            if (res && res.note) status.textContent = res.note;
+          });
+        }
+        if (data.action === "close") root.classList.remove("open");
+      });
+
+      document.getElementById("closeBtn").addEventListener("click", () => {
+        post("close");
+        root.classList.remove("open");
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          post("close");
+          root.classList.remove("open");
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,13 +1,26 @@
-Config = {}
-
--- Prod-inert until the Stage A spike is proven in-game, per PALM6 convention.
--- Flip to true ONLY for a controlled feel-test deploy, then revert.
-Config.Enabled = false
-
--- The component + drawable/texture index the spike garment lives at.
--- REPLACEMENT spike: we overwrite base male-torso jbib drawable 0, so these are the base
--- game's own fixed indices (guaranteed to exist -> no addon appended-index guessing).
---   component 11 = jbib (torso: vest/jacket/top),  drawable 0,  texture 0 (variant 'a').
--- Our stream/ .ytd replaces the texture that base drawable 0 loads; running /threads_spike
--- selects that drawable so OUR generated texture renders.
-Config.Spike = { component = 11, drawable = 0, texture = 0 }
+-- ============================================================================
+-- RETIRED 2026-07-29. This file is a tombstone. It contains no code.
+--
+-- palm6_threads was a REPLACEMENT-style clothing spike. It overwrote the base
+-- game's male-torso jbib drawable 0 for every male freemode ped on the server,
+-- and on 2026-07-29 it was found running on the live box while every police
+-- work outfit rendered as nothing for everyone. See fxmanifest.lua for the
+-- full incident write-up and docs/CUSTOM-CLOTHING.md for what to do instead.
+--
+-- This file is NOT declared in fxmanifest.lua and is never loaded. It is kept
+-- only so the record of what the spike configured is not lost. What it used to
+-- contain:
+--
+--     Config = {}
+--     Config.Enabled = false
+--     Config.Spike = { component = 11, drawable = 0, texture = 0 }
+--
+-- Those three numbers are the base game's OWN indices, and that was the whole
+-- problem. The spike picked them precisely because they were guaranteed to
+-- exist, which is another way of saying it aimed at a slot that every other
+-- outfit on the server was already using. A real addon pack appends a NEW
+-- drawable index instead, and nobody may author that index by hand: it has to
+-- be read off the ped in game after the pack is mounted.
+--
+-- DO NOT restore this file to working code. DO NOT add it back to the manifest.
+-- ============================================================================

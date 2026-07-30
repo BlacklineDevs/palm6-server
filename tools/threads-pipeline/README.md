@@ -1,5 +1,29 @@
 # PALM6 Threads — generation pipeline (Phase 0 spike)
 
+> ## ⚠️ 2026-07-29: the DELIVERY end of this chain is retired. The TOOLING is not.
+>
+> The last two hops below ("loose-file `palm6_threads` resource → in-game") took the
+> live server down on 2026-07-29. The resource that consumed this pipeline's output
+> was replacement-style: it streamed `mp_m_freemode_01^jbib_000_u.ydd` and its `.ytd`,
+> filenames with no DLC segment, which overwrote base male-torso jbib drawable 0 for
+> every male freemode ped on the server. Every police work outfit rendered as nothing,
+> for everyone. `palm6_threads` is now retired and cannot start.
+>
+> **What is still good:** `YtdBuild` and `scripts/png-to-dds.ps1`. The PNG → DDS → `.ytd`
+> half is real, verified, and reusable by any future pack. Nothing about it caused the
+> incident.
+>
+> **What is void:** the "base `.ydd` copy" step and the `palm6_threads` delivery step.
+> Copying a base-game `.ydd` and streaming it under its base-game name IS the bug. A
+> real pack needs new geometry (Blender + Sollumz) under a pack namespace, plus a
+> `SHOP_PED_APPAREL_META_FILE`.
+>
+> **Also note:** `gtautil` below is still listed as TODO and was never acquired, so the
+> `.ymt` step of this chain has never run. Use grzyClothTool or Durty Cloth Tool instead;
+> they write the `.meta` for you.
+>
+> **Read `docs/CUSTOM-CLOTHING.md` before wiring this tooling to anything that streams.**
+
 Headless chain: PNG → DDS (texconv) → `.ytd` (CodeWalker.Core) → base `.ydd` copy →
 `.ymt` (gtautil) → loose-file `palm6_threads` resource → in-game via illenium.
 

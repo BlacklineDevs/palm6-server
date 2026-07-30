@@ -1,7 +1,24 @@
 # PALM6 Threads — Player-Created Custom Clothing (Design Spec)
 
+> # ⚠️ ON HOLD. The Phase 0 spike broke production on 2026-07-29.
+> #
+> # The `palm6_threads` resource this spec describes has been RETIRED, not built.
+> # Its Stage A implementation was replacement-style: it overwrote the base game's
+> # male-torso jbib drawable 0, and every police work outfit rendered as nothing
+> # for everyone until it was force-stopped.
+> #
+> # The design below is not wrong — section 10 correctly calls for
+> # `data_file 'SHOP_PED_APPAREL_META_FILE'`, which is the addon-DLC route. The
+> # implementation deviated from it. Two of the four things this design assumes
+> # are still not in the repo: `gtautil` was never acquired (so no `.ymt` can be
+> # generated headlessly), and no non-base-game garment `.ydd` exists.
+> #
+> # **Read `docs/CUSTOM-CLOTHING.md` before restarting any of this.** It is
+> # binding, it records the incident, and it sets out what has to exist before a
+> # pack may be streamed.
+
 **Date:** 2026-07-22
-**Status:** Design — approved for spec, pending plan
+**Status:** ON HOLD 2026-07-29 (was: Design — approved for spec, pending plan)
 **Author:** Kai (for David)
 **Repos touched:** `gtarp` (FiveM server + generation pipeline) · `palm6-web` (editor, entitlement, admin) · GitHub Actions (generation worker)
 

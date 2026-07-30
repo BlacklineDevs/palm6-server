@@ -1198,6 +1198,19 @@ CREATE TABLE IF NOT EXISTS `palm6_mdt_calls` (
     INDEX idx_palm6_mdt_calls_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ]],
+        [[
+CREATE TABLE IF NOT EXISTS `palm6_mdt_unit_positions` (
+    citizenid VARCHAR(64) NOT NULL PRIMARY KEY,
+    callsign VARCHAR(32) NOT NULL DEFAULT '',
+    officer_name VARCHAR(100) NOT NULL DEFAULT '',
+    x DOUBLE NOT NULL,
+    y DOUBLE NOT NULL,
+    z DOUBLE NOT NULL,
+    heading DOUBLE NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_palm6_mdt_unit_positions_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]],
     }
     for _, sql in ipairs(stmts) do
         local ok, err = pcall(function() MySQL.query.await(sql) end)
@@ -1219,7 +1232,44 @@ ALTER TABLE `palm6_mdt_bookings`
         print(('^3[palm6_mdt] bookings.sealed_at self-heal skipped (MariaDB-only ADD COLUMN IF NOT EXISTS) -> %s. Apply sql/0026_legal.sql by hand if palm6_legal sealing misbehaves.^0')
             :format(tostring(errAlter)))
     end
+
+    -- Custody status for web /ops booking board (W2 Cylex-parity). Best-effort.
+    pcall(function()
+        MySQL.query.await([[
+ALTER TABLE `palm6_mdt_bookings`
+    ADD COLUMN IF NOT EXISTS custody_status ENUM('intake','housed','released','transferred') NOT NULL DEFAULT 'housed';
+        ]])
+    end)
+    pcall(function()
+        MySQL.query.await([[
+ALTER TABLE `palm6_mdt_bookings`
+    ADD COLUMN IF NOT EXISTS released_at TIMESTAMP NULL DEFAULT NULL;
+        ]])
+    end)
 end
+
+-- Live map heartbeats from client/positions.lua (W5). Duty-gated; fail-soft.
+RegisterNetEvent('palm6_mdt:unitHeartbeat', function(payload)
+    local src = source
+    if type(payload) ~= 'table' then return end
+    local x, y, z = tonumber(payload.x), tonumber(payload.y), tonumber(payload.z)
+    local heading = tonumber(payload.heading) or 0
+    if not x or not y or not z then return end
+    if not Bridge.IsOnDutyPolice(src) then return end
+    local citizenid = Bridge.GetCitizenId(src)
+    if not citizenid then return end
+    local name = Bridge.GetPlayerName(src) or ''
+    pcall(function()
+        MySQL.insert.await([[
+INSERT INTO palm6_mdt_unit_positions (citizenid, callsign, officer_name, x, y, z, heading)
+VALUES (?, '', ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+  officer_name = VALUES(officer_name),
+  x = VALUES(x), y = VALUES(y), z = VALUES(z), heading = VALUES(heading),
+  updated_at = CURRENT_TIMESTAMP
+        ]], { citizenid, name, x, y, z, heading })
+    end)
+end)
 
 -- ---------------------------------------------------------------------------
 -- Commands + boot

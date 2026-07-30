@@ -457,4 +457,14 @@ Config.Events = {
     ['palm6_pd_life:toggleDuty']          = { calls = 10, window_seconds = 60 },
     ['palm6_pd_life:takePost']            = { calls = 15, window_seconds = 60 },
     ['palm6_pd_life:requestHeld']         = { calls = 10, window_seconds = 60 },
+
+    -- palm6_insignia:requestRoster is the resource's ONLY inbound net event and it
+    -- carries no payload: the client asks "who is on duty near me" and the server
+    -- answers from its own record, so a modified client cannot assert a name or a
+    -- badge number through it. The budget bounds the pull rate, not the content.
+    -- Same shape and reasoning as pd_life:requestHeld above (a client-load pull
+    -- that fans a snapshot back per call). palm6_insignia prints a yellow line at
+    -- boot naming this exact entry while it is absent, so a missing budget is
+    -- visible rather than silent.
+    ['palm6_insignia:requestRoster']      = { calls = 10, window_seconds = 60 },
 }

@@ -1,5 +1,26 @@
 # PALM6 Threads — Phase 0: Pipeline Spike Implementation Plan
 
+> # 🛑 SUPERSEDED AND DANGEROUS — DO NOT EXECUTE. 2026-07-29.
+> #
+> # Executing this plan is what took the live server down on 2026-07-29. Every
+> # police work outfit rendered as nothing, for everyone, because Stage A is
+> # REPLACEMENT-style: the assets it streams overwrite the base game's male-torso
+> # jbib drawable 0 for every male freemode ped on the server.
+> #
+> # **Task 5 Step 1 below literally instructs you to add `ensure palm6_threads`
+> # to `custom.cfg` and calls it "safe". It is not safe. Do not do it.**
+> # `custom.cfg` now carries `stop palm6_threads`, and the resource has been
+> # retired: its `stream/` folder is gone and its manifest declares an
+> # unresolvable dependency so it cannot start.
+> #
+> # This file is kept ONLY as the record of how the pipeline tooling was built
+> # (Tasks 1-3 produced `tools/threads-pipeline`, which is real and still works).
+> # Tasks 4, 5 and 6 are void.
+> #
+> # **Before doing any clothing work on PALM6, read `docs/CUSTOM-CLOTHING.md`.**
+> # It is binding, it explains the ban on replacement-style assets, and it
+> # describes the addon-DLC path this plan should have taken.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prove the make-or-break chain end-to-end on ONE hand-fed texture — a player-style PNG becomes a real GTA5 `.ytd`, streamed by a `palm6_threads` resource, and worn correctly on a character in-game on PALM6 via `illenium-appearance`, persisting across respawn.
@@ -337,6 +358,16 @@ Pop-Location
 - Produces: the go/no-go signal for the entire project. If our generated `.ytd` renders correctly in-game, the make-or-break is proven.
 
 - [ ] **Step 1: Add `palm6_threads` to the server resource load order**
+
+> 🛑 **VOID. THIS STEP BROKE PRODUCTION ON 2026-07-29. DO NOT DO IT.**
+> The claim "Since `Config.Enabled=false`, it streams assets but takes no action — safe"
+> is false, and it is false in a way worth understanding: `Config.Enabled` gates the
+> Lua command, and the Lua command was never the hazard. FiveM mounts everything under
+> `stream/` into the global streaming store at resource START, whatever the Lua does.
+> The two streamed filenames carry no DLC segment, so mounting them replaced base
+> male-torso jbib drawable 0 for every male freemode ped on the server. `custom.cfg`
+> now carries `stop palm6_threads` and must never carry an `ensure` for it.
+> See `docs/CUSTOM-CLOTHING.md`.
 
 Add `ensure palm6_threads` to the canonical `custom.cfg` (matching where other `palm6_` resources are ensured). Since `Config.Enabled=false`, it streams assets but takes no action — safe. Confirm the ensure ordering doesn't precede its needs (no deps for the spike).
 
