@@ -215,9 +215,9 @@ RegisterNetEvent('palm6_uniform:apply', function(payload)
         -- this is identical to a broken resource, and the most likely cause is
         -- the most common first mistake: capturing the outfit you are already
         -- standing in and then asking to be dressed in it.
-        Game.Notify(('Uniform "%s" applied, but you were already wearing every slot of it, so nothing changed on screen. Run /uniformscramble to change into something else, then /uniform again.')
+        Game.Notify(('Uniform "%s" applied, but you were already wearing every slot of it, so nothing changed on screen. At the station wardrobe, pick "Randomise my clothes" and then the uniform again to see the swap.')
             :format(tostring(payload.label or 'uniform')), 'inform')
-        Game.Chat(('applied "%s" - 0 slots changed, you were already wearing it. /uniformscramble then /uniform to see the swap.')
+        Game.Chat(('applied "%s" - 0 slots changed, you were already wearing it. At the wardrobe: "Randomise my clothes", then pick the uniform again.')
             :format(tostring(payload.label or 'uniform')))
         return
     end
@@ -235,7 +235,7 @@ RegisterNetEvent('palm6_uniform:restore', function()
         return
     end
     if not civilian then
-        Game.Notify('No civilian outfit was recorded this session, so there is nothing to change back into. Reopen the clothing menu, or relog.', 'error')
+        Game.Notify('No civilian outfit was recorded this session, so there is nothing to change back into. This resource never writes your saved appearance, so a relog brings your own clothes back.', 'error')
         return
     end
     local ok, why, changed = Game.ApplyOutfit(civilian.model, civilian.components, civilian.props)
@@ -276,8 +276,8 @@ RegisterNetEvent('palm6_uniform:scramble', function()
     -- do: putting the pre-scramble clothes back.
     inUniform = false
     changedByUs = true
-    Game.Notify('Your clothes are now randomised. Face and hair are untouched. Run /uniform to snap into the captured uniform, or /uniformoff to go back to what you had on.', 'inform')
-    Game.Chat('clothes randomised. /uniform to put the captured uniform on, /uniformoff to go back to what you were wearing before this.')
+    Game.Notify('Your clothes are now randomised. Face and hair are untouched. Open the station wardrobe and pick a uniform to snap into it, or "Back to my own clothes" to undo this.', 'inform')
+    Game.Chat('clothes randomised. Open the station wardrobe: pick a uniform to put it on, or "Back to my own clothes" to go back to what you were wearing before this.')
 end)
 
 -- ---------------------------------------------------------------------------

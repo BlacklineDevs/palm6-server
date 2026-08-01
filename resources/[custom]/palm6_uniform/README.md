@@ -1,11 +1,113 @@
 # palm6_uniform
 
-Rank and season driven police uniforms.
+Rank and season driven police uniforms, worn from a **walk-up wardrobe at the
+police station**.
 
 An officer's uniform follows their **grade** (a promotion re-dresses them with no
 relog) and the **season / weather** (a winter coat, a rain shell, a short-sleeve
 summer shirt). Every one of those uniforms is a **photograph of an outfit David
 actually wore in game**, not a set of numbers anybody typed.
+
+---
+
+## The walk-up wardrobe
+
+**This is the interface. Nothing in the normal flow requires typing anything.**
+
+Walk to the police station. At the duty point there is a wardrobe: an
+`ox_target` eye if `ox_target` is running on the box, otherwise a proximity
+prompt that says `Press E Station Wardrobe`. Interact with it and an `ox_lib`
+menu opens listing the uniforms **this officer is allowed to wear**. Click one.
+The clothes change.
+
+| in the menu | what it does |
+|---|---|
+| the uniform rows | Apply that uniform. Each row names its rank floor, season and weather, and marks the one the server would pick automatically and the one you already have on. |
+| **Back to my own clothes** | The civilian restore. Greyed out with a reason when this wardrobe has not changed you. |
+| **Save what I am wearing as a uniform** (admin) | Two clicks: pick the rank, pick the conditions. Whatever the ped has on becomes that uniform. This is how uniforms get created and it needs no command. |
+| **Randomise my clothes** (admin) | The visible-change test tool, so a uniform swap is actually visible. |
+| **Read out what I am wearing** (admin) | Prints the twelve components and five props. Stores nothing. |
+| **Move this wardrobe to where I am standing** (admin) | Repositions the point at runtime and prints the exact config line to keep it. |
+
+### Where the wardrobe is, and why nobody typed it
+
+**No world coordinate is authored in this resource.** The position is read at
+runtime, on the server, from the resource that already owns where the police
+station is:
+
+```
+qbx_police_overrides/config.lua:61-65     Config.DutyToggle
+    label  = 'Mission Row PD - Duty'
+    coords = vector3(442.32, -988.43, 30.69)
+    radius = 1.0
+
+qbx_police_overrides/server/overrides.lua:45
+    exports('GetDutyToggle', function() return Config.DutyToggle end)
+```
+
+`palm6_pd_life/bridge/sv_framework.lua:72-83` reads the same export the same
+way, for the same reason. That export is **server realm** (that resource
+declares no client script), which is why the server resolves the point and
+pushes it to clients rather than clients reading it.
+
+Order of resolution, reported at boot and in `/uniformstatus`:
+
+1. a runtime move made from the menu itself;
+2. `qbx_police_overrides:GetDutyToggle()`;
+3. `Config.Wardrobe.FallbackCoords`, which is a **verbatim copy** of the coords
+   line quoted above and says so in its comment.
+
+The contract's own radius is `1.0`, an `ox_target` radius. It is widened to
+`Config.Wardrobe.MinRadius` for a walk-up, which is a derived bound and not an
+invented position, exactly as `palm6_pd_life/shared/config.lua:49` does.
+
+**If the wardrobe is in the wrong spot, do not guess a number.** Walk to the
+right spot and use *Move this wardrobe to where I am standing*. It prints the
+`vector3(...)` line to paste into `Config.Wardrobe.FallbackCoords` if it should
+survive a restart.
+
+### The empty state is the most important screen
+
+A wardrobe with nothing captured and a wardrobe that is broken look identical
+from in game. So the menu is **never blank**. With nothing captured it says:
+
+> **No uniforms have been captured yet.**
+> This wardrobe is working. It is empty. A uniform here is a photograph of an
+> outfit somebody actually wore in game, so until somebody captures the first
+> one there is genuinely nothing to put on.
+
+and, to an admin, the exact click path underneath it:
+
+> **To create the first one, right here, with no typing:**
+> 1. dress this character however the rank should look. 2. come back here and
+> pick "Save what I am wearing as a uniform". 3. pick the rank. 4. pick the
+> conditions.
+
+and, to anyone else, who can do it and which permission it needs.
+
+### Every failure says why, in the menu or as a notify
+
+| what stops you | what you see |
+|---|---|
+| not on the police job | a row naming the job it wants and the job you have |
+| your ped is not freemode | a row explaining that captured indices belong to the two freemode bodies |
+| nothing captured at all | the empty state above |
+| sets exist but none for your rank or body | a row saying how many are stored and why none of them is yours |
+| nothing to restore | the restore row is greyed out and says why |
+| already wearing it | a notify before the apply, so the zero-slots-changed message is expected |
+| picking something above your rank | a notify naming the id, your job and your rank |
+| the server does not answer | a menu row saying **the server did not answer**, plus a notify. Never mistaken for an empty wardrobe |
+| `ox_target` absent | the wardrobe degrades to an `E` prompt, and the menu footer says which route this client used |
+| `ox_lib` menu absent | a notify pointing at `/uniform` and `/uniformoff` |
+
+### Server authority, with a menu in front of it
+
+The menu is a **view**. The server builds every row, and it re-derives the
+job, grade and ped model from `qbx_core` on **every pick**, checking the chosen
+id against a permitted list computed at that moment. A modified client that
+sends the chief's set id as a cadet is refused by name. See `allowedSets` and
+`menuApply` in `server/main.lua`; `tests/suites/12_uniform_wardrobe_menu.lua`
+pins both.
 
 ---
 
@@ -36,16 +138,18 @@ its own resource, never a replacement, and never in this one.
 
 ## The capture workflow
 
-This is the whole feature. Everything else is plumbing.
+This is the whole feature. Everything else is plumbing. **All of it is done from
+the wardrobe menu; the commands in the appendix do the same things and are a
+fallback.**
 
 > **The one ordering mistake that makes this look broken.** A uniform swap is
 > only visible if the uniform is different from what you are already wearing.
-> Capture the outfit you are standing in and then run `/uniform`, and the server
+> Capture the outfit you are standing in and then put it on, and the server
 > correctly picks that set, the client correctly writes it, and **nothing moves
-> on screen** because every slot already held those numbers. Both commands
-> report success. That reads as a dead resource and it is not one.
+> on screen** because every slot already held those numbers. Both steps report
+> success. That reads as a dead resource and it is not one.
 >
-> Two things guard against it. The workflow below puts a wardrobe change
+> Two things guard against it. The workflow below puts a clothing change
 > *between* the capture and the apply. And if you do it in the wrong order
 > anyway, the apply says so out loud: *"applied, but you were already wearing
 > every slot of it, so nothing changed on screen."*
@@ -53,82 +157,75 @@ This is the whole feature. Everything else is plumbing.
 1. Get on the **police** job and pick a **male** character.
 2. Dress the character exactly how that rank should look, in whatever clothing
    menu the box runs. Stand still and let the clothing finish streaming.
-3. Sanity check:
+3. Walk to the station wardrobe and open it. Pick **Read out what I am
+   wearing**. You get a printed list of the twelve components and five props,
+   and a count of how many component slots are non-zero. **Nothing is stored.**
+   If it says `0 of 12 component slots are non-zero`, your ped had not finished
+   streaming. Walk a few metres and read it again; capturing a wall of zeros
+   stores "wearing nothing" as a uniform.
+4. Pick **Save what I am wearing as a uniform**, then the rank, then **Start
+   here: All year round, any weather**.
 
-   ```
-   /uniformshow
-   ```
-
-   You get a printed list of the twelve components and five props you are
-   wearing right now, and a count of how many component slots are non-zero.
-   **Nothing is stored.** If it says `0 of 12 component slots are non-zero`,
-   your ped had not finished streaming. Walk a few metres and run it again;
-   capturing a wall of zeros stores "wearing nothing" as a uniform.
-4. Store it:
-
-   ```
-   /uniformcapture 0 any any Patrol
-   ```
-
-   `0` is the grade **floor**. That set now dresses grade 0 **and every grade
-   above it** until a higher capture overrides it. One capture dresses the whole
-   department.
+   The rank you pick is a **floor**. That set now dresses that grade **and every
+   grade above it** until a higher capture overrides it. One capture dresses the
+   whole department. The label is composed for you from the real rank name, so
+   there is nothing to type.
 5. **Change out of it before you test it.** Either go back to the clothing menu
-   and put your own clothes on, or use the built-in shortcut:
-
-   ```
-   /uniformscramble
-   ```
-
-   which randomises what you are wearing (face and hair untouched) using the
-   variations the engine reports as valid for your ped. No clothing id is
-   authored by it. This step is not optional if you want to *see* step 6 work.
-6. Put the uniform on: `/uniform`. You should visibly snap back into the outfit
-   captured in step 4, and the notify tells you how many slots changed.
-7. `/uniformoff` puts back what you were wearing before this resource touched
-   you.
+   and put your own clothes on, or pick **Randomise my clothes** in the
+   wardrobe, which randomises what you are wearing (face and hair untouched)
+   using the variations the engine reports as valid for your ped. No clothing id
+   is authored by it. This step is not optional if you want to *see* step 6
+   work.
+6. Open the wardrobe again and click the uniform row. You should visibly snap
+   back into the outfit captured in step 4, and the notify tells you how many
+   slots changed.
+7. **Back to my own clothes** puts back what you were wearing before this
+   resource touched you.
 8. Switch to a **female** character, dress her the same way, and capture again.
    The stored numbers will be different, and they have to be. See "Male and
    female" below.
-9. Add overrides only where you want a visible difference:
+9. Add overrides only where you want a visible difference: capture again at a
+   higher rank, or with a season or weather variant, from the same two-click
+   menu. Every extra variant then shows up as its own row in the wardrobe for
+   anyone entitled to it.
 
-   ```
-   /uniformcapture 3 any  any    Sergeant
-   /uniformcapture 0 winter any  "Patrol Winter"
-   /uniformcapture 0 any  wet    "Patrol Rain Shell"
-   ```
-
-   To feel-test one of those without waiting for the calendar, pin the variant
-   at runtime: `/uniformseason winter`, then `/uniform`, then
+   To feel-test a season without waiting for the calendar, pin the variant at
+   runtime with `/uniformseason winter`, open the wardrobe, then
    `/uniformseason auto`. **Do not edit `Config.SeasonOverride` and restart the
    resource to do this** - a restart wipes every client's in-memory record of
    their own clothes, and whoever is in uniform at that moment gets *"No
-   civilian outfit was recorded this session"* from `/uniformoff` with no
-   in-game way back.
+   civilian outfit was recorded this session"* from the restore with no in-game
+   way back.
 
 After **any** change to the clothing packs on the box, **re-run every capture**.
 Indices shift and a stored set silently becomes a different garment. Nothing can
 detect that from outside the game.
 
-**The step-by-step version of this, with the exact expected output of every
-command and what each failure means, is [CHECKLIST.md](CHECKLIST.md).**
+**The step-by-step walk-up test, with what you should see at each point, is
+[CHECKLIST.md](CHECKLIST.md).**
 
 ---
 
-## Commands
+## Appendix: the commands
+
+**These are the fallback, not the feature.** Every one of the normal steps above
+is a click in the wardrobe menu. The commands stay because a chat command works
+from anywhere on the map, works with no `ox_target`, works with no `ox_lib`
+menu, and is the only route left if the wardrobe position itself cannot be
+resolved.
 
 | command | who | what it does |
 |---|---|---|
-| `/uniformcapture <grade> <season> <weather> [label]` | admin ACE **and** police | Stores what you are wearing right now as the uniform for that grade and up, on your current body, for that variant. Overwrites an existing row with the same key. Cannot be run from the console: it photographs a ped. |
+| `/uniformcapture <grade> <season> <weather> [label]` | admin ACE **and** police | Stores what you are wearing right now as the uniform for that grade and up, on your current body, for that variant. Overwrites an existing row with the same key. Cannot be run from the console: it photographs a ped. The wardrobe menu does the same thing with two clicks and composes the label for you. |
 | `/uniformshow` | admin ACE | Prints what you are wearing, plus how many slots are non-zero. Stores nothing, and deliberately does **not** require the police job, because it is a read. |
 | `/uniformscramble` | admin ACE | Randomises your own clothes so a uniform swap is actually visible. Face and hair untouched. Authors no clothing id: the engine picks from the variations it reports as valid for your ped. |
 | `/uniformseason <any\|winter\|spring\|summer\|autumn\|auto>` | admin ACE | Pins the season at runtime and re-dresses every on-duty officer. `auto` hands it back to the date schedule. **No restart**, which is the point. |
 | `/uniformweather <any\|wet\|cold\|hot\|auto>` | admin ACE | The same for the weather bucket. |
 | `/uniformlist` | admin ACE | Every stored set, plus which one **you** would get right now. |
 | `/uniformdelete <id>` | admin ACE | Deletes one set. Ids come from `/uniformlist`. |
-| `/uniformstatus` | admin ACE | The meter: enabled, schema, set count, current season and where it came from, current weather bucket and where it came from, whether the admin ACE is actually granted, and the client-side appearance-resource state. |
-| `/uniform` | police | Re-apply my uniform. The **server** decides which one that is. |
-| `/uniformoff` | police | Back into the clothes you were wearing before this resource changed them. |
+| `/uniformstatus` | admin ACE | The meter: enabled, schema, set count, current season and where it came from, current weather bucket and where it came from, **where the wardrobe is and which of the three sources answered**, whether the admin ACE is actually granted, and the client-side appearance-resource state. |
+| `/uniform` | police | Re-apply my uniform. The **server** decides which one that is. Same as clicking the recommended row in the wardrobe. |
+| `/uniformoff` | police | Back into the clothes you were wearing before this resource changed them. Same as **Back to my own clothes**. |
 
 `<season>` is one of `any winter spring summer autumn`.
 `<weather>` is one of `any wet cold hot`.
@@ -422,15 +519,21 @@ itself: a red `ACE MISSING` block naming the exact line prints at boot, and
 **palm6_eventguard/config.lua** - two budgets:
 
 ```lua
-['palm6_uniform:captured']     = { calls = 10, window_seconds = 60 },
-['palm6_uniform:requestApply'] = { calls = 10, window_seconds = 60 },
+['palm6_uniform:captured']        = { calls = 10, window_seconds = 60 },
+['palm6_uniform:requestApply']    = { calls = 10, window_seconds = 60 },
+['palm6_uniform:menuAction']      = { calls = 30, window_seconds = 60 },
+['palm6_uniform:wardrobeRequest'] = { calls = 10, window_seconds = 60 },
 ```
 
-Both are tight on purpose. `captured` only ever fires in reply to a
+The first two are tight on purpose. `captured` only ever fires in reply to a
 server-minted single-use token held by an admin, and `requestApply` fires once
-per spawn. Both already carry their own in-handler per-source rate limit
+per spawn. `menuAction` is looser because it is the click channel: an officer
+opening the wardrobe, trying two uniforms and restoring is four calls in ten
+seconds and none of that is abuse. `wardrobeRequest` fires on spawn.
+
+All four already carry their own in-handler per-source rate limit
 (`Config.RateLimits`); these budgets are the blunter outer bound that runs
-first.
+first. Nothing in this resource depends on them being present.
 
 ---
 
@@ -468,11 +571,21 @@ Static gates, run from the repo root:
 ```
 python <scratchpad>/luacheck.py "C:/Users/Mgtda/Projects/Active/palm6-server/resources/[custom]/palm6_uniform"
 node tools/audit/run.js
+cd tests && node run.js
 ```
 
-Neither of those proves the feature works. They prove the Lua parses and the
-repo's invariants hold. **The in-game checklist is the part that actually proves
-this works, and only David can run it: [CHECKLIST.md](CHECKLIST.md)**, in this
-directory. Steps 0 through 9, each with the exact command, the exact expected
-output and what a failure means, sized for ten minutes. It contains no step that
-restarts a resource and no step that ensures `palm6_threads`.
+`tests/suites/12_uniform_wardrobe_menu.lua` runs the **real** `allowedSets`,
+`captureVariants` and `composeLabel` through a Lua VM (the production bytes are
+lifted by anchor, so moving the code fails the suite rather than testing a stale
+copy) and additionally pins the promises this interface is built on: that the
+empty state still says what it says, that every menu row carries a description,
+that a pick is re-authorised server-side against a freshly computed permitted
+list, and that the station coordinate appears in exactly one file with a comment
+citing where it was copied from.
+
+None of that proves the feature works in game. It proves the Lua parses, the
+repo's invariants hold, and the selection logic answers correctly. **The walk-up
+test is the part that actually proves this works, and only David can run it:
+[CHECKLIST.md](CHECKLIST.md)**, in this directory. It contains no step that
+restarts a resource, no step that ensures `palm6_threads`, and no step that
+requires typing a command.

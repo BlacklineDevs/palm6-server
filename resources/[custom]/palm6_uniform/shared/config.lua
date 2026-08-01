@@ -66,8 +66,80 @@ Config.ExpectedAcePrincipals = { 'group.admin' }
 -- The two player-facing commands (/uniform and /uniformoff) take no ACE. They
 -- are gated on being police, server-side, and they can only ever apply the
 -- uniform the SERVER picks for the caller.
+--
+-- THESE COMMANDS ARE THE FALLBACK, NOT THE FEATURE. The primary interface is
+-- the walk-up wardrobe at the police station (Config.Wardrobe below). Nothing
+-- in the normal flow requires typing anything.
 Config.PlayerCommand  = 'uniform'
 Config.RestoreCommand = 'uniformoff'
+
+-- ---------------------------------------------------------------------------
+-- THE WALK-UP WARDROBE. This is the primary interface.
+-- ---------------------------------------------------------------------------
+Config.Wardrobe = {
+    -- Turning this off leaves only the chat commands. Nothing else changes.
+    Enabled = true,
+
+    Label = 'Station Wardrobe',
+    Icon  = 'fas fa-shirt',
+
+    -- WHERE THE WARDROBE IS, and the rule that governs it.
+    --
+    -- NO WORLD COORDINATE IS INVENTED BY THIS RESOURCE. The position is READ,
+    -- at runtime, from the resource that already owns the police station's
+    -- position:
+    --
+    --     qbx_police_overrides/config.lua:61-65   Config.DutyToggle
+    --         label  = 'Mission Row PD - Duty'
+    --         coords = vector3(442.32, -988.43, 30.69)
+    --         radius = 1.0
+    --
+    --     published as an export at
+    --     qbx_police_overrides/server/overrides.lua:45
+    --         exports('GetDutyToggle', function() return Config.DutyToggle end)
+    --
+    -- That export is SERVER realm only (qbx_police_overrides has no client
+    -- script), which is why the server reads the point and pushes it to the
+    -- client rather than the client reading it directly. palm6_pd_life reads
+    -- the same export the same way, for the same reason, at
+    -- palm6_pd_life/bridge/sv_framework.lua:72-83.
+    --
+    -- FallbackCoords is used ONLY when that export cannot be read (the
+    -- resource is stopped, or it answers with something unusable). Its value
+    -- is a verbatim copy of the coords line quoted above, not a coordinate
+    -- anybody chose here. If the wardrobe ends up in the wrong spot, do NOT
+    -- guess a new number: walk to the right spot in game and use
+    -- "Move this wardrobe to where I am standing" in the wardrobe menu itself.
+    -- That prints the exact vector3 line to paste back in here, and it needs
+    -- no typing to use.
+    FallbackCoords = vector3(442.32, -988.43, 30.69),
+
+    -- The duty-toggle contract's own radius is 1.0m, which is an ox_target
+    -- interaction radius: fine for an eye you aim at, too tight for a walk-up
+    -- prompt you want to see while crossing the lobby. This is the FLOOR
+    -- applied to whatever radius the contract reports, exactly the derived
+    -- bound palm6_pd_life applies at palm6_pd_life/shared/config.lua:49. It is
+    -- a widening of a real radius, not an invented position.
+    MinRadius = 1.8,
+}
+
+-- Plain-English names for the season and weather buckets, used to label the
+-- capture choices in the menu so an admin never types a bucket name. Keys must
+-- stay in step with Config.Seasons / Config.Weathers below; anything missing a
+-- label falls back to the bucket string itself rather than disappearing.
+Config.SeasonLabels = {
+    any    = 'All year round',
+    winter = 'Winter only',
+    spring = 'Spring only',
+    summer = 'Summer only',
+    autumn = 'Autumn only',
+}
+Config.WeatherLabels = {
+    any  = 'any weather',
+    wet  = 'rain and thunder',
+    cold = 'snow and ice',
+    hot  = 'heatwave',
+}
 
 -- ---------------------------------------------------------------------------
 -- SEASON
@@ -258,14 +330,22 @@ Config.MaxTexture  = 256
 -- /uniform straight after /uniformoff, or /uniform straight after
 -- /uniformseason, was refused. Every one of those pairs is a sequence the
 -- checklist asks for on purpose, and none of them is abuse.
+--
+-- `menu` and `wardrobe` are the two keys the walk-up interface adds. `menu` is
+-- deliberately LOOSE (1 second): opening a menu is a read that stores nothing,
+-- and a wardrobe that refuses to open because you closed and reopened it is
+-- indistinguishable from a broken wardrobe. It still refuses OUT LOUD, as a
+-- row inside the menu, rather than by not opening.
 Config.RateLimits = {
-    capture      = 3,   -- /uniformcapture, the command half of a WRITE
+    capture      = 3,   -- /uniformcapture and the menu's save action, a WRITE
     show         = 1,   -- /uniformshow, read only, stores nothing
     captureReply = 1,   -- the snapshot coming back from the client
     requestApply = 5,   -- the client asking "dress me"
     scramble     = 2,   -- /uniformscramble, the visible-change test tool
-    apply        = 2,   -- /uniform
-    restore      = 2,   -- /uniformoff
+    apply        = 2,   -- /uniform, and picking a uniform in the wardrobe
+    restore      = 2,   -- /uniformoff, and "back to my own clothes"
+    menu         = 1,   -- opening the wardrobe menu (a read)
+    wardrobe     = 2,   -- the client asking where the wardrobe is
     command      = 2,   -- every other command
 }
 

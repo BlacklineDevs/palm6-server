@@ -1246,6 +1246,26 @@ ALTER TABLE `palm6_mdt_bookings`
     ADD COLUMN IF NOT EXISTS released_at TIMESTAMP NULL DEFAULT NULL;
         ]])
     end)
+
+    -- Dispatch assign metadata for web /ops (W3+). Best-effort.
+    pcall(function()
+        MySQL.query.await([[
+ALTER TABLE `palm6_mdt_calls`
+    ADD COLUMN IF NOT EXISTS assigned_unit VARCHAR(32) NULL;
+        ]])
+    end)
+    pcall(function()
+        MySQL.query.await([[
+ALTER TABLE `palm6_mdt_calls`
+    ADD COLUMN IF NOT EXISTS assigned_by VARCHAR(64) NULL;
+        ]])
+    end)
+    pcall(function()
+        MySQL.query.await([[
+ALTER TABLE `palm6_mdt_calls`
+    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP NULL;
+        ]])
+    end)
 end
 
 -- Live map heartbeats from client/positions.lua (W5). Duty-gated; fail-soft.
@@ -1269,6 +1289,171 @@ ON DUPLICATE KEY UPDATE
   updated_at = CURRENT_TIMESTAMP
         ]], { citizenid, name, x, y, z, heading })
     end)
+end)
+
+-- NUI lookups (read-only). Same authority gates as chat MDT.
+RegisterNetEvent('palm6_mdt:nuiLookupPlate', function(plate)
+    local src = source
+    local cid = gate(src, 'runplate')
+    if not cid then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Denied or missing tablet.' })
+        return
+    end
+    plate = tostring(plate or ''):upper():gsub('%s+', '')
+    if plate == '' or #plate > (Config.RunPlate and Config.RunPlate.MaxLen or 12) then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Invalid plate.' })
+        return
+    end
+    local lines = { ('Plate %s'):format(plate) }
+    local hot = false
+    pcall(function()
+        hot = exports.palm6_chopshop:IsStolen(plate) == true
+    end)
+    if hot then lines[#lines + 1] = 'HOT — reported stolen (chopshop)' end
+    local owner = Bridge.GetPlateOwner(plate)
+    if owner and owner.citizenid then
+        lines[#lines + 1] = ('Owner: %s (%s)'):format(owner.name or '?', owner.citizenid)
+        local wcount = 0
+        pcall(function()
+            local row = MySQL.single.await(
+                "SELECT COUNT(*) AS n FROM palm6_mdt_warrants WHERE citizenid = ? AND status = 'active'",
+                { owner.citizenid })
+            wcount = row and tonumber(row.n) or 0
+        end)
+        lines[#lines + 1] = ('Active warrants on owner: %d'):format(wcount)
+    else
+        lines[#lines + 1] = 'No registered owner (NPC / unknown plate).'
+    end
+    TriggerClientEvent('palm6_mdt:nuiResult', src, {
+        kind = 'plate',
+        plate = plate,
+        lines = lines,
+    })
+end)
+
+RegisterNetEvent('palm6_mdt:nuiListWarrants', function()
+    local src = source
+    local cid = gate(src, 'warrants')
+    if not cid then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Denied or missing tablet.' })
+        return
+    end
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await([[
+SELECT id, citizen_name, reason, officer_name
+  FROM palm6_mdt_warrants
+ WHERE status = 'active'
+ ORDER BY created_at DESC
+ LIMIT 12
+        ]]) or {}
+    end)
+    local lines = {}
+    for _, r in ipairs(rows) do
+        lines[#lines + 1] = ('#%s %s — %s'):format(
+            tostring(r.id),
+            tostring(r.citizen_name or '?'),
+            tostring(r.reason or '')
+        )
+    end
+    if #lines == 0 then lines[1] = 'No active warrants.' end
+    TriggerClientEvent('palm6_mdt:nuiResult', src, {
+        kind = 'warrants',
+        lines = lines,
+    })
+end)
+
+RegisterNetEvent('palm6_mdt:nuiListBolos', function()
+    local src = source
+    local cid = gate(src, 'bolos')
+    if not cid then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Denied or missing tablet.' })
+        return
+    end
+    local rows = {}
+    pcall(function()
+        rows = MySQL.query.await([[
+SELECT id, body, officer_name
+  FROM palm6_mdt_bolos
+ WHERE resolved_at IS NULL AND expires_at > NOW()
+ ORDER BY created_at DESC
+ LIMIT 12
+        ]]) or {}
+    end)
+    local lines = {}
+    for _, r in ipairs(rows) do
+        lines[#lines + 1] = ('#%s — %s'):format(
+            tostring(r.id),
+            tostring(r.body or '')
+        )
+    end
+    if #lines == 0 then lines[1] = 'No active BOLOs.' end
+    TriggerClientEvent('palm6_mdt:nuiResult', src, {
+        kind = 'bolos',
+        lines = lines,
+    })
+end)
+
+RegisterNetEvent('palm6_mdt:nuiClearWarrant', function(warrantId)
+    local src = source
+    local cid = gate(src, 'warrantclear')
+    if not cid then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Denied or missing tablet.' })
+        return
+    end
+    warrantId = tonumber(warrantId)
+    if not warrantId then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Invalid warrant #.' })
+        return
+    end
+    local affected = 0
+    pcall(function()
+        affected = MySQL.update.await(
+            "UPDATE palm6_mdt_warrants SET status = 'dropped', resolved_at = NOW(), resolved_by = ? WHERE id = ? AND status = 'active'",
+            { cid, warrantId }) or 0
+    end)
+    if affected < 1 then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, {
+            kind = 'error',
+            message = ('Warrant #%s not found or already cleared.'):format(tostring(warrantId)),
+        })
+        return
+    end
+    TriggerClientEvent('palm6_mdt:nuiResult', src, {
+        kind = 'clear',
+        lines = { ('Warrant #%s cleared (dropped).'):format(tostring(warrantId)) },
+    })
+end)
+
+RegisterNetEvent('palm6_mdt:nuiClearBolo', function(boloId)
+    local src = source
+    local cid = gate(src, 'boloclear')
+    if not cid then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Denied or missing tablet.' })
+        return
+    end
+    boloId = tonumber(boloId)
+    if not boloId then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, { kind = 'error', message = 'Invalid BOLO #.' })
+        return
+    end
+    local affected = 0
+    pcall(function()
+        affected = MySQL.update.await(
+            'UPDATE palm6_mdt_bolos SET resolved_at = NOW(), resolved_by = ? WHERE id = ? AND resolved_at IS NULL',
+            { cid, boloId }) or 0
+    end)
+    if affected < 1 then
+        TriggerClientEvent('palm6_mdt:nuiResult', src, {
+            kind = 'error',
+            message = ('BOLO #%s not found or already cleared.'):format(tostring(boloId)),
+        })
+        return
+    end
+    TriggerClientEvent('palm6_mdt:nuiResult', src, {
+        kind = 'clear',
+        lines = { ('BOLO #%s cleared.'):format(tostring(boloId)) },
+    })
 end)
 
 -- ---------------------------------------------------------------------------

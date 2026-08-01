@@ -64,7 +64,9 @@ Edit in the repo (not secrets, but per-environment):
 
 Start the server. Verify:
 
-1. Dark palm6 loading screen appears on join.
+1. Dark palm6 loading screen appears on join (logo, Discord link, staff
+   panel; edit socials/staff/music in
+   `resources/[custom]/server_identity/html/config.js`).
 2. Console banner: `server_base started — version 0.1.0`.
 3. `/serverinfo` responds in chat.
 4. Welcome notification fires once the character finishes loading

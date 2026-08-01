@@ -24,7 +24,8 @@ These are the standing gaps between "shipped to prod" and "ready for outside pla
 
 ## §1 — New player's first 5 minutes (what a tester experiences)
 
-1. **Connect** → Palm6 branded loading screen (`server_identity`) with a live progress bar.
+1. **Connect** → Palm6 branded loading screen (`server_identity`) with logo,
+   Discord/socials, staff panel, and a live progress bar.
 2. **Character creation** (qbx multichar) — pick/create a character.
 3. **Mandatory rules dialog** (`palm6_onboarding`) — 5 house rules (RP-first, fear-for-life, NLR, no-exploiting, staff-final). Must accept to continue.
 4. **Starter grant** — **$1500 to bank** + a one-time **starter car** (blista, parked in a public garage) on first-ever join.

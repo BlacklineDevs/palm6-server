@@ -18,11 +18,10 @@ client_scripts {
 
 loadscreen 'html/loading.html'
 loadscreen_manual_shutdown 'no'
-loadscreen_cursor 'no'
+loadscreen_cursor 'yes'
 
 files {
-    'html/loading.html',
-    'html/palm6_screen.jpg',
+    'html/**',
 }
 
 dependencies {

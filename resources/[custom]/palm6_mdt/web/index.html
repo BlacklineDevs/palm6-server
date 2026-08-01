@@ -25,12 +25,13 @@
         display: none;
         position: absolute;
         inset: 6vh 8vw;
-        background: linear-gradient(180deg, #0e1624, var(--bg));
+        background: #0e1624;
         border: 1px solid var(--line);
         border-radius: 12px;
         overflow: hidden;
+        flex-direction: column;
       }
-      #root.open { display: flex; flex-direction: column; }
+      #root.open { display: flex; }
       header {
         display: flex;
         align-items: center;
@@ -46,35 +47,29 @@
         text-transform: uppercase;
         color: var(--gold);
       }
-      button {
+      button, input {
         background: transparent;
         border: 1px solid var(--line);
         color: var(--text);
         padding: 6px 12px;
         border-radius: 6px;
-        cursor: pointer;
       }
-      main { padding: 20px 22px; flex: 1; }
-      .note {
-        color: var(--steel);
-        font-size: 13px;
-        line-height: 1.5;
-        max-width: 52rem;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 18px;
-      }
-      .card {
-        background: var(--panel);
+      button { cursor: pointer; }
+      main { padding: 18px 22px; flex: 1; overflow: auto; }
+      .note { color: var(--steel); font-size: 13px; line-height: 1.5; }
+      .row { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+      #result {
+        margin-top: 16px;
+        padding: 12px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        padding: 12px;
+        background: var(--panel);
+        font-family: ui-monospace, monospace;
         font-size: 12px;
+        white-space: pre-wrap;
+        min-height: 4rem;
+        color: var(--steel);
       }
-      .card strong { display: block; color: var(--gold); margin-bottom: 6px; }
     </style>
   </head>
   <body>
@@ -84,21 +79,26 @@
         <button id="closeBtn" type="button">Close</button>
       </header>
       <main>
-        <p class="note" id="status">
-          Tablet scaffold online. Live lookups and writes still use chat MDT
-          commands (/warrant, /bolo, /runplate, /book, /charges). NUI actions
-          will attach to the same server authority next.
-        </p>
-        <div class="grid">
-          <div class="card"><strong>Warrants / BOLOs</strong>Use /warrant and /bolo</div>
-          <div class="card"><strong>Citizens / plates</strong>Use /id and /runplate</div>
-          <div class="card"><strong>Charges</strong>Use /charges (catalogue enabled)</div>
+        <p class="note" id="status">Loading…</p>
+        <div class="row">
+          <input id="plate" type="text" maxlength="12" placeholder="Plate" />
+          <button id="plateBtn" type="button">Run plate</button>
+          <button id="warrantsBtn" type="button">Active warrants</button>
+          <button id="bolosBtn" type="button">Active BOLOs</button>
         </div>
+        <div class="row">
+          <input id="warrantId" type="text" maxlength="8" placeholder="Warrant #" />
+          <button id="clearWarrantBtn" type="button">Clear warrant</button>
+          <input id="boloId" type="text" maxlength="8" placeholder="BOLO #" />
+          <button id="clearBoloBtn" type="button">Clear BOLO</button>
+        </div>
+        <pre id="result">Results appear here.</pre>
       </main>
     </div>
     <script>
       const root = document.getElementById("root");
       const status = document.getElementById("status");
+      const result = document.getElementById("result");
       const resource = (typeof GetParentResourceName === "function")
         ? GetParentResourceName()
         : "palm6_mdt";
@@ -120,13 +120,44 @@
           });
         }
         if (data.action === "close") root.classList.remove("open");
+        if (data.action === "result" && data.payload) {
+          const p = data.payload;
+          if (p.kind === "error") {
+            result.textContent = p.message || "Error";
+            return;
+          }
+          const lines = p.lines || [];
+          result.textContent = (p.plate ? `Plate ${p.plate}\n` : "") + lines.join("\n");
+        }
       });
 
       document.getElementById("closeBtn").addEventListener("click", () => {
         post("close");
         root.classList.remove("open");
       });
-
+      document.getElementById("plateBtn").addEventListener("click", () => {
+        const plate = document.getElementById("plate").value;
+        result.textContent = "Looking up…";
+        post("lookupPlate", { plate });
+      });
+      document.getElementById("warrantsBtn").addEventListener("click", () => {
+        result.textContent = "Loading warrants…";
+        post("lookupWarrants");
+      });
+      document.getElementById("bolosBtn").addEventListener("click", () => {
+        result.textContent = "Loading BOLOs…";
+        post("lookupBolos");
+      });
+      document.getElementById("clearWarrantBtn").addEventListener("click", () => {
+        const id = document.getElementById("warrantId").value;
+        result.textContent = "Clearing warrant…";
+        post("clearWarrant", { id });
+      });
+      document.getElementById("clearBoloBtn").addEventListener("click", () => {
+        const id = document.getElementById("boloId").value;
+        result.textContent = "Clearing BOLO…";
+        post("clearBolo", { id });
+      });
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
           post("close");

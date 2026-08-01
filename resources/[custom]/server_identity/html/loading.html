@@ -6,7 +6,8 @@
 <title>Palm6</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; width: 100%; overflow: hidden; background: #05080F; }
+  html, body { height: 100%; width: 100%; overflow: hidden; background: #05080F; color: #F5EDE3;
+    font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; }
 
   /* A 16:9 stage that always covers the viewport and stays centered, so the art
      and the progress bar live in the SAME coordinate space on any screen aspect.
@@ -16,6 +17,30 @@
     width: max(100vw, calc(100vh * 16 / 9));
     height: max(100vh, calc(100vw * 9 / 16));
     background: url("palm6_screen.jpg") center center / cover no-repeat;
+  }
+
+  .ui {
+    position: absolute; inset: 0;
+    pointer-events: none;
+  }
+  .ui a, .ui button, .ui input { pointer-events: auto; cursor: pointer; }
+
+  .logo-wrap {
+    position: absolute; left: 50%; top: 7.5%;
+    transform: translateX(-50%);
+    text-align: center;
+  }
+  .logo-wrap img {
+    display: block; width: clamp(72px, 8vw, 120px); height: auto;
+    margin: 0 auto 0.55rem;
+    filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45));
+  }
+  .logo-wrap .name {
+    font-size: clamp(0.7rem, 1.1vw, 0.95rem);
+    letter-spacing: 0.42em;
+    text-transform: uppercase;
+    color: rgba(245, 237, 227, 0.88);
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
   }
 
   /* live progress bar, seated inside the art's reserved box */
@@ -35,7 +60,6 @@
     width: 0%;
     transition: width 0.35s ease;
   }
-  /* indeterminate fallback: a segment sweeps while no real progress is reported */
   .pfill.indet {
     width: 34%; transition: none;
     animation: sweep 1.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
@@ -45,6 +69,122 @@
     100% { left: 102%; }
   }
 
+  .socials {
+    position: absolute; left: 4%; bottom: 5.5%;
+    display: flex; gap: 0.65rem; align-items: center;
+  }
+  .socials a {
+    width: 40px; height: 40px;
+    display: grid; place-items: center;
+    color: rgba(245, 237, 227, 0.9);
+    background: rgba(5, 8, 15, 0.42);
+    border: 1px solid rgba(255, 210, 150, 0.14);
+    border-radius: 10px;
+    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  }
+  .socials a:hover, .socials a:focus-visible {
+    color: #FFB067;
+    border-color: rgba(255, 176, 103, 0.55);
+    background: rgba(5, 8, 15, 0.65);
+    outline: none;
+  }
+  .socials svg { width: 18px; height: 18px; fill: currentColor; }
+
+  .staff {
+    position: absolute; right: 3.5%; top: 18%;
+    width: min(240px, 22vw);
+  }
+  .staff-toggle {
+    display: inline-flex; align-items: center; gap: 0.45rem;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
+    color: rgba(245, 237, 227, 0.9);
+    background: rgba(5, 8, 15, 0.48);
+    border: 1px solid rgba(255, 210, 150, 0.16);
+    border-radius: 8px;
+  }
+  .staff-toggle:hover, .staff-toggle:focus-visible {
+    border-color: rgba(255, 176, 103, 0.5);
+    outline: none;
+  }
+  .staff-panel {
+    margin-top: 0.65rem;
+    padding: 0.85rem 0.9rem;
+    background: rgba(5, 8, 15, 0.58);
+    border: 1px solid rgba(255, 210, 150, 0.12);
+    border-radius: 12px;
+    backdrop-filter: blur(6px);
+  }
+  .staff-panel[hidden] { display: none; }
+  .staff-panel h2 {
+    font-size: 0.68rem; letter-spacing: 0.22em; text-transform: uppercase;
+    color: rgba(255, 176, 103, 0.9);
+    margin-bottom: 0.7rem;
+  }
+  .staff-row {
+    display: flex; align-items: center; gap: 0.65rem;
+    padding: 0.4rem 0;
+  }
+  .staff-row + .staff-row { border-top: 1px solid rgba(255, 210, 150, 0.08); }
+  .avatar {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: linear-gradient(135deg, #FF8A3D, #FF5E7E);
+    display: grid; place-items: center;
+    font-size: 0.72rem; font-weight: 600; color: #120a08;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .staff-meta { min-width: 0; }
+  .staff-meta .n {
+    font-size: 0.86rem; font-weight: 600; color: #F5EDE3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .staff-meta .r {
+    font-size: 0.7rem; color: rgba(245, 237, 227, 0.62);
+    letter-spacing: 0.04em;
+  }
+
+  .music {
+    position: absolute; right: 3.5%; bottom: 5.5%;
+    display: flex; align-items: center; gap: 0.7rem;
+    min-width: 200px; max-width: 280px;
+    padding: 0.55rem 0.75rem;
+    background: rgba(5, 8, 15, 0.52);
+    border: 1px solid rgba(255, 210, 150, 0.14);
+    border-radius: 12px;
+  }
+  .music[hidden] { display: none; }
+  .music-btn {
+    width: 34px; height: 34px; flex-shrink: 0;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 210, 150, 0.22);
+    background: rgba(255, 138, 61, 0.18);
+    color: #FFB067;
+  }
+  .music-btn:hover, .music-btn:focus-visible {
+    background: rgba(255, 138, 61, 0.32);
+    outline: none;
+  }
+  .music-btn svg { width: 14px; height: 14px; fill: currentColor; }
+  .music-meta { flex: 1; min-width: 0; }
+  .music-meta .t {
+    font-size: 0.78rem; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .music-meta .hint {
+    font-size: 0.65rem; color: rgba(245, 237, 227, 0.55);
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .vol {
+    width: 72px; accent-color: #FF8A3D;
+  }
+
+  @media (max-width: 900px) {
+    .staff { width: min(200px, 36vw); top: 14%; }
+    .socials a { width: 34px; height: 34px; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .pfill.indet { animation-duration: 3s; }
   }
@@ -52,29 +192,185 @@
 </head>
 <body>
   <div class="stage">
-    <div class="pbar"><div class="pfill indet" id="pfill"></div></div>
+    <div class="ui">
+      <div class="logo-wrap">
+        <img id="logo" src="assets/logo.svg" alt="Palm6" />
+        <div class="name" id="serverName">Palm6</div>
+      </div>
+
+      <div class="pbar"><div class="pfill indet" id="pfill"></div></div>
+
+      <nav class="socials" id="socials" aria-label="Social links"></nav>
+
+      <aside class="staff" id="staffRoot" hidden>
+        <button type="button" class="staff-toggle" id="staffToggle" aria-expanded="true" aria-controls="staffPanel">
+          Staff team
+        </button>
+        <div class="staff-panel" id="staffPanel">
+          <h2>Staff team</h2>
+          <div id="staffList"></div>
+        </div>
+      </aside>
+
+      <div class="music" id="music" hidden>
+        <button type="button" class="music-btn" id="musicToggle" aria-label="Play or mute music">
+          <svg id="iconPlay" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          <svg id="iconPause" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+        </button>
+        <div class="music-meta">
+          <div class="t" id="musicTitle">Palm6 Bay</div>
+          <div class="hint" id="musicHint">Music</div>
+        </div>
+        <input class="vol" id="musicVol" type="range" min="0" max="1" step="0.01" value="0.35" aria-label="Volume" />
+        <audio id="audio" preload="auto" loop></audio>
+      </div>
+    </div>
   </div>
 
+  <script src="config.js"></script>
   <script>
-    // Show real FiveM load progress when the game reports it; otherwise keep the
-    // indeterminate sweep so the bar always looks alive.
-    var fill = document.getElementById("pfill");
-    function setProgress(frac) {
-      frac = Math.max(0, Math.min(1, frac));
-      fill.classList.remove("indet");
-      fill.style.left = "0%";
-      fill.style.width = (frac * 100).toFixed(1) + "%";
-    }
-    window.addEventListener("message", function (e) {
-      var d = e.data || {};
-      // FiveM loading-screen NUI events
-      if (d.eventName === "loadProgress" && typeof d.loadFraction === "number") {
-        setProgress(d.loadFraction);
-      } else if (d.eventName === "startInitFunctionOrder" || d.eventName === "onLogLine") {
-        // activity without a fraction: nudge the bar so it never looks stuck
-        if (fill.classList.contains("indet")) return;
+    (function () {
+      var cfg = window.Palm6Loading || {};
+      var fill = document.getElementById("pfill");
+
+      function setProgress(frac) {
+        frac = Math.max(0, Math.min(1, frac));
+        fill.classList.remove("indet");
+        fill.style.left = "0%";
+        fill.style.width = (frac * 100).toFixed(1) + "%";
       }
-    });
+
+      window.addEventListener("message", function (e) {
+        var d = e.data || {};
+        if (d.eventName === "loadProgress" && typeof d.loadFraction === "number") {
+          setProgress(d.loadFraction);
+        } else if (d.eventName === "startInitFunctionOrder" || d.eventName === "onLogLine") {
+          if (fill.classList.contains("indet")) return;
+        }
+      });
+
+      var icons = {
+        discord: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.317 4.37a19.8 19.8 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>',
+        youtube: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.5 31.5 0 0 0 0 12a31.5 31.5 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.5 31.5 0 0 0 24 12a31.5 31.5 0 0 0-.5-5.8zM9.75 15.02V8.98L15.5 12l-5.75 3.02z"/></svg>',
+        tiktok: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.16 15.3 6.34 6.34 0 0 0 9.5 21.64a6.34 6.34 0 0 0 6.34-6.34V8.9a8.2 8.2 0 0 0 4.78 1.52V6.98a4.85 4.85 0 0 1-.93-.2.1.1 0 0 1-.1-.09z"/></svg>',
+        facebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.1 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12z"/></svg>',
+        x: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.24 2H21l-6.52 7.45L22 22h-6.17l-4.83-6.31L5.5 22H2.74l6.97-7.97L2 2h6.32l4.36 5.8L18.24 2zm-1.08 18.1h1.71L7 3.8H5.16l12 16.3z"/></svg>',
+        github: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12.4c0 5.26 3.4 9.72 8.12 11.3.6.12.82-.26.82-.58v-2.02c-3.3.72-4-1.6-4-1.6-.54-1.4-1.32-1.77-1.32-1.77-1.08-.74.08-.73.08-.73 1.2.09 1.83 1.24 1.83 1.24 1.06 1.84 2.78 1.31 3.46 1 .1-.79.41-1.31.75-1.61-2.64-.3-5.42-1.34-5.42-5.97 0-1.32.46-2.4 1.22-3.24-.12-.3-.53-1.52.12-3.17 0 0 1-.32 3.3 1.23a11.3 11.3 0 0 1 6 0c2.28-1.55 3.28-1.23 3.28-1.23.66 1.65.25 2.87.12 3.17.76.84 1.22 1.92 1.22 3.24 0 4.64-2.79 5.66-5.45 5.96.42.37.8 1.1.8 2.22v3.29c0 .32.21.7.82.58A11.5 11.5 0 0 0 23.5 12.4 11.5 11.5 0 0 0 12 .5z"/></svg>'
+      };
+
+      function openUrl(url) {
+        if (!url) return;
+        try {
+          if (typeof window.invokeNative === "function") {
+            window.invokeNative("openUrl", url);
+            return;
+          }
+        } catch (err) {}
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+
+      var logo = document.getElementById("logo");
+      if (cfg.logo) logo.src = cfg.logo;
+      document.getElementById("serverName").textContent = cfg.serverName || "Palm6";
+      document.title = cfg.serverName || "Palm6";
+
+      var socialRoot = document.getElementById("socials");
+      (cfg.socials || []).forEach(function (s) {
+        if (!s || !s.enabled || !s.url) return;
+        var a = document.createElement("a");
+        a.href = s.url;
+        a.title = s.label || s.id;
+        a.setAttribute("aria-label", s.label || s.id);
+        a.innerHTML = icons[s.id] || icons.discord;
+        a.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          openUrl(s.url);
+        });
+        socialRoot.appendChild(a);
+      });
+
+      var staff = (cfg.staff || []).filter(function (m) { return m && m.name; });
+      var staffRoot = document.getElementById("staffRoot");
+      var staffList = document.getElementById("staffList");
+      var staffPanel = document.getElementById("staffPanel");
+      var staffToggle = document.getElementById("staffToggle");
+      if (staff.length) {
+        staffRoot.hidden = false;
+        staff.forEach(function (m) {
+          var row = document.createElement("div");
+          row.className = "staff-row";
+          var av = document.createElement("div");
+          av.className = "avatar";
+          if (m.avatar) {
+            var img = document.createElement("img");
+            img.src = m.avatar;
+            img.alt = "";
+            av.appendChild(img);
+          } else {
+            av.textContent = String(m.name).charAt(0).toUpperCase();
+          }
+          var meta = document.createElement("div");
+          meta.className = "staff-meta";
+          meta.innerHTML = '<div class="n"></div><div class="r"></div>';
+          meta.querySelector(".n").textContent = m.name;
+          meta.querySelector(".r").textContent = m.role || "";
+          row.appendChild(av);
+          row.appendChild(meta);
+          staffList.appendChild(row);
+        });
+        staffToggle.addEventListener("click", function () {
+          var open = staffPanel.hasAttribute("hidden");
+          if (open) staffPanel.removeAttribute("hidden");
+          else staffPanel.setAttribute("hidden", "");
+          staffToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+      }
+
+      var musicCfg = cfg.music || {};
+      var musicEl = document.getElementById("music");
+      var audio = document.getElementById("audio");
+      var musicToggle = document.getElementById("musicToggle");
+      var iconPlay = document.getElementById("iconPlay");
+      var iconPause = document.getElementById("iconPause");
+      var musicVol = document.getElementById("musicVol");
+      var playing = false;
+
+      function setPlayingUi(on) {
+        playing = on;
+        iconPlay.hidden = on;
+        iconPause.hidden = !on;
+        document.getElementById("musicHint").textContent = on ? "Playing" : "Paused";
+      }
+
+      if (musicCfg.enabled && musicCfg.file) {
+        musicEl.hidden = false;
+        document.getElementById("musicTitle").textContent = musicCfg.title || "Palm6";
+        audio.src = musicCfg.file;
+        var vol = typeof musicCfg.volume === "number" ? musicCfg.volume : 0.35;
+        audio.volume = Math.max(0, Math.min(1, vol));
+        musicVol.value = String(audio.volume);
+
+        function tryPlay() {
+          var p = audio.play();
+          if (p && typeof p.then === "function") {
+            p.then(function () { setPlayingUi(true); }).catch(function () {
+              setPlayingUi(false);
+            });
+          } else {
+            setPlayingUi(!audio.paused);
+          }
+        }
+
+        tryPlay();
+        musicToggle.addEventListener("click", function () {
+          if (audio.paused) tryPlay();
+          else { audio.pause(); setPlayingUi(false); }
+        });
+        musicVol.addEventListener("input", function () {
+          audio.volume = Number(musicVol.value);
+        });
+      }
+    })();
   </script>
 </body>
 </html>

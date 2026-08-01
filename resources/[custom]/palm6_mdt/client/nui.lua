@@ -1,17 +1,11 @@
 -- ============================================================================
--- palm6_mdt/client/nui.lua — minimal tablet NUI scaffold (Cylex-parity W4)
---
--- Opens a local HTML shell when the officer has mdt_tablet and is on duty.
--- Does NOT replace chat commands yet — lookups still run server-side via
--- existing commands. This lands the in-game surface so Fieldline/live-map
--- can grow into it without another architecture rewrite.
+-- palm6_mdt/client/nui.lua — tablet NUI (Cylex-parity W4+)
+-- Opens with F5 / mdt_tablet. Lookups + warrant/bolo clear.
 -- ============================================================================
 
 local nuiOpen = false
 
 local function hasTablet()
-    -- Prefer ox_inventory if present; fail-open to true when item check fails
-    -- so local/dev without inventory still exercises the NUI shell.
     local ok, count = pcall(function()
         return exports.ox_inventory:Search('count', Config.TabletItem) or 0
     end)
@@ -50,8 +44,52 @@ RegisterNUICallback('ready', function(_, cb)
     cb({
         ok = true,
         resource = GetCurrentResourceName(),
-        note = 'Scaffold — use chat MDT commands for live writes until NUI actions wire up.',
+        note = 'Tablet online — plate/warrant/bolo lookup + clear. Chat /warrant /bolo still work.',
     })
+end)
+
+RegisterNUICallback('lookupPlate', function(data, cb)
+    local plate = tostring(data and data.plate or ''):upper():gsub('%s+', '')
+    if plate == '' then
+        cb({ ok = false, error = 'Enter a plate' })
+        return
+    end
+    TriggerServerEvent('palm6_mdt:nuiLookupPlate', plate)
+    cb({ ok = true, pending = true })
+end)
+
+RegisterNUICallback('lookupWarrants', function(_, cb)
+    TriggerServerEvent('palm6_mdt:nuiListWarrants')
+    cb({ ok = true, pending = true })
+end)
+
+RegisterNUICallback('lookupBolos', function(_, cb)
+    TriggerServerEvent('palm6_mdt:nuiListBolos')
+    cb({ ok = true, pending = true })
+end)
+
+RegisterNUICallback('clearWarrant', function(data, cb)
+    local id = tonumber(data and data.id)
+    if not id then
+        cb({ ok = false, error = 'Warrant # required' })
+        return
+    end
+    TriggerServerEvent('palm6_mdt:nuiClearWarrant', id)
+    cb({ ok = true, pending = true })
+end)
+
+RegisterNUICallback('clearBolo', function(data, cb)
+    local id = tonumber(data and data.id)
+    if not id then
+        cb({ ok = false, error = 'BOLO # required' })
+        return
+    end
+    TriggerServerEvent('palm6_mdt:nuiClearBolo', id)
+    cb({ ok = true, pending = true })
+end)
+
+RegisterNetEvent('palm6_mdt:nuiResult', function(payload)
+    SendNUIMessage({ action = 'result', payload = payload })
 end)
 
 AddEventHandler('onResourceStop', function(res)

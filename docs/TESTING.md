@@ -67,6 +67,12 @@ tester:
 ## 2. Identity & spawn — `server_identity` + `server_base`
 
 - [ ] Dark loading screen appears on join (owned by `server_identity`).
+- [ ] Loading screen shows the Palm6 logo + server name overlay.
+- [ ] Discord social icon opens the invite; other socials stay hidden until
+      enabled in `server_identity/html/config.js`.
+- [ ] Staff team panel lists names/roles from `config.js` and can toggle.
+- [ ] Music player stays hidden while `music.enabled` is false; when enabled,
+      mute/volume controls work without console errors.
 - [ ] Multichar UI shows **2** character slots (`qbx:multichar_slots`).
 - [ ] New character spawns at **Legion Square**
       `vector4(195.17, -933.77, 30.69, 144.0)` after selection (a brief fade

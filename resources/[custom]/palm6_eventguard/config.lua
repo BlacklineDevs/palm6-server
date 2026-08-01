@@ -467,4 +467,14 @@ Config.Events = {
     -- boot naming this exact entry while it is absent, so a missing budget is
     -- visible rather than silent.
     ['palm6_insignia:requestRoster']      = { calls = 10, window_seconds = 60 },
+
+    -- palm6_uniform's walk-up wardrobe. wardrobeRequest is a client-load pull
+    -- (ask where the wardrobe is); menuAction is every click inside the menu,
+    -- so it needs the higher ceiling: opening the wardrobe, picking a rank and
+    -- picking a variant is three actions in a few seconds, and an officer
+    -- changing for a shift may do that several times. The resource carries its
+    -- own per-source limiter too, and its README documented these two entries
+    -- before they existed, which is why they are here now.
+    ['palm6_uniform:wardrobeRequest']     = { calls = 10, window_seconds = 60 },
+    ['palm6_uniform:menuAction']          = { calls = 40, window_seconds = 60 },
 }

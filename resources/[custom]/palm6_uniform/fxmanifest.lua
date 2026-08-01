@@ -4,7 +4,7 @@ lua54 'yes'
 
 author 'Palm6'
 version '0.1.0'
-description 'palm6_uniform - rank and season driven police uniforms. Captures the outfit an admin is actually wearing in game and reapplies it on duty, on promotion and on a season/weather change. Capture-and-reapply only: no streamed assets, no base-game replacement.'
+description 'palm6_uniform - rank and season driven police uniforms, worn from a walk-up wardrobe menu at the police station. Captures the outfit an admin is actually wearing in game and reapplies it on duty, on promotion and on a season/weather change. Capture-and-reapply only: no streamed assets, no base-game replacement.'
 
 -- ============================================================================
 -- THIS RESOURCE STREAMS NOTHING AND REPLACES NOTHING.
@@ -33,8 +33,9 @@ shared_scripts {
 }
 
 client_scripts {
-    'bridge/cl_game.lua',   -- game natives + illenium soft calls isolated here
-    'client/main.lua',
+    'bridge/cl_game.lua',   -- game natives + illenium/ox_target/ox_lib soft calls
+    'client/main.lua',      -- capture, apply, restore: the engine
+    'client/wardrobe.lua',  -- the walk-up menu at the station: the interface
 }
 
 server_scripts {

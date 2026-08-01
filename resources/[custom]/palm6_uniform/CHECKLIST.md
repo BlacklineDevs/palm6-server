@@ -1,324 +1,288 @@
-# palm6_uniform - in-game verification
+# palm6_uniform - the walk-up test
 
-**For David. Ten minutes, one life. Nothing here can take the server down.**
+**For David. Ten minutes, one life, and no typing.**
 
-Every step below is either a chat command typed by you in game, or reading a
-line in the server console. Nothing here writes an asset, streams anything,
-touches a base-game file, or restarts a resource. Two things are called out
-explicitly because they are the ways this could go wrong:
+You walk to the police station wardrobe, a menu opens, you click a uniform, your
+clothes change. That is the whole feature. Everything below is that, plus what
+each thing on screen means when it does not happen.
+
+Two things are called out because they are the ways this could go wrong:
 
 - **Do not `ensure palm6_threads`.** That is the resource that took the box down
-  on 2026-07-29. It is force-stopped at `custom.cfg:334` and nothing in this
-  procedure needs it. It is not related to palm6_uniform in any way except as
-  the cautionary tale palm6_uniform was written against.
+  on 2026-07-29. It is force-stopped at `custom.cfg:334` and nothing here needs
+  it. It is unrelated to palm6_uniform except as the cautionary tale it was
+  written against.
 - **Do not `restart palm6_uniform` in the middle of this.** A restart wipes the
   client-side memory of what you were wearing before, and you would be left in
-  whatever outfit you had on with `/uniformoff` answering *"No civilian outfit
-  was recorded this session"*. That is why the season test below uses
-  `/uniformseason` instead of editing the config. If you do restart by accident,
-  the way out is a relog, not a command.
+  whatever outfit you had on with the restore answering *"No civilian outfit was
+  recorded this session"*. If you do restart by accident, the way out is a
+  relog, not a command.
 
-**Get out of anything at any time:** `/uniformoff`. If that says it has nothing
-to restore, relog: this resource never writes your saved appearance, so your
-character comes back in their own clothes.
+**Get out of anything at any time:** open the wardrobe and pick **Back to my own
+clothes**, or type `/uniformoff`. If it says it has nothing to restore, relog:
+this resource never writes your saved appearance, so your character comes back
+in their own clothes.
 
 ---
 
-## Step 0 (console) - is it even running?
+## Step 0 (console, ten seconds) - is it running, and where did it put the wardrobe?
 
-**Read the server console** for this line, printed once at boot:
+**Read the server console** for these two lines, printed once at boot:
 
 ```
 [palm6_uniform] ready - schema ok | 0 set(s) loaded | season summer | weather bucket any (no weather resource) | job police
+[palm6_uniform] wardrobe at 442.32, -988.43, 30.69 (radius 1.8) - source: qbx_police_overrides:GetDutyToggle() ("Mission Row PD - Duty")
 ```
 
 - **`schema ok`** - the `palm6_uniform_sets` table exists. If it says `MISSING`,
-  stop; there will be a red `schema init FAILED` line just above it with the
-  reason, and no capture can be stored until that is fixed.
-- **`season summer`** - correct for July. The season comes from the real-world
-  date on the server, not from the game. There is no season in GTA V.
+  stop; there is a red `schema init FAILED` line just above it with the reason.
+- **`source: qbx_police_overrides:GetDutyToggle()`** - the wardrobe position was
+  **read** from the resource that owns the police station's location, not typed
+  in by anybody. If instead it says
+  `source: Config.Wardrobe.FallbackCoords, because ...`, the reason is on the
+  same line and the position is still the same coordinate; that is a degrade,
+  not a fault.
 - **`weather bucket any (no weather resource)`** - expected. Neither
   `qbx_weathersync` nor `qb-weathersync` is in this repo, so every officer
-  resolves to the `any` bucket. This is a documented degrade, not a fault.
+  resolves to the `any` bucket.
 
-**If there is NO `[palm6_uniform]` line at all**, the resource is not running,
-and every step below will answer `Unknown command`. The fix is two lines in
-`custom.cfg` (see "If it is not running" at the bottom). Do not go any further
-until this line is on screen: a resource that never started looks exactly like a
-resource that is broken, and you would spend the whole session on the wrong
-question.
+**If there is no `[palm6_uniform]` line at all**, the resource is not running
+and there will be no wardrobe at the station. The fix is two lines in
+`custom.cfg` (see the bottom of this file). Do not go further: a resource that
+never started looks exactly like a resource that is broken.
 
-**Also look for a red ACE line.** If you see:
-
-```
-[palm6_uniform] ACE MISSING: group.admin cannot run the admin commands
-[palm6_uniform]   add this line to custom.cfg:  add_ace group.admin command.uniformcapture allow
-```
-
-then unless you are connected as `group.owner`, steps 2 onward will answer *"You
-do not have permission to do that."* Add that line before you load in.
+**Also look for a red ACE line.** If you see
+`ACE MISSING: group.admin cannot run the admin commands`, then unless you are
+connected as `group.owner` the admin options will not appear in the wardrobe
+menu and the menu will say so.
 
 ---
 
-## Before step 1
+## Before you walk over
 
 You need the **police** job. `/setjob` is granted to `group.admin` at
 `custom.cfg:383`; its argument order belongs to `qbx_core`, not to this repo, so
 type `/setjob` on its own first and read its usage rather than guessing.
 
-You do **not** need to be on duty. `/uniform` is the officer's own explicit
-request and does not check duty. Every automatic path does.
+You do **not** need to be on duty. Picking a uniform from the wardrobe is your
+own explicit request and does not check duty. Every automatic path does.
 
-Pick a **male** character for this run. The female capture is a separate pass and
-is not part of the ten minutes.
-
----
-
-## Step 1 - `/uniformstatus`
-
-**Type:** `/uniformstatus`
-
-**Expect** six blue `Uniform` lines in chat:
-
-```
-enabled=true  schema=ok  sets=0
-season=summer (Config.SeasonByMonth, real date, server-side)
-weather bucket=any (from no weather resource)
-admin ACE "command.uniformcapture": you=true, group.admin=true
-season is a CONFIG SCHEDULE: GTA V and FiveM have no built-in season, ...
-client: illenium-appearance absent | ped model mp_m_freemode_01 | in uniform: false | clothes changed by us: false | civilian snapshot: held
-```
-
-**What each failure means:**
-
-| what you see | what it means |
-|---|---|
-| `Unknown command` | the resource is not running. Go back to step 0. |
-| `You do not have permission to do that.` (plus a line naming the ACE) | the `add_ace` line is missing from custom.cfg. The message tells you the exact line. |
-| `you=false` on the ACE line | same thing, seen from the other side. |
-| `ped model nil` | your character is not one of the two freemode models. Nothing in this resource will work on it, by design, and it will say so rather than guess. |
-| `civilian snapshot: none` | the client did not manage to photograph you at spawn. Relog; if it persists, the client half is not loading. |
-| no reply at all | this cannot happen any more. Every command in this resource answers, including every refusal. Silence means the resource is not running. |
+Pick a **male** character for this run. The female capture is a separate pass.
 
 ---
 
-## Step 2 - `/uniformshow`
+## Step 1 - walk to the station wardrobe
 
-**Type:** `/uniformshow`
+**Where:** the police station duty point, Mission Row. Same spot the duty toggle
+is at.
 
-**Expect** `Reading what you are wearing...`, then about twenty lines:
-
-```
-Worn right now on mp_m_freemode_01:
-  component 0   drawable 0     texture 0
-  component 1   drawable 0     texture 0
-  ... twelve component lines and five prop lines ...
-  7 of 12 component slots are non-zero.
-Nothing was stored. Use /uniformcapture to store it.
-```
-
-**Pass:** you get twelve component lines and five prop lines, and the count line
-says something above zero.
-
-**Fail, and what it means:**
-
-- **`0 of 12 component slots are non-zero`** - the resource prints an extra line
-  telling you this is almost always a ped that has not finished streaming. Walk
-  twenty metres, wait five seconds, run it again. Do **not** capture a reading of
-  all zeros; you would store "wearing nothing" as a uniform.
-- **`Too fast: /uniformshow is rate limited...`** - you ran it twice inside a
-  second. Wait and repeat. This is the resource refusing out loud, which is the
-  point: it never drops a command in silence.
-
----
-
-## Step 3 - `/uniformscramble`  ← **the first visible thing**
-
-**Type:** `/uniformscramble`
-
-**Expect, on screen:** your character's clothes visibly change. Shirt, trousers,
-shoes, possibly a hat or glasses. **Your face and your hair do not change.**
-
-**Expect, in chat:** `Randomising your clothes. Face and hair are left alone.`
-followed by `clothes randomised. /uniform to put the captured uniform on,
-/uniformoff to go back to what you were wearing before this.`
-
-**Why this step exists:** you need two different outfits to see a uniform swap.
-Without it the natural first test is "capture what I am wearing, then put it
-on", which correctly writes the same numbers back and changes nothing on screen,
-and the whole resource reads as a no-op. This command gets you the second outfit
-without a clothing store. It picks from the variations the engine reports as
-valid for your ped, so no clothing id is authored anywhere.
+**What you should see:** an `ox_target` eye when you look at it, labelled
+**Station Wardrobe**. If `ox_target` is not running on the box you instead get
+an on-screen prompt, `Press E Station Wardrobe`, when you are within about two
+metres. Both are correct; the menu footer tells you which one you got.
 
 **Fail:**
 
-- **clothes did not change** - run it once more. The randomiser can land close to
-  what you had on. If two runs in a row change nothing, the client half is not
-  applying writes and step 6 will fail the same way.
-- **your face or hair changed** - that is a bug; report it. Those two slots are
-  read off your ped before the randomise and written straight back.
+- **nothing there at all** - go back to step 0 and read the wardrobe line. If it
+  says the position could not be resolved, the console names which source
+  failed.
+- **it is in the wrong place** - that is fixable from in game and it does not
+  need a coordinate. Do steps 2 and 3 first, then see "If the wardrobe is in the
+  wrong spot" at the bottom.
 
 ---
 
-## Step 4 - `/uniformcapture 0 any any Patrol`
+## Step 2 - open it. This is the screen that matters.
 
-You are now standing in the random outfit from step 3. Capture **that**, so the
-uniform is provably different from your own clothes.
-
-**Type:** `/uniformcapture 0 any any Patrol`
-
-**Expect:** `Photographing what you are wearing...` then
+**Interact.** A menu opens. With nothing captured yet it says, in the menu:
 
 ```
-Captured 12 components and 5 props for police grade 0 and up, mp_m_freemode_01, season any, weather any, labelled "Patrol".
-Run /uniform to put it on, and remember to capture the same set on the other body.
+Season: summer. Weather: any.
+No uniforms have been captured yet.
+    This wardrobe is working. It is empty. A uniform here is a photograph of an
+    outfit somebody actually wore in game, so until somebody captures the first
+    one there is genuinely nothing to put on.
+To create the first one, right here, with no typing:
+    1. dress this character however the rank should look. 2. come back here and
+    pick "Save what I am wearing as a uniform". 3. pick the rank. 4. pick the
+    conditions.
+Save what I am wearing as a uniform
+Randomise my clothes (test tool)
+Read out what I am wearing
+Move this wardrobe to where I am standing
 ```
 
-`0` is a **floor**, not an exact grade: this one set now dresses every grade from
-0 upwards until a higher capture overrides it.
+**Pass:** the menu is not blank. That is the point of this step. An empty
+wardrobe and a broken wardrobe used to look identical, and now they do not.
 
 **Fail:**
 
-- **`You must be on the police job to capture a police uniform.`** - exactly what
-  it says. Fix the job and repeat.
+- **`The server did not answer.`** - a real fault, and it is saying so rather
+  than showing you an empty list. Check the server console for `palm6_uniform`
+  lines.
+- **`You are not a police officer.`** - exactly what it says; the row names the
+  job it wants and the job you have. Fix the job and reopen.
+- **`Your character is not a standard freemode ped.`** - captured clothing
+  indices only mean anything on the two freemode bodies.
+- **the admin rows are missing** - you do not hold the admin ACE. The ACE is
+  named in the console line from step 0.
+
+---
+
+## Step 3 - create the first uniform, with four clicks and no typing
+
+1. Dress the character however a cadet should look, in whatever clothing menu
+   the box runs. Stand still and let it finish streaming.
+2. Open the wardrobe. Pick **Read out what I am wearing**. Twelve component
+   lines and five prop lines print to chat, and a count line. **Nothing is
+   stored.** If the count says `0 of 12 component slots are non-zero`, your ped
+   had not finished streaming: walk twenty metres, wait five seconds and read it
+   again. Capturing a wall of zeros stores "wearing nothing" as a uniform.
+3. Open the wardrobe. Pick **Save what I am wearing as a uniform**.
+4. Pick the rank. The list is the real police rank roster, read out of
+   `qbx_police_overrides`: Cadet, Officer, Sergeant, Lieutenant, Chief. Pick
+   **Cadet**.
+5. Pick **Start here: All year round, any weather**.
+
+**Expect a notify:** `Photographing what you are wearing, to be saved as
+"Cadet".` then `Saved "Cadet" as a uniform. Open the wardrobe again to put it
+on.` and the same in chat with the slot counts.
+
+The rank you picked is a **floor**: that one set now dresses Cadet and every
+rank above it. You have just dressed the whole department in four clicks.
+
+**Fail:**
+
+- **`You must be on the "police" job to save a police uniform.`** - fix the job.
 - **`Capture rejected: capture is incomplete: component slot N is missing`** -
   the snapshot did not cover all twelve slots. Report it; the raw path always
   returns twelve.
-- **`That capture timed out. Run the command again.`** - the reply took longer
-  than 30 seconds to come back. Repeat.
-- **nothing stored and no message** - cannot happen; the reply path answers on
-  every branch including the rate limit.
+- **`Saving a uniform needs the "command.uniformcapture" permission`** - the
+  message names the exact `custom.cfg` line to add.
 
 ---
 
-## Step 5 - `/uniformlist`
+## Step 4 - the actual feature. Two clicks, and your clothes change.
 
-**Type:** `/uniformlist`
+1. Open the wardrobe. Pick **Randomise my clothes (test tool)**. Your clothes
+   visibly change; your face and hair do not. **This step is not optional.** You
+   need two different outfits to see a uniform swap; without it the apply
+   correctly writes the same numbers back, nothing moves, and the whole thing
+   reads as a no-op.
+2. Open the wardrobe again. There is now a row:
 
-**Expect:**
+   ```
+   Cadet
+       Cadet and up | season any | weather any | the automatic pick for right now
+   ```
 
-```
-1 stored set(s):
-  #1   Patrol           grade>=0  mp_m_freemode_01  season=any    weather=any   12 comps / 5 props
-You (grade 0, mp_m_freemode_01) would get set #1.
-```
+   Click it.
 
-The last line is the selection engine answering for **you** specifically. If it
-says `would get NOTHING`, read the reason it gives: it names the job, grade,
-model, season and weather it looked for.
+**Expect, on screen:** you snap into the outfit you captured in step 3.
 
----
-
-## Step 6 - `/uniformoff`  ← **visible**
-
-**Type:** `/uniformoff`
-
-**Expect, on screen:** you change back into the clothes you had on when you
-loaded in, before step 3.
-
-**Expect, in chat/notify:** `Back in civilian clothes (N slots changed).` with N
+**Expect, in notify:** `Uniform: Cadet (any / any) (N slots changed)` with N
 above zero.
+
+**That is the whole round.** You walked to a wardrobe, a menu opened, you picked
+a uniform, your clothes changed, and you typed nothing.
 
 **Fail:**
 
-- **`Back in civilian clothes, though every slot already matched them`** - means
-  the randomiser landed on your own outfit. Harmless, but redo steps 3-4 to get a
-  genuinely different capture, otherwise step 7 will not be visible either.
-- **`No civilian outfit was recorded this session`** - the snapshot was lost.
-  Almost always because the resource was restarted mid-session. Relog.
-- **`This resource has not changed your clothes, so there is nothing to change
-  back.`** - the server has no record of dressing you. Means step 3 did not reach
-  the server.
-
----
-
-## Step 7 - `/uniform`  ← **visible, and this is the actual feature**
-
-**Type:** `/uniform`
-
-**Expect, on screen:** you snap into the outfit captured in step 4.
-
-**Expect, in notify:** `Uniform: Patrol (any / any) (N slots changed)` with N
-above zero.
-
-**Fail:**
-
-- **`Uniform "Patrol (any / any)" applied, but you were already wearing every
+- **`Uniform "Cadet (any / any)" applied, but you were already wearing every
   slot of it, so nothing changed on screen.`** - the resource is working; you
-  captured what you were already wearing. Not a bug, and it tells you the fix.
-- **`You have no uniform to change into.`** - you are not on the police job.
-- **`no uniform captured for police grade N on mp_m_freemode_01 ...`** - your
-  grade is below nothing, or you are on the other body. The message names every
-  value it searched on.
+  skipped the randomise. Do step 4.1 and click again.
+- **`You already have "Cadet" on. Putting it on again, so nothing will visibly
+  change.`** - the same thing, said before it happens.
 - **`component N (drawable D, texture T) is not valid on this ped`** - the whole
-  apply was aborted and you kept what you had on. This is the all-or-nothing
-  refusal working; it means the stored set does not fit this ped.
+  apply was aborted and you kept what you had on. That is the all-or-nothing
+  refusal working: the stored set does not fit this ped.
+- **`You are not allowed to wear that one.`** - the server re-checked your rank
+  and the id you clicked is not on your list. Reopen the wardrobe.
 
 ---
 
-## Step 8 - the season, without a restart
+## Step 5 - back to your own clothes
 
-Now prove that season selection actually switches the garment. Four commands.
+Open the wardrobe. Pick **Back to my own clothes**.
 
-1. **`/uniformscramble`** - a third outfit. **Expect:** clothes visibly change.
-2. **`/uniformcapture 0 winter any Winter Coat`** - **Expect:** `Captured 12
-   components and 5 props for police grade 0 and up, mp_m_freemode_01, season
-   winter, weather any, labelled "Winter Coat".`
-3. **`/uniformseason winter`** - **Expect:**
-   ```
-   season is now: winter (/uniformseason pin, runtime)
-   Re-applied to N on-duty officer(s). If you are off duty, run /uniform to see it.
-   ```
-   If you are on duty you will visibly change here. If you are off duty, N is 0
-   and nothing moves yet; that is correct.
-4. **`/uniform`** - **Expect, on screen:** you are in the winter outfit.
-   **Expect, in notify:** `Uniform: Winter Coat (winter / any) (N slots changed)`.
+**Expect, on screen:** you change back into what you had on when you loaded in,
+before the randomise.
 
-Then hand the season back:
+**Expect:** `Back in civilian clothes (N slots changed).`
 
-5. **`/uniformseason auto`** - **Expect:** `season is now: summer
-   (Config.SeasonByMonth, real date, server-side)`.
-6. **`/uniform`** - **Expect, on screen:** you are back in the step-4 Patrol
-   outfit. **Expect:** `Uniform: Patrol (any / any) (N slots changed)`.
+**Fail:**
 
-**That swap between 4 and 6 is the whole season feature.** If both land on the
-same outfit, the two captures were of the same clothes: redo step 8.1 and make
-sure the scramble actually changed something.
-
-**Fail:** `Unknown season "winter"` means you typed a value outside `any winter
-spring summer autumn`. The message lists them.
+- **the row is greyed out** and says *"this wardrobe has not changed your
+  clothes this session"* - correct if nothing has dressed you.
+- **`No civilian outfit was recorded this session`** - the snapshot was lost,
+  almost always because the resource was restarted mid-session. Relog.
 
 ---
 
-## Step 9 - finish clean
+## Step 6 - the variant choice, still no typing
 
-**Type:** `/uniformoff`
+1. Randomise your clothes again from the wardrobe (a third outfit).
+2. **Save what I am wearing as a uniform** -> **Cadet** -> **Winter only, any
+   weather**.
+3. Open the wardrobe. There are now **two** rows for you: `Cadet` and
+   `Cadet winter`. Click **Cadet winter**.
 
-**Expect:** back in the clothes you loaded in wearing.
+**Expect:** you change into the third outfit, and the notify says
+`Uniform: Cadet winter (winter / any)`.
 
-Optionally clear the two throwaway captures so the department is not wearing
-random clothes: `/uniformlist` to read the ids, then `/uniformdelete 1` and
-`/uniformdelete 2`. This only ever deletes rows in `palm6_uniform_sets`; losing
+That is the season variant working, chosen by hand from the menu. The
+**automatic** side of it (the server switching you when the real season changes)
+is the same rows and is marked `the automatic pick for right now` on whichever
+one currently wins. To feel-test that half you do need one command,
+`/uniformseason winter`, and that is the one place a command is still the
+shortest route.
+
+---
+
+## Step 7 - finish clean
+
+Open the wardrobe. Pick **Back to my own clothes**.
+
+Optionally clear the throwaway captures so the department is not wearing random
+clothes: `/uniformlist` to read the ids, then `/uniformdelete 1` and
+`/uniformdelete 2`. That only ever deletes rows in `palm6_uniform_sets`; losing
 that whole table costs the captured uniforms and nothing else.
+
+---
+
+## If the wardrobe is in the wrong spot
+
+**Do not guess a coordinate and do not ask for one.** Walk to where the wardrobe
+should actually be, open the menu wherever it currently is, and pick **Move this
+wardrobe to where I am standing**.
+
+It moves immediately for everyone, tells you so, and prints the exact line in
+chat and to the console:
+
+```
+Wardrobe moved to vector3(441.02, -981.45, 30.69). This is a RUNTIME move; a restart puts it back.
+To keep it, set Config.Wardrobe.FallbackCoords in palm6_uniform/shared/config.lua to: vector3(441.02, -981.45, 30.69)
+```
+
+The move lasts until the resource restarts. If it is right, paste that line into
+`Config.Wardrobe.FallbackCoords` to keep it.
 
 ---
 
 ## After the ten minutes (not part of this run)
 
-- **Capture the real look.** Dress a police character properly in whatever
-  clothing menu the box runs, then `/uniformcapture 0 any any Patrol`.
+- **Capture the real look.** Dress a police character properly, then save it
+  from the wardrobe at the rank it belongs to.
 - **Capture it again on a female character.** `mp_m_freemode_01` and
   `mp_f_freemode_01` have completely disjoint drawable index spaces. Every
   uniform must be captured twice. If the two captures come back with identical
   numbers, something is wrong, not convenient.
-- **Promotion.** Capture a second set at a higher grade
-  (`/uniformcapture 3 any any Sergeant`), then have someone change your grade and
-  watch the uniform change with no relog. `/setjob` is granted to `group.admin`;
-  read its own usage rather than guessing its argument order.
-- **Re-run every capture after any clothing pack changes on the box.** A drawable
-  index is a position in a mount-ordered list. Adding or removing a pack shifts
-  every index after it and a stored set silently becomes a different garment.
-  Nothing can detect that from outside the game.
+- **Promotion.** Save a second set at a higher rank, then have someone change
+  your grade and watch the uniform change with no relog.
+- **Re-run every capture after any clothing pack changes on the box.** A
+  drawable index is a position in a mount-ordered list. Adding or removing a
+  pack shifts every index after it and a stored set silently becomes a different
+  garment. Nothing can detect that from outside the game.
 
 ---
 
@@ -333,12 +297,32 @@ add_ace group.admin command.uniformcapture allow
 ```
 
 The `ensure` must sit **after** `ensure palm6_eventguard` (`custom.cfg:112`) so
-the guards register first; anywhere in the `palm6_*` block below it is fine, and
-next to `ensure palm6_pd_life` (`custom.cfg:172`) keeps it with the police
-resources. The `add_ace` belongs with the other grants near `custom.cfg:481`.
+the guards register first; next to `ensure palm6_pd_life` (`custom.cfg:172`)
+keeps it with the police resources. The `add_ace` belongs with the other grants
+near `custom.cfg:481`. That one ACE covers the admin options in the wardrobe
+menu as well as the admin commands, because both check the same string.
 
 Starting it without a restart is safe from the console: `ensure palm6_uniform`.
 This resource has no `stream/` folder, no `data_file` and no
 `SHOP_PED_APPAREL_META_FILE`, so starting it mounts no asset and cannot replace
 a base-game garment. **That safety statement is about `palm6_uniform` only.** It
 is not true of `palm6_threads`, which must stay stopped.
+
+---
+
+## Appendix: the commands, if the menu is unavailable
+
+Every step above is a click. These do the same things from anywhere on the map
+and are the fallback if `ox_target` and the `ox_lib` menu are both unavailable,
+or if the wardrobe position cannot be resolved at all.
+
+| command | equivalent menu action |
+|---|---|
+| `/uniform` | clicking the recommended uniform row |
+| `/uniformoff` | **Back to my own clothes** |
+| `/uniformcapture <grade> <season> <weather> [label]` | **Save what I am wearing as a uniform** |
+| `/uniformshow` | **Read out what I am wearing** |
+| `/uniformscramble` | **Randomise my clothes** |
+| `/uniformlist`, `/uniformdelete <id>` | no menu equivalent; deleting a stored set is deliberately not a click |
+| `/uniformstatus` | no menu equivalent; it is the console-facing meter, and it now also reports where the wardrobe is and which source answered |
+| `/uniformseason`, `/uniformweather` | no menu equivalent; these are test pins, not part of the normal flow |

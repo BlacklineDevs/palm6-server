@@ -26,6 +26,10 @@ local pending    = {}    -- [src] = { token, mode, grade, season, weather, label
 -- ignore it, but "the client ignores it" is not the same as never touching a
 -- non-police player, and the second is what was asked for.
 local dressed    = {}
+-- [src] = the id of the set this resource last sent that source. Read by the
+-- wardrobe menu so a uniform the officer is already wearing says so on the row
+-- instead of looking like a dead button. Cleared on restore and on drop.
+local wearing    = {}
 local sets       = {}    -- cached rows from palm6_uniform_sets
 local schemaOk   = false
 local lastVariant = nil  -- 'season|weather' pair as of the last tick
@@ -85,6 +89,7 @@ AddEventHandler('playerDropped', function()
     lastAction[src] = nil
     pending[src] = nil
     dressed[src] = nil
+    wearing[src] = nil
 end)
 
 local function inList(list, value)
@@ -272,6 +277,58 @@ local function pickSet(job, grade, model, season, weather)
         :format(job, grade, model, season, weather)
 end
 
+-- EVERY row this officer is ALLOWED to wear, not just the best one.
+--
+-- pickSet answers "which single set is right for right now". The wardrobe menu
+-- needs the whole permitted list, because offering the season and weather
+-- variants is the point of having a menu. The gate is identical and it is the
+-- gate that matters: same job, same ped model, and min_grade <= this officer's
+-- REAL grade as read from qbx_core. A modified client that names a captain set
+-- it is not entitled to fails this test, because this list is recomputed
+-- server-side on every single pick and the chosen id has to be in it.
+--
+-- Sorted highest rank first, then by season and weather name, so the order in
+-- the menu is stable between opens.
+local function allowedSets(job, grade, model)
+    local out = {}
+    for i = 1, #sets do
+        local s = sets[i]
+        if s.job == job and s.model == model and s.min_grade <= grade then
+            out[#out + 1] = s
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.min_grade ~= b.min_grade then return a.min_grade > b.min_grade end
+        if a.season ~= b.season then return a.season < b.season end
+        if a.weather ~= b.weather then return a.weather < b.weather end
+        return a.id < b.id
+    end)
+    return out
+end
+
+-- Push one already-authorised row at one player. THE ONLY PLACE that sends
+-- palm6_uniform:apply. Both the automatic path (applyTo, below) and the
+-- wardrobe menu funnel through here, so the "who is dressed" and "what are
+-- they wearing" bookkeeping cannot drift between the two.
+--
+-- This function does NOT authorise anything. Its callers do, and both of them
+-- do it by re-reading the job and grade out of qbx_core immediately before
+-- calling it.
+local function sendSet(src, row, why)
+    dbg(('apply %d (%s): set %d "%s" grade>=%d %s %s/%s')
+        :format(src, tostring(why), row.id, row.label, row.min_grade, row.model, row.season, row.weather))
+
+    TriggerClientEvent('palm6_uniform:apply', src, {
+        id         = row.id,
+        label      = ('%s (%s / %s)'):format(row.label ~= '' and row.label or 'uniform', row.season, row.weather),
+        model      = row.model,
+        components = row.components,
+        props      = row.props,
+    })
+    dressed[src] = true
+    wearing[src] = row.id
+end
+
 -- ---------------------------------------------------------------------------
 -- APPLY. The single door every automatic and manual dress-up goes through.
 --
@@ -315,17 +372,7 @@ local function applyTo(src, why, requireDuty, quiet)
         return false, reason
     end
 
-    dbg(('apply %d (%s): set %d "%s" grade>=%d %s %s/%s')
-        :format(src, why, row.id, row.label, row.min_grade, row.model, row.season, row.weather))
-
-    TriggerClientEvent('palm6_uniform:apply', src, {
-        id         = row.id,
-        label      = ('%s (%s / %s)'):format(row.label ~= '' and row.label or 'uniform', row.season, row.weather),
-        model      = row.model,
-        components = row.components,
-        props      = row.props,
-    })
-    dressed[src] = true
+    sendSet(src, row, why)
     return true
 end
 
@@ -337,6 +384,7 @@ local function restoreFor(src)
     if not src or src <= 0 then return end
     if not dressed[src] then return end
     dressed[src] = nil
+    wearing[src] = nil
     TriggerClientEvent('palm6_uniform:restore', src)
 end
 
@@ -555,8 +603,15 @@ ON DUPLICATE KEY UPDATE
         ('Captured %d components and %d props for %s grade %d and up, %s, season %s, weather %s%s.')
             :format(#comps, #props, Config.PoliceJob, p.grade, serverModel, p.season, p.weather,
                     p.label ~= '' and (', labelled "' .. p.label .. '"') or ''),
-        'Run /uniform to put it on, and remember to capture the same set on the other body.',
+        'Open the station wardrobe to put it on, and remember to capture the same set on the other body.',
     })
+    -- A notify AS WELL AS the chat lines, because a capture started from the
+    -- wardrobe menu is a click, and the person who clicked is looking at the
+    -- notify corner, not at chat. Saying it twice is cheap; saying it in a
+    -- channel the clicker is not watching is how a working save reads as
+    -- nothing having happened.
+    Bridge.Notify(src, ('Saved "%s" as a uniform. Open the wardrobe again to put it on.')
+        :format(p.label ~= '' and p.label or ('grade ' .. tostring(p.grade))), 'success')
 end)
 
 -- "Dress me." Raised by the client on spawn. Everything about WHICH uniform
@@ -649,8 +704,543 @@ CreateThread(function()
     end
 end)
 
+-- ===========================================================================
+-- THE WALK-UP WARDROBE. This is the primary interface; the commands below it
+-- are the fallback.
+--
+-- SHAPE: the server builds the ENTIRE menu - every row, every label, every
+-- greyed-out row and the plain-English reason it is greyed out - and the
+-- client draws it. The client decides nothing. That is not tidiness, it is the
+-- authority model: a modified client can send any action it likes and every
+-- one of them is re-checked here against the job and grade read fresh out of
+-- qbx_core.
+--
+-- THE RULE THIS SECTION IS WRITTEN TO: the menu is never blank and a click is
+-- never silent. An empty wardrobe and a broken wardrobe look identical from
+-- the outside, and that has already cost two sessions. So there is no code
+-- path below that returns zero rows, and no action that can be refused without
+-- saying, in words, what was refused and why.
+-- ===========================================================================
+
+-- Runtime wardrobe position, set only by the "move it to where I am standing"
+-- action in the menu. nil means "use the real source". Deliberately NOT
+-- persisted: a runtime move is a way to find the right spot without typing a
+-- coordinate, and the action prints the exact vector3 line to paste into
+-- Config.Wardrobe.FallbackCoords if it should survive a restart.
+local wardrobePin = nil
+
+-- Where the wardrobe is, and where that answer came from.
+--
+-- NOTHING HERE INVENTS A COORDINATE. In order:
+--   1. a runtime move made from the menu itself, or
+--   2. qbx_police_overrides:GetDutyToggle(), the resource that already owns
+--      the police station's position (see Bridge.GetStationPoint), or
+--   3. Config.Wardrobe.FallbackCoords, which is a verbatim copy of the coords
+--      line in that same override config.
+-- Returns point, sourceDescription. The source string is shown in
+-- /uniformstatus and in the menu header, so "the wardrobe is in the wrong
+-- place" always comes with which of the three answered.
+local function wardrobePoint()
+    if wardrobePin then
+        return wardrobePin, 'moved at runtime from the wardrobe menu (forgotten on restart)'
+    end
+    local pt, from = Bridge.GetStationPoint()
+    if pt then
+        -- The contract's radius is an ox_target radius (1.0m). Widen it to the
+        -- configured floor for a walk-up. A derived bound, not a position.
+        local radius = math.max(tonumber(pt.radius) or 0.0, Config.Wardrobe.MinRadius)
+        return { x = pt.x, y = pt.y, z = pt.z, radius = radius }, from
+    end
+    local f = Config.Wardrobe.FallbackCoords
+    if not f then
+        return nil, ('%s, and Config.Wardrobe.FallbackCoords is not set'):format(tostring(from))
+    end
+    return
+        { x = f.x, y = f.y, z = f.z, radius = Config.Wardrobe.MinRadius },
+        ('Config.Wardrobe.FallbackCoords, because %s'):format(tostring(from))
+end
+
+-- Send the wardrobe position to one source, or to everyone with -1.
+--
+-- A FAILURE IS SENT TOO. If no point could be worked out, the client is told
+-- that in so many words rather than simply never hearing back, because a
+-- wardrobe that never appears and a wardrobe nobody told you about are the
+-- same thing from where David is standing.
+local function pushWardrobe(target)
+    if not Config.Wardrobe.Enabled then return end
+    local pt, from = wardrobePoint()
+    TriggerClientEvent('palm6_uniform:wardrobePoint', target or -1, pt and {
+        x      = pt.x,
+        y      = pt.y,
+        z      = pt.z,
+        radius = pt.radius,
+        label  = Config.Wardrobe.Label,
+        icon   = Config.Wardrobe.Icon,
+    } or false, from)
+end
+
+-- The client asking where the wardrobe is. Raised on spawn and on resource
+-- start. Rate limited but SILENT on refusal, and for the same reason the
+-- requestApply limit is silent: nobody typed this, so nobody is waiting on an
+-- answer, and replying would let a modified client spam its own screen. The
+-- client re-asks on the next spawn either way.
+RegisterNetEvent('palm6_uniform:wardrobeRequest', function()
+    local src = source
+    if not Config.Enabled or not Config.Wardrobe.Enabled then return end
+    if not src or src <= 0 then return end
+    if not rl(src, 'wardrobe') then return end
+    pushWardrobe(src)
+end)
+
+-- The police rank roster, cached.
+--
+-- Bridge.GetGradeRoster crosses a resource boundary, and gradeName below is
+-- called once per row while a menu is being built. The roster only changes
+-- when qbx_police_overrides restarts, so it is read once and re-read on the
+-- next menu after that resource comes back. A nil cache is retried, so a
+-- roster that was not ready at boot is not written off forever.
+local rosterCache = nil
+local rosterCacheAt = 0
+local ROSTER_CACHE_SECONDS = 60
+
+local function gradeRoster()
+    if rosterCache and (now() - rosterCacheAt) < ROSTER_CACHE_SECONDS then
+        return rosterCache
+    end
+    rosterCache = Bridge.GetGradeRoster()
+    rosterCacheAt = now()
+    return rosterCache
+end
+
+-- The rank name for a grade, read from qbx_police_overrides' roster. Falls
+-- back to the bare number rather than making a rank name up.
+local function gradeName(level)
+    local roster = gradeRoster()
+    if roster then
+        for i = 1, #roster do
+            if roster[i].level == level then return roster[i].name end
+        end
+    end
+    return ('grade %d'):format(level)
+end
+
+-- The label a menu-driven capture is stored under. Built from the real rank
+-- name plus the variant, so an admin never types a label either.
+local function composeLabel(grade, season, weather)
+    local label = gradeName(grade)
+    if season ~= 'any' then label = label .. ' ' .. season end
+    if weather ~= 'any' then label = label .. ' ' .. weather end
+    if #label > 64 then label = label:sub(1, 64) end
+    return label
+end
+
+-- The season/weather choices offered when saving a uniform. Built from
+-- Config.Seasons and Config.Weathers so the menu cannot drift from what
+-- validateCapture will accept, and labelled from Config.SeasonLabels /
+-- Config.WeatherLabels so nothing has to be typed.
+--
+-- Deliberately NOT the full cartesian product. Every season crossed with every
+-- weather is twenty captures per rank per body, which nobody will finish. The
+-- offered set is: all-purpose, one per season, one per weather bucket.
+local function captureVariants()
+    local out = {}
+    local function label(season, weather)
+        return ('%s, %s'):format(
+            Config.SeasonLabels[season] or season,
+            Config.WeatherLabels[weather] or weather)
+    end
+    out[#out + 1] = { season = 'any', weather = 'any', title = 'Start here: ' .. label('any', 'any') }
+    for i = 1, #Config.Seasons do
+        local s = Config.Seasons[i]
+        if s ~= 'any' then
+            out[#out + 1] = { season = s, weather = 'any', title = label(s, 'any') }
+        end
+    end
+    for i = 1, #Config.Weathers do
+        local w = Config.Weathers[i]
+        if w ~= 'any' then
+            out[#out + 1] = { season = 'any', weather = w, title = label('any', w) }
+        end
+    end
+    return out
+end
+
 -- ---------------------------------------------------------------------------
--- COMMANDS
+-- THE MENU MODEL. Every row the client will draw, decided here.
+--
+-- Row shape: { action, arg, title, description, icon, disabled }
+--   action  what to send back on select. 'note' rows are never selectable.
+--   arg     the set id for 'apply'; nil otherwise.
+-- ---------------------------------------------------------------------------
+local function buildMenu(src)
+    local rows = {}
+    local function row(t) rows[#rows + 1] = t end
+
+    local menu = {
+        title = Config.Wardrobe.Label,
+        rows  = rows,
+    }
+
+    if not Config.Enabled then
+        row{
+            action = 'note', disabled = true, icon = 'fas fa-power-off',
+            title = 'The uniform system is switched off.',
+            description = 'shared/config.lua has Config.Enabled = false, so nothing in here can change anybody\'s clothes. This is a wardrobe that has been told to do nothing, not a broken one.',
+        }
+        return menu
+    end
+
+    -- The read limit, refused as a ROW rather than by refusing to open. A menu
+    -- that does not appear is the failure this whole round exists to remove.
+    if not rl(src, 'menu') then
+        row{
+            action = 'note', disabled = true, icon = 'fas fa-hourglass-half',
+            title = 'Opening too fast.',
+            description = ('The wardrobe answers once every %d second(s). Close this and open it again in a moment; nothing is broken.'):format(Config.RateLimits.menu or 1),
+        }
+        return menu
+    end
+
+    local isAdmin = Bridge.IsAdmin(src)
+    local id      = Bridge.GetPoliceIdentity(src)
+    local isPolice = id ~= nil and id.job == Config.PoliceJob
+    local model   = Bridge.GetPedModelName(src)
+    local season  = currentSeason()
+    local weather = currentWeather()
+    local _, pointFrom = wardrobePoint()
+
+    menu.season  = season
+    menu.weather = weather
+
+    -- Header. Always present, always first, so the menu is never empty even in
+    -- the worst case below.
+    row{
+        action = 'note', disabled = true, icon = 'fas fa-circle-info',
+        title = ('Season: %s. Weather: %s.'):format(season, weather),
+        description = ('The server picks what you are allowed to wear from your job and rank. Wardrobe position source: %s.'):format(tostring(pointFrom)),
+    }
+
+    -- ---- who is standing here -------------------------------------------
+    if not isPolice then
+        row{
+            action = 'note', disabled = true, icon = 'fas fa-ban',
+            title = 'You are not a police officer.',
+            description = ('This wardrobe only dresses the "%s" job. Your job right now is "%s". Nothing in here will change your clothes until that changes.')
+                :format(Config.PoliceJob, (id and id.job) or 'unknown'),
+        }
+        if isAdmin then
+            row{
+                action = 'note', disabled = true, icon = 'fas fa-user-shield',
+                title = 'You are an admin, but saving a uniform still needs the police job.',
+                description = ('A police uniform is captured by somebody wearing the job. Put yourself on "%s" and open this wardrobe again; the save option appears here.')
+                    :format(Config.PoliceJob),
+            }
+        end
+    elseif not model then
+        row{
+            action = 'note', disabled = true, icon = 'fas fa-triangle-exclamation',
+            title = 'Your character is not a standard freemode ped.',
+            description = 'Captured uniforms are drawable indices belonging to mp_m_freemode_01 or mp_f_freemode_01. They mean nothing on any other ped, so this wardrobe refuses rather than dressing you in the wrong thing.',
+        }
+    else
+        -- ---- the uniforms this officer may wear --------------------------
+        local list = allowedSets(id.job, id.grade, model)
+        local best = pickSet(id.job, id.grade, model, season, weather)
+
+        if #list == 0 then
+            if #sets == 0 then
+                -- THE EMPTY STATE. The most important screen in this resource.
+                row{
+                    action = 'note', disabled = true, icon = 'fas fa-shirt',
+                    title = 'No uniforms have been captured yet.',
+                    description = 'This wardrobe is working. It is empty. A uniform here is a photograph of an outfit somebody actually wore in game - not one clothing id is typed into the code - so until somebody captures the first one there is genuinely nothing to put on.',
+                }
+                if isAdmin then
+                    row{
+                        action = 'note', disabled = true, icon = 'fas fa-list-ol',
+                        title = 'To create the first one, right here, with no typing:',
+                        description = '1. dress this character however the rank should look, in whatever clothing menu the box runs. 2. come back here and pick "Save what I am wearing as a uniform". 3. pick the rank. 4. pick the conditions. That is the whole thing.',
+                    }
+                else
+                    row{
+                        action = 'note', disabled = true, icon = 'fas fa-user-shield',
+                        title = 'Ask an admin to create the first one.',
+                        description = ('An admin standing at this wardrobe gets a "save what I am wearing" option in this menu. It needs the "%s" permission, which is granted in custom.cfg.')
+                            :format(Config.AdminAce),
+                    }
+                end
+            else
+                row{
+                    action = 'note', disabled = true, icon = 'fas fa-user-slash',
+                    title = ('%d uniform(s) are stored, but none of them is yours.'):format(#sets),
+                    description = ('Nothing stored covers %s at %s on %s. A uniform applies to its rank AND EVERY RANK ABOVE IT, so a set captured above your rank will not reach down to you, and a set captured on the other body never applies to this one - the two freemode models have completely separate clothing indices.')
+                        :format(Config.PoliceJob, gradeName(id.grade), model),
+                }
+            end
+        else
+            for i = 1, #list do
+                local s = list[i]
+                local notes = {}
+                if best and best.id == s.id then notes[#notes + 1] = 'the automatic pick for right now' end
+                if wearing[src] == s.id then notes[#notes + 1] = 'you are wearing this' end
+                row{
+                    action = 'apply', arg = s.id,
+                    icon = 'fas fa-shirt',
+                    title = (s.label ~= '' and s.label or ('Uniform #' .. tostring(s.id))),
+                    description = ('%s and up | season %s | weather %s%s'):format(
+                        gradeName(s.min_grade), s.season, s.weather,
+                        #notes > 0 and (' | ' .. table.concat(notes, ', ')) or ''),
+                }
+            end
+        end
+
+        -- ---- back to my own clothes --------------------------------------
+        row{
+            action = 'restore', icon = 'fas fa-person',
+            title = 'Back to my own clothes',
+            disabled = not dressed[src],
+            description = dressed[src]
+                and 'Puts back whatever you had on before this wardrobe changed you. Your own clothes are never stored on the server, so this cannot overwrite your saved look.'
+                or  'Greyed out because this wardrobe has not changed your clothes this session, so there is nothing to change back into.',
+        }
+    end
+
+    -- ---- admin ------------------------------------------------------------
+    if isAdmin then
+        if isPolice and model then
+            row{
+                action = 'capture_menu', icon = 'fas fa-camera',
+                title = 'Save what I am wearing as a uniform',
+                description = ('Pick a rank, then pick the conditions. Whatever this ped has on right now becomes that uniform on %s. No typing, and no clothing id is chosen by anybody: it is a photograph.')
+                    :format(model),
+            }
+            row{
+                action = 'scramble', icon = 'fas fa-dice',
+                title = 'Randomise my clothes (test tool)',
+                description = 'Changes you into different clothes so a uniform swap is actually visible. Face and hair are left alone. If you capture the outfit you are already standing in and then put it on, nothing moves on screen and the whole thing reads as broken.',
+            }
+            row{
+                action = 'show', icon = 'fas fa-magnifying-glass',
+                title = 'Read out what I am wearing',
+                description = 'Prints the twelve component slots and five prop slots to chat and stores nothing. If they all read zero, your ped has not finished streaming and a capture taken now would store "wearing nothing".',
+            }
+        end
+        row{
+            action = 'wardrobe_here', icon = 'fas fa-location-crosshairs',
+            title = 'Move this wardrobe to where I am standing',
+            description = ('Right now it is at: %s. This move lasts until the resource restarts, and it prints the exact config line to make it permanent. Use this instead of guessing a coordinate.')
+                :format(tostring(pointFrom)),
+        }
+    end
+
+    -- The floor. buildMenu always adds the header above, so this cannot fire
+    -- today; it is here because a zero-row menu is the exact failure this
+    -- section exists to prevent, and a floor that never trips costs nothing.
+    if #rows == 0 then
+        row{
+            action = 'note', disabled = true, icon = 'fas fa-triangle-exclamation',
+            title = 'This wardrobe produced no options at all.',
+            description = 'That is a bug in palm6_uniform, not an empty wardrobe. Report it with what your job and rank were.',
+        }
+    end
+
+    -- Data for the capture submenus. Sent whether or not the capture row is
+    -- shown; the client only reads it after the row is clicked, and the server
+    -- re-validates every field when the capture actually arrives.
+    local roster = gradeRoster()
+    menu.capture = {
+        grades = roster or { { level = 0, name = 'grade 0' } },
+        rosterKnown = roster ~= nil,
+        variants = captureVariants(),
+    }
+    return menu
+end
+
+Bridge.RegisterCallback('palm6_uniform:menu', function(src)
+    if not src or src <= 0 then return nil end
+    return buildMenu(src)
+end)
+
+-- ---------------------------------------------------------------------------
+-- MENU ACTIONS. One event, an action string, and every authority re-derived.
+--
+-- Every branch answers. There is no path through this handler that changes
+-- nothing and says nothing.
+-- ---------------------------------------------------------------------------
+
+-- Pick a specific stored set from the wardrobe.
+--
+-- THE AUTHORITY CHECK IS HERE, NOT IN THE MENU. The menu is a view; a modified
+-- client can send any id it likes. That id has to appear in allowedSets()
+-- computed right now from the job and grade this server reads out of qbx_core,
+-- so "pick the captain uniform" from a cadet is refused by name.
+local function menuApply(src, setId)
+    if not rlGate(src, 'apply', 'picking a uniform') then return end
+    if type(setId) ~= 'number' or setId ~= math.floor(setId) then
+        Bridge.Notify(src, 'That wardrobe option carried no uniform id, so nothing was applied.', 'error')
+        return
+    end
+    local id = Bridge.GetPoliceIdentity(src)
+    if not id or id.job ~= Config.PoliceJob then
+        Bridge.Notify(src, ('This wardrobe only dresses the "%s" job, and yours is not it.'):format(Config.PoliceJob), 'error')
+        return
+    end
+    local model = Bridge.GetPedModelName(src)
+    if not model then
+        Bridge.Notify(src, 'Your character is not a standard freemode ped, so a captured uniform cannot be applied to it.', 'error')
+        return
+    end
+    local allowed = allowedSets(id.job, id.grade, model)
+    local row
+    for i = 1, #allowed do
+        if allowed[i].id == setId then row = allowed[i] break end
+    end
+    if not row then
+        Bridge.Notify(src, ('You are not allowed to wear that one. Nothing with id %d is available to %s at %s on %s. Reopen the wardrobe for the current list.')
+            :format(setId, Config.PoliceJob, gradeName(id.grade), model), 'error')
+        return
+    end
+    if wearing[src] == row.id then
+        -- Not a refusal. Applying it again is harmless and the client still
+        -- reports how many slots moved, which will be zero. Saying so first
+        -- means the zero is expected rather than alarming.
+        Bridge.Notify(src, ('You already have "%s" on. Putting it on again, so nothing will visibly change.')
+            :format(row.label ~= '' and row.label or ('uniform #' .. tostring(row.id))), 'inform')
+    end
+    sendSet(src, row, 'wardrobe menu')
+end
+
+-- Save what this admin is wearing, driven entirely by menu choices. Same
+-- engine as /uniformcapture: mint a single-use token, ask the client for a
+-- photograph, and let the existing palm6_uniform:captured handler validate and
+-- store it. Nothing about the garment is chosen here or there.
+local function menuCapture(src, grade, season, weather)
+    if not rlGate(src, 'capture', 'saving a uniform') then return end
+    if not Bridge.IsAdmin(src) then
+        Bridge.Notify(src, ('Saving a uniform needs the "%s" permission and you do not have it. custom.cfg needs the line: add_ace group.admin %s allow')
+            :format(Config.AdminAce, Config.AdminAce), 'error')
+        return
+    end
+    if not Bridge.IsPolice(src) then
+        Bridge.Notify(src, ('You must be on the "%s" job to save a police uniform.'):format(Config.PoliceJob), 'error')
+        return
+    end
+    grade = tonumber(grade)
+    if grade == nil or grade < 0 or grade ~= math.floor(grade) then
+        Bridge.Notify(src, 'That rank was not a whole number, so nothing was saved.', 'error')
+        return
+    end
+    season  = type(season) == 'string' and season:lower() or ''
+    weather = type(weather) == 'string' and weather:lower() or ''
+    if not inList(Config.Seasons, season) then
+        Bridge.Notify(src, ('"%s" is not a season this resource knows, so nothing was saved. Known: %s.')
+            :format(season, table.concat(Config.Seasons, ', ')), 'error')
+        return
+    end
+    if not inList(Config.Weathers, weather) then
+        Bridge.Notify(src, ('"%s" is not a weather bucket this resource knows, so nothing was saved. Known: %s.')
+            :format(weather, table.concat(Config.Weathers, ', ')), 'error')
+        return
+    end
+    if not schemaOk then
+        Bridge.Notify(src, 'The palm6_uniform_sets table is not available, so nothing can be saved. There is a red schema error in the server console.', 'error')
+        return
+    end
+
+    local token = ('%d-%d-%d'):format(src, now(), math.random(100000, 999999))
+    pending[src] = {
+        token = token, mode = 'store', grade = math.floor(grade),
+        season = season, weather = weather,
+        label = composeLabel(math.floor(grade), season, weather), at = now(),
+    }
+    TriggerClientEvent('palm6_uniform:doCapture', src, token, 'store')
+    Bridge.Notify(src, ('Photographing what you are wearing, to be saved as "%s".'):format(pending[src].label), 'inform')
+end
+
+RegisterNetEvent('palm6_uniform:menuAction', function(action, arg1, arg2, arg3)
+    local src = source
+    if not src or src <= 0 then return end
+    if type(action) ~= 'string' then return end
+    if not Config.Enabled then
+        Bridge.Notify(src, 'The uniform system is switched off (Config.Enabled = false), so that did nothing.', 'error')
+        return
+    end
+
+    if action == 'apply' then
+        menuApply(src, tonumber(arg1))
+
+    elseif action == 'restore' then
+        if not rlGate(src, 'restore', 'changing back into your own clothes') then return end
+        if not Bridge.IsPolice(src) then
+            Bridge.Notify(src, ('This wardrobe only handles the "%s" job, so it has nothing of yours to change back.'):format(Config.PoliceJob), 'error')
+            return
+        end
+        if not dressed[src] then
+            Bridge.Notify(src, 'This wardrobe has not changed your clothes, so there is nothing to change back into.', 'inform')
+            return
+        end
+        restoreFor(src)
+
+    elseif action == 'scramble' then
+        if not rlGate(src, 'scramble', 'randomising your clothes') then return end
+        if not Bridge.IsAdmin(src) then
+            Bridge.Notify(src, ('That is an admin tool and needs the "%s" permission.'):format(Config.AdminAce), 'error')
+            return
+        end
+        -- Mark the source as one this resource has altered, so "back to my own
+        -- clothes" has real work to do afterwards even with no uniform applied.
+        dressed[src] = true
+        wearing[src] = nil
+        TriggerClientEvent('palm6_uniform:scramble', src)
+
+    elseif action == 'show' then
+        if not rlGate(src, 'show', 'reading out what you are wearing') then return end
+        if not Bridge.IsAdmin(src) then
+            Bridge.Notify(src, ('That is an admin tool and needs the "%s" permission.'):format(Config.AdminAce), 'error')
+            return
+        end
+        local token = ('%d-%d-%d'):format(src, now(), math.random(100000, 999999))
+        pending[src] = { token = token, mode = 'show', grade = 0, season = 'any', weather = 'any', label = '', at = now() }
+        TriggerClientEvent('palm6_uniform:doCapture', src, token, 'show')
+        Bridge.Notify(src, 'Reading what you are wearing. The list is printed in chat.', 'inform')
+
+    elseif action == 'capture' then
+        menuCapture(src, arg1, arg2, arg3)
+
+    elseif action == 'wardrobe_here' then
+        if not rlGate(src, 'command', 'moving the wardrobe') then return end
+        if not Bridge.IsAdmin(src) then
+            Bridge.Notify(src, ('Moving the wardrobe needs the "%s" permission.'):format(Config.AdminAce), 'error')
+            return
+        end
+        local c = Bridge.GetCoords(src)
+        if not c then
+            Bridge.Notify(src, 'The server could not read where you are standing, so the wardrobe was not moved.', 'error')
+            return
+        end
+        wardrobePin = { x = c.x, y = c.y, z = c.z, radius = Config.Wardrobe.MinRadius }
+        pushWardrobe(-1)
+        local line = ('vector3(%.2f, %.2f, %.2f)'):format(c.x, c.y, c.z)
+        Bridge.Notify(src, 'Wardrobe moved to where you are standing. Walk away and back to see it. This move is forgotten on restart.', 'success')
+        Bridge.Reply(src, {
+            ('Wardrobe moved to %s. This is a RUNTIME move; a restart puts it back.'):format(line),
+            ('To keep it, set Config.Wardrobe.FallbackCoords in palm6_uniform/shared/config.lua to: %s'):format(line),
+        })
+        print(('[palm6_uniform] wardrobe moved at runtime to %s by source %d'):format(line, src))
+
+    else
+        Bridge.Notify(src, ('The wardrobe sent an action this server does not know ("%s"). Nothing was changed.')
+            :format(action), 'error')
+    end
+end)
+
+-- ---------------------------------------------------------------------------
+-- COMMANDS. THE FALLBACK, not the feature.
+--
+-- The walk-up wardrobe above is the primary interface and no step of the
+-- normal flow requires typing anything. These stay because a chat command
+-- works from anywhere, works with no ox_target, works with no ox_lib menu, and
+-- is the only route left if the wardrobe point itself cannot be resolved.
 --
 -- All RegisterCommand(..., restricted = false) via Bridge.RegisterCommand, and
 -- all gated inside the handler. The admin family self-checks Config.AdminAce,
@@ -896,10 +1486,15 @@ end)
 Bridge.RegisterCommand('uniformstatus', function(src)
     if not adminGate(src, 'command', '/uniformstatus') then return end
     local bucket, source_ = currentWeather()
+    local wp, wfrom = wardrobePoint()
     local lines = {
         ('enabled=%s  schema=%s  sets=%d'):format(tostring(Config.Enabled), schemaOk and 'ok' or 'MISSING', #sets),
         ('season=%s (%s)'):format(currentSeason(), seasonSource()),
         ('weather bucket=%s (from %s)'):format(bucket, tostring(source_)),
+        ('wardrobe=%s  at=%s  from=%s'):format(
+            Config.Wardrobe.Enabled and 'on' or 'OFF',
+            wp and ('%.2f, %.2f, %.2f (radius %.1f)'):format(wp.x, wp.y, wp.z, wp.radius or 0.0) or 'UNRESOLVED',
+            tostring(wfrom)),
         ('admin ACE "%s": you=%s, group.admin=%s'):format(
             Config.AdminAce,
             tostring(Bridge.IsAdmin(src)),
@@ -993,6 +1588,28 @@ CreateThread(function()
     print(('^2[palm6_uniform]^0 ready - schema %s | %d set(s) loaded | season %s | weather bucket %s (%s) | job %s')
         :format(schemaOk and 'ok' or 'MISSING', #sets, currentSeason(), bucket, tostring(wsrc), Config.PoliceJob))
 
+    -- THE WARDROBE POSITION, stated at boot, with its source named.
+    --
+    -- This line exists because "I walked up to the wardrobe and nothing was
+    -- there" and "the wardrobe is somewhere else" are different problems, and
+    -- from in game they look the same. No coordinate here was authored by this
+    -- resource; see wardrobePoint() for the three places it can come from.
+    if Config.Wardrobe.Enabled then
+        local wp, wfrom = wardrobePoint()
+        if wp then
+            print(('^2[palm6_uniform]^0 wardrobe at %.2f, %.2f, %.2f (radius %.1f) - source: %s')
+                :format(wp.x, wp.y, wp.z, wp.radius or 0.0, tostring(wfrom)))
+        else
+            print(('^1[palm6_uniform] the wardrobe position could not be resolved (%s). No walk-up point will exist; /uniform and /uniformoff still work.^0')
+                :format(tostring(wfrom)))
+        end
+        -- Every client already in the world when this resource starts. Clients
+        -- joining later ask for it themselves on spawn.
+        pushWardrobe(-1)
+    else
+        print('^3[palm6_uniform] the walk-up wardrobe is switched off (Config.Wardrobe.Enabled = false). Only the chat commands are available.^0')
+    end
+
     -- THE ACE SELF-CHECK.
     --
     -- Every command in this resource is RegisterCommand(..., restricted =
@@ -1020,7 +1637,7 @@ CreateThread(function()
     end
 
     if #sets == 0 then
-        print('^3[palm6_uniform] no uniforms captured yet. In game: dress a police character, then /uniformcapture 0 any any Patrol^0')
-        print('^3[palm6_uniform] full 10-minute in-game procedure: resources/[custom]/palm6_uniform/CHECKLIST.md^0')
+        print('^3[palm6_uniform] no uniforms captured yet. In game: get on the police job, dress the character, walk to the station wardrobe and pick "Save what I am wearing as a uniform". The menu says the same thing when it is empty.^0')
+        print('^3[palm6_uniform] full in-game procedure: resources/[custom]/palm6_uniform/CHECKLIST.md^0')
     end
 end)
