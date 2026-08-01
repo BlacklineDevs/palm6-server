@@ -112,6 +112,24 @@ Config.Wardrobe = {
     -- "Move this wardrobe to where I am standing" in the wardrobe menu itself.
     -- That prints the exact vector3 line to paste back in here, and it needs
     -- no typing to use.
+    -- EXPLICIT POSITION, and it WINS over the export above when set to a value.
+    --
+    -- Captured in game by David on 2026-07-31, standing on the "[E] Clothing
+    -- Room" prompt outside Mission Row:
+    --     [server_base] coords player=1  vector4(455.56, -991.74, 30.24, 204.0)
+    -- (the 4th value is heading, which a sphere does not use).
+    --
+    -- WHY THIS EXISTS. The duty-toggle export is a real station coordinate, but
+    -- it is the DUTY point, about 13m from the clothing room, and the clothing
+    -- room is where the wardrobe actually is and where David expects to use it.
+    -- qbx_police owns that prompt and is not in this repo, so its position
+    -- cannot be read from here at all. This is the captured answer, not a
+    -- guessed one: the alternative was inventing a number, which is the rule
+    -- this project does not break.
+    --
+    -- Set it to nil to go back to reading the duty-toggle export.
+    Coords = vector3(455.56, -991.74, 30.24),
+
     FallbackCoords = vector3(442.32, -988.43, 30.69),
 
     -- The duty-toggle contract's own radius is 1.0m, which is an ox_target

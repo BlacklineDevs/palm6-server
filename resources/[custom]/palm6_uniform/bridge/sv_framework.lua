@@ -134,6 +134,22 @@ end
 local POLICE_CONFIG_RESOURCE = 'qbx_police_overrides'
 
 function Bridge.GetStationPoint()
+    -- An explicitly captured position WINS over the export. The export gives a
+    -- real coordinate, but it is the DUTY point, and the wardrobe belongs at the
+    -- clothing room about 13m away, which qbx_police owns and this repo cannot
+    -- read. Config.Wardrobe.Coords holds the position David captured in game
+    -- standing on that prompt, so this is a measured answer overriding a merely
+    -- available one, never an invented answer overriding a real one.
+    local wc = Config.Wardrobe and Config.Wardrobe.Coords
+    if wc then
+        local x, y, z = tonumber(wc.x), tonumber(wc.y), tonumber(wc.z)
+        if x and y and z then
+            return { x = x, y = y, z = z, radius = 0.0 },
+                'Config.Wardrobe.Coords (captured in game at the clothing room)'
+        end
+        print('^3[palm6_uniform] Config.Wardrobe.Coords is set but not numeric, ignoring it^0')
+    end
+
     if GetResourceState(POLICE_CONFIG_RESOURCE) ~= 'started' then
         return nil, POLICE_CONFIG_RESOURCE .. ' is not started'
     end
