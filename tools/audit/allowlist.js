@@ -124,6 +124,21 @@ module.exports = [
     // -----------------------------------------------------------------------
     {
         check: 'command-aces',
+        key: 'ace-without-command:anchors',
+        reason:
+            'The command IS registered in this repo, and this is a scanner blind spot rather '
+            + 'than a missing command. palm6_anchors registers it through '
+            + 'Game.RegisterCommandAndKey(Config.Command, ...) -> RegisterCommand(name, handler, '
+            + 'false) in bridge/cl_game.lua, so the NAME arrives in a variable (Config.Command = '
+            + '"anchors", shared/config.lua) and this check only matches string literals. It is '
+            + 'the same dynamic-name trap the event-graph check already handles for '
+            + 'TriggerServerEvent. command.anchors is a real, used ACE: palm6_anchors reads it as '
+            + 'Config.AdminAce on every gated path and checks it at boot. Contrast the entries '
+            + 'below, which are genuinely out-of-repo recipe commands. If this check ever learns '
+            + 'to resolve a name from a shared Config, delete this entry.',
+    },
+    {
+        check: 'command-aces',
         key: 'ace-without-command:tp',
         reason: 'qbx_core command, shipped by the recipe and not present in this repo. The grant extends it from admin to mod.',
     },

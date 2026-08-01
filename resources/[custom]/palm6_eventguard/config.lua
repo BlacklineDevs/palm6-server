@@ -477,4 +477,14 @@ Config.Events = {
     -- before they existed, which is why they are here now.
     ['palm6_uniform:wardrobeRequest']     = { calls = 10, window_seconds = 60 },
     ['palm6_uniform:menuAction']          = { calls = 40, window_seconds = 60 },
+
+    -- palm6_anchors, the admin anchor inspector. Both events are admin-gated and
+    -- rate limited inside the resource; these are the outer bound, and they are
+    -- here because that resource's README documented them as existing before
+    -- they did. menuAction covers open/teleport/capture/clear clicks, so it gets
+    -- the higher ceiling: walking the station and correcting several anchors is
+    -- a burst of clicks in a couple of minutes. requestPoints is a client pull
+    -- on spawn, on resource start and when markers are toggled.
+    ['palm6_anchors:menuAction']          = { calls = 40, window_seconds = 60 },
+    ['palm6_anchors:requestPoints']       = { calls = 15, window_seconds = 60 },
 }
