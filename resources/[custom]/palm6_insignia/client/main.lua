@@ -63,6 +63,31 @@ local function offsets()
     return Config.Render.OffsetForward, Config.Render.OffsetUp
 end
 
+-- The rank colour for an officer, matched off their second tape line (which the
+-- SERVER composed, e.g. "PBPD #100 - CHIEF"). Substring, case-insensitive, so
+-- "CHIEF" also catches "DEPUTY CHIEF" and the server is free to reword the line
+-- without this needing to know the exact format.
+--
+-- Purely cosmetic, and it fails to the neutral default rather than to nothing:
+-- an unknown rank must still get a readable plate. Resolved in the SCAN (4x a
+-- second), never per frame, and cached on the candidate.
+local function rankColour(line2)
+    local r = Config.Render
+    local map = r.RankColours
+    local default = r.RankColourDefault or { 214, 224, 238 }
+    if type(map) ~= 'table' or type(line2) ~= 'string' then return default end
+    local hay = line2:lower()
+    -- Longest key first, so "lieutenant" is never shadowed by a shorter key that
+    -- happens to appear inside it.
+    local best, bestLen = default, -1
+    for key, col in pairs(map) do
+        if #key > bestLen and hay:find(key, 1, true) then
+            best, bestLen = col, #key
+        end
+    end
+    return best
+end
+
 local function countRoster()
     local n = 0
     for _ in pairs(roster) do n = n + 1 end
@@ -152,8 +177,12 @@ local function buildCandidates()
     -- MODEL, so it is resolved against the actual ped each scan rather than
     -- assumed: a player who changes ped model gets a fresh index inside 250ms.
     for i = 1, #out do
-        out[i].w1 = Game.MeasureText(out[i].l1, style.scale, style.font)
-        out[i].w2 = Game.MeasureText(out[i].l2, style.scale, style.font)
+        -- Measured at the SAME per-line scale each line is drawn at. Measuring
+        -- both at style.scale while line 2 renders at subScale would size the
+        -- plate off a width that never appears on screen.
+        out[i].w1 = Game.MeasureText(out[i].l1, style.scale * style.nameScale, style.font)
+        out[i].w2 = Game.MeasureText(out[i].l2, style.scale * style.subScale,  style.font)
+        out[i].accent = rankColour(out[i].l2)
         local idx, name = Game.ResolveTapeBone(out[i].ped, names)
         out[i].bone = idx
         if idx then
@@ -212,7 +241,8 @@ local function startThreads()
                     -- entity before reading a bone off it.
                     if Game.EntityExists(c.ped) then
                         local x, y, z = Game.TapeAnchor(c.ped, c.bone, fwd, up)
-                        Game.DrawTape(x, y, z, c.l1, c.l2, c.w1, c.w2, style, style.charH)
+                        Game.DrawTape(x, y, z, c.l1, c.l2, c.w1, c.w2, style, style.charH,
+                            c.accent, c.dist, Config.Render.MaxDistance)
                     end
                 end
                 Wait(0)
@@ -228,15 +258,26 @@ end
 CreateThread(function()
     local r = Config.Render
     style = {
-        scale      = r.Scale,
-        font       = r.Font,
-        lineGap    = r.LineGap,
-        text       = r.TextColour,
-        plate      = r.PlateColour,
-        plateAlpha = r.PlateAlpha,
-        padX       = r.PlatePadX,
-        padY       = r.PlatePadY,
-        charH      = r.LineGap,   -- replaced by a measured value on first scan
+        scale       = r.Scale,
+        font        = r.Font,
+        lineGap     = r.LineGap,
+        text        = r.TextColour,
+        plate       = r.PlateColour,
+        plateAlpha  = r.PlateAlpha,
+        padX        = r.PlatePadX,
+        padY        = r.PlatePadY,
+        charH       = r.LineGap,   -- replaced by a measured value on first scan
+        border      = r.BorderColour  or { 0, 0, 0 },
+        borderAlpha = r.BorderAlpha   or 120,
+        borderX     = r.BorderX       or 0.0035,
+        borderY     = r.BorderY       or 0.005,
+        nameScale   = r.NameScale     or 1.0,
+        subScale    = r.SubScale      or 0.86,
+        subAlpha    = r.SubAlpha      or 235,
+        accentH     = r.AccentHeight  or 0.0035,
+        accent      = r.RankColourDefault or { 214, 224, 238 },
+        fadeStart   = r.FadeStart     or 0.55,
+        fadeFloor   = r.FadeFloor     or 0.35,
     }
     startThreads()
 

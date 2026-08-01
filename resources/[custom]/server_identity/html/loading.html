@@ -114,6 +114,8 @@
     border: 1px solid rgba(255, 210, 150, 0.12);
     border-radius: 12px;
     backdrop-filter: blur(6px);
+    max-height: min(42vh, 360px);
+    overflow-y: auto;
   }
   .staff-panel[hidden] { display: none; }
   .staff-panel h2 {
@@ -180,13 +182,88 @@
     width: 72px; accent-color: #FF8A3D;
   }
 
+  .tip {
+    position: absolute; left: 50%; top: 76.5%;
+    transform: translateX(-50%);
+    width: min(42%, 520px);
+    text-align: center;
+    font-size: clamp(0.72rem, 1.05vw, 0.9rem);
+    line-height: 1.45;
+    color: rgba(245, 237, 227, 0.82);
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+    min-height: 2.6em;
+  }
+  .tip[hidden] { display: none; }
+  .tip .label {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: rgba(255, 176, 103, 0.85);
+  }
+  .tip #tipText {
+    display: block;
+    transition: opacity 0.4s ease;
+  }
+  .tip #tipText.is-fading { opacity: 0; }
+
+  .side-left {
+    position: absolute; left: 3.5%; top: 18%;
+    width: min(240px, 22vw);
+  }
+
+  .rules-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .rules-list li {
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: rgba(245, 237, 227, 0.86);
+    padding-left: 0.85rem;
+    position: relative;
+  }
+  .rules-list li::before {
+    content: "";
+    position: absolute; left: 0; top: 0.45em;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #FF8A3D;
+  }
+
+  .logo-wrap, .staff, .side-left, .socials, .music, .tip {
+    animation: rise 0.7s ease both;
+  }
+  .staff { animation-delay: 0.12s; }
+  .side-left { animation-delay: 0.18s; }
+  .socials, .music { animation-delay: 0.28s; }
+  .tip { animation-delay: 0.35s; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .logo-wrap { animation-name: riseLogo; }
+  @keyframes riseLogo {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+  .tip { animation-name: riseTip; }
+  @keyframes riseTip {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
   @media (max-width: 900px) {
-    .staff { width: min(200px, 36vw); top: 14%; }
+    .staff, .side-left { width: min(200px, 36vw); top: 14%; }
     .socials a { width: 34px; height: 34px; }
+    .tip { width: min(70%, 420px); }
   }
 
   @media (prefers-reduced-motion: reduce) {
     .pfill.indet { animation-duration: 3s; }
+    .logo-wrap, .staff, .side-left, .socials, .music, .tip { animation: none; }
   }
 </style>
 </head>
@@ -200,7 +277,22 @@
 
       <div class="pbar"><div class="pfill indet" id="pfill"></div></div>
 
+      <p class="tip" id="tip" hidden>
+        <span class="label">Tip</span>
+        <span id="tipText"></span>
+      </p>
+
       <nav class="socials" id="socials" aria-label="Social links"></nav>
+
+      <aside class="side-left" id="rulesRoot" hidden>
+        <button type="button" class="staff-toggle" id="rulesToggle" aria-expanded="false" aria-controls="rulesPanel">
+          Rules
+        </button>
+        <div class="staff-panel" id="rulesPanel" hidden>
+          <h2>City rules</h2>
+          <ul class="rules-list" id="rulesList"></ul>
+        </div>
+      </aside>
 
       <aside class="staff" id="staffRoot" hidden>
         <button type="button" class="staff-toggle" id="staffToggle" aria-expanded="true" aria-controls="staffPanel">
@@ -289,6 +381,61 @@
         socialRoot.appendChild(a);
       });
 
+      var tipsCfg = cfg.tips || {};
+      var tipItems = (tipsCfg.items || []).filter(function (t) { return !!t; });
+      var tipEl = document.getElementById("tip");
+      var tipText = document.getElementById("tipText");
+      if (tipsCfg.enabled !== false && tipItems.length) {
+        tipEl.hidden = false;
+        var tipIdx = 0;
+        function showTip(i) {
+          tipText.textContent = tipItems[i];
+        }
+        showTip(0);
+        if (tipItems.length > 1) {
+          var tipMs = typeof tipsCfg.intervalMs === "number" ? tipsCfg.intervalMs : 6500;
+          setInterval(function () {
+            tipText.classList.add("is-fading");
+            setTimeout(function () {
+              tipIdx = (tipIdx + 1) % tipItems.length;
+              showTip(tipIdx);
+              tipText.classList.remove("is-fading");
+            }, 400);
+          }, tipMs);
+        }
+      }
+
+      // Local browser QA: open loading.html#preview to animate the bar without FiveM.
+      if (location.hash === "#preview") {
+        var preview = 0;
+        setInterval(function () {
+          preview = Math.min(1, preview + 0.02);
+          setProgress(preview);
+          if (preview >= 1) preview = 0;
+        }, 120);
+      }
+
+      var rulesCfg = cfg.rules || {};
+      var ruleItems = (rulesCfg.items || []).filter(function (r) { return !!r; });
+      var rulesRoot = document.getElementById("rulesRoot");
+      var rulesList = document.getElementById("rulesList");
+      var rulesPanel = document.getElementById("rulesPanel");
+      var rulesToggle = document.getElementById("rulesToggle");
+      if (rulesCfg.enabled !== false && ruleItems.length) {
+        rulesRoot.hidden = false;
+        ruleItems.forEach(function (text) {
+          var li = document.createElement("li");
+          li.textContent = text;
+          rulesList.appendChild(li);
+        });
+        rulesToggle.addEventListener("click", function () {
+          var open = rulesPanel.hasAttribute("hidden");
+          if (open) rulesPanel.removeAttribute("hidden");
+          else rulesPanel.setAttribute("hidden", "");
+          rulesToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+      }
+
       var staff = (cfg.staff || []).filter(function (m) { return m && m.name; });
       var staffRoot = document.getElementById("staffRoot");
       var staffList = document.getElementById("staffList");
@@ -333,13 +480,11 @@
       var iconPlay = document.getElementById("iconPlay");
       var iconPause = document.getElementById("iconPause");
       var musicVol = document.getElementById("musicVol");
-      var playing = false;
 
       function setPlayingUi(on) {
-        playing = on;
         iconPlay.hidden = on;
         iconPause.hidden = !on;
-        document.getElementById("musicHint").textContent = on ? "Playing" : "Paused";
+        document.getElementById("musicHint").textContent = on ? "Playing" : "Click to play";
       }
 
       if (musicCfg.enabled && musicCfg.file) {
@@ -349,6 +494,7 @@
         var vol = typeof musicCfg.volume === "number" ? musicCfg.volume : 0.35;
         audio.volume = Math.max(0, Math.min(1, vol));
         musicVol.value = String(audio.volume);
+        setPlayingUi(false);
 
         function tryPlay() {
           var p = audio.play();
@@ -361,13 +507,21 @@
           }
         }
 
-        tryPlay();
-        musicToggle.addEventListener("click", function () {
+        function toggleMusic() {
           if (audio.paused) tryPlay();
           else { audio.pause(); setPlayingUi(false); }
-        });
+        }
+
+        tryPlay();
+        musicToggle.addEventListener("click", toggleMusic);
         musicVol.addEventListener("input", function () {
           audio.volume = Number(musicVol.value);
+        });
+        window.addEventListener("keydown", function (ev) {
+          if (ev.code !== "Space" && ev.key !== " ") return;
+          if (ev.target && /INPUT|TEXTAREA|SELECT|BUTTON/.test(ev.target.tagName)) return;
+          ev.preventDefault();
+          toggleMusic();
         });
       }
     })();

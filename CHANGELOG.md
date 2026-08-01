@@ -9,6 +9,27 @@ Format: newest first. Dates are EDT.
 
 ---
 
+## 2026-07-31 - Loading screen: logo, socials, staff, tips, rules
+
+The join screen now carries Palm6 branding beyond the key art and progress bar.
+
+**Tracking (internal):**
+- Enhanced `server_identity` loadscreen: System A logo, Discord social (other
+  networks toggleable in `html/config.js`), staff roster panel, rotating tips,
+  rules panel (collapsed by default), optional music player (off until an mp3
+  is added; Space toggles when enabled).
+- `loadscreen_cursor` enabled; `files { 'html/**' }` streams assets.
+- Restored missing `html/palm6_screen.jpg`; logo at `html/assets/logo.svg`.
+- Removed unused Lua `LoadingScreenTips` — loadscreen copy is `html/config.js` only.
+- Local QA via `html/loading.html#preview`.
+
+**📣 Public:**
+When you connect, you’ll see the Palm6 logo, a Discord button, staff list,
+quick city rules, and rotating tips while the city loads — same warm progress
+bar as before.
+
+---
+
 ## 2026-07-17 - Gap/flaw sweep + the black-market gun dealer gets a face
 
 A fresh ultracode audit (regression on the last day's code + a new

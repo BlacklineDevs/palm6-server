@@ -71,8 +71,12 @@ tester:
 - [ ] Discord social icon opens the invite; other socials stay hidden until
       enabled in `server_identity/html/config.js`.
 - [ ] Staff team panel lists names/roles from `config.js` and can toggle.
+- [ ] Rules panel lists city rules from `config.js` (starts collapsed) and can toggle.
+- [ ] Tips rotate under the progress bar (from `config.js` tips.items).
+- [ ] Optional local check: open `server_identity/html/loading.html#preview`
+      in a browser — logo/socials/staff/rules/tips render and the bar animates.
 - [ ] Music player stays hidden while `music.enabled` is false; when enabled,
-      mute/volume controls work without console errors.
+      mute/volume/Space toggle work without console errors.
 - [ ] Multichar UI shows **2** character slots (`qbx:multichar_slots`).
 - [ ] New character spawns at **Legion Square**
       `vector4(195.17, -933.77, 30.69, 144.0)` after selection (a brief fade

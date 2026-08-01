@@ -184,26 +184,61 @@ end
 -- here ONLY because the server strips '~' from every name before it is
 -- published - see sanitiseTapeText in server/main.lua. A tilde left in a
 -- player-typed surname would be parsed as a GTA text-markup colour code.
-function Game.DrawTape(x, y, z, line1, line2, w1, w2, style, charH)
+-- `accent` is the rank colour {r,g,b}. `dist` and `maxDist` drive the fade, so a
+-- tape across the lobby is a quiet hint and a tape in front of you is legible.
+function Game.DrawTape(x, y, z, line1, line2, w1, w2, style, charH, accent, dist, maxDist)
     SetDrawOrigin(x, y, z, 0)
 
     charH = charH or style.lineGap
     local gap = math.max(style.lineGap, charH)
+    accent = accent or style.accent
 
-    -- Backing plate, sized from the measured text so it covers BOTH lines.
+    -- DISTANCE FADE. Full strength up to FadeStart, then down to FadeFloor at
+    -- max range, so a crowded lobby does not become a wall of hard white boxes.
+    -- Never reaches zero: a tape that vanishes early reads as a bug.
+    local a = 1.0
+    if dist and maxDist and maxDist > 0 then
+        local fadeStart = maxDist * (style.fadeStart or 0.55)
+        if dist > fadeStart then
+            local t = (dist - fadeStart) / math.max(0.001, maxDist - fadeStart)
+            a = 1.0 - (t * (1.0 - (style.fadeFloor or 0.35)))
+            if a < 0.0 then a = 0.0 elseif a > 1.0 then a = 1.0 end
+        end
+    end
+    local function A(v) return math.floor((v or 255) * a) end
+
     local w = math.max(w1 or 0.0, w2 or 0.0) + (style.padX * 2.0)
     local h = gap + charH + (style.padY * 2.0)
-    DrawRect(0.0, (charH - gap) * 0.5, w, h,
-        style.plate[1], style.plate[2], style.plate[3], style.plateAlpha)
+    local cy = (charH - gap) * 0.5
 
-    applyStyle(style.scale, style.font)
-    SetTextColour(style.text[1], style.text[2], style.text[3], style.text[4])
+    -- Layered plate instead of one flat rectangle. The old version was a single
+    -- dark box with white text in it, which is what "ugly and plain" meant.
+    -- Three cheap DrawRects give it an edge and a rank colour without any
+    -- texture asset: a soft outer border, the body, and an accent bar.
+    DrawRect(0.0, cy, w + (style.borderX or 0.004), h + (style.borderY or 0.006),
+        style.border[1], style.border[2], style.border[3], A(style.borderAlpha))
+    DrawRect(0.0, cy, w, h,
+        style.plate[1], style.plate[2], style.plate[3], A(style.plateAlpha))
+
+    -- Accent bar along the bottom edge, in the officer's rank colour. This is
+    -- the single thing that stops it reading as a generic debug label: rank is
+    -- legible at a glance, before you can read the text.
+    local barH = style.accentH or 0.0035
+    DrawRect(0.0, cy + (h * 0.5) - (barH * 0.5), w, barH,
+        accent[1], accent[2], accent[3], A(240))
+
+    -- Line 1: the name. Slightly larger and pure white, so it is the thing the
+    -- eye lands on first.
+    applyStyle(style.scale * (style.nameScale or 1.0), style.font)
+    SetTextColour(style.text[1], style.text[2], style.text[3], A(style.text[4]))
     SetTextEntry('STRING')
     AddTextComponentSubstringPlayerName(line1)
     DrawText(0.0, -gap)
 
-    applyStyle(style.scale, style.font)
-    SetTextColour(style.text[1], style.text[2], style.text[3], style.text[4])
+    -- Line 2: badge and rank, smaller and in the rank colour, so the two lines
+    -- read as a hierarchy rather than as two identical rows of text.
+    applyStyle(style.scale * (style.subScale or 0.86), style.font)
+    SetTextColour(accent[1], accent[2], accent[3], A(style.subAlpha or 235))
     SetTextEntry('STRING')
     AddTextComponentSubstringPlayerName(line2)
     DrawText(0.0, 0.0)

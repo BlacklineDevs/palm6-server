@@ -198,10 +198,20 @@ Config.Render = {
     --
     -- /insigniabone <NAME> re-points this list on YOUR client only, live, so a
     -- wrong anchor can be corrected and captured in game rather than guessed.
+    -- ABOVE THE HEAD, not on the chest.
+    --
+    -- This list used to start at SKEL_Spine3 with a forward offset, which was an
+    -- attempt to make the text sit on the uniform like a real name tape. It does
+    -- not read that way in practice: the text is flat billboarded 2D that always
+    -- faces the camera, so anchored to the chest it looks like a label stuck to
+    -- the torso and it swims as the ped turns. David's words were "ugly and
+    -- plain and it sits very weirdly", and the weirdness is exactly that.
+    -- A floating plate belongs where players already expect one, above the head.
+    -- Real text ON the fabric needs an addon-DLC pack, see docs/CUSTOM-CLOTHING.md.
     BoneNames = {
+        'SKEL_Head',
+        'SKEL_Neck_1',
         'SKEL_Spine3',
-        'SKEL_Spine2',
-        'SKEL_Spine1',
         'SKEL_ROOT',
     },
 
@@ -212,18 +222,65 @@ Config.Render = {
     -- They are NOT bone-local. Bone-local axes in the GTA rig are not aligned
     -- with the ped's facing, so an offset expressed in them cannot be reasoned
     -- about from a config file. /insigniaoffset <forward> <up> tunes both live.
-    OffsetForward = 0.18,
-    OffsetUp = 0.04,
+    -- No forward push now that the anchor is the head: the plate should float
+    -- straight above, not out in front of the face. Up clears the tallest hats
+    -- in the police roster (the campaign hat is the worst case) without leaving
+    -- the plate detached from the player.
+    OffsetForward = 0.0,
+    OffsetUp = 0.38,
 
     -- Text style.
     Scale = 0.30,
     Font = 4,
     LineGap = 0.022,          -- screen-space gap between the two tape lines
-    TextColour = { 236, 240, 248, 230 },
-    PlateColour = { 10, 14, 22 },
-    PlateAlpha = 165,
-    PlatePadX = 0.008,
-    PlatePadY = 0.006,
+    TextColour = { 244, 247, 252, 240 },
+    PlateColour = { 12, 16, 24 },
+    PlateAlpha = 190,
+    PlatePadX = 0.010,
+    PlatePadY = 0.007,
+
+    -- A soft border drawn just outside the plate. Cheap way to lift it off a
+    -- bright background (the PD forecourt is pale brick, which is where David
+    -- screenshotted it looking washed out) without a texture asset.
+    BorderColour = { 0, 0, 0 },
+    BorderAlpha = 120,
+    BorderX = 0.0035,
+    BorderY = 0.005,
+
+    -- Line 1 is the name, line 2 is the badge and rank. Drawing them at the same
+    -- size and colour is what made it read as two rows of debug text, so line 2
+    -- is smaller and takes the rank colour.
+    NameScale = 1.0,
+    SubScale  = 0.86,
+    SubAlpha  = 235,
+
+    -- The accent bar under the plate, in the rank colour. This is what makes
+    -- rank readable at a glance before you can read any text.
+    AccentHeight = 0.0035,
+
+    -- RANK COLOURS, keyed by the rank name as it appears in the second line.
+    -- Matched case-insensitively on a substring, so "Chief" catches "CHIEF" and
+    -- "Deputy Chief". Anything unmatched uses Default, which is why an unknown
+    -- rank degrades to a neutral plate rather than to no plate.
+    --
+    -- These are UI colours chosen for contrast against the dark plate, not an
+    -- attempt to reproduce any real department's insignia.
+    RankColours = {
+        chief      = { 255, 196,  74 },   -- gold
+        captain    = { 255, 196,  74 },
+        lieutenant = { 122, 192, 255 },   -- light blue
+        sergeant   = { 122, 192, 255 },
+        corporal   = { 138, 226, 168 },   -- green
+        officer    = { 214, 224, 238 },   -- near-white
+        cadet      = { 178, 190, 206 },   -- grey
+    },
+    RankColourDefault = { 214, 224, 238 },
+
+    -- Distance fade. Full strength until FadeStart (a fraction of MaxDistance),
+    -- easing to FadeFloor at the edge. Never 0: a tape that disappears before
+    -- the officer does reads as a bug rather than as distance.
+    FadeStart = 0.55,
+    FadeFloor = 0.35,
 
     -- Draw your OWN tape. Left ON so David can verify the feature solo, and
     -- because seeing your own tape is how a player learns the number exists.
