@@ -25,10 +25,10 @@ What is already done and committed in this repo:
   - `server_base` — startup banner, `playerConnecting` join logger,
     `/serverinfo` command, ACE-gated `/coords` admin command, ox_lib
     welcome notification wired to `QBCore:Client:OnPlayerLoaded`.
-  - `server_identity` — dark-themed self-contained loading screen
-    (HTML + CSS, no external assets), default spawn handler placing
-    characters at Legion Square (`vector4(195.17, -933.77, 30.69,
-    144.0)`), Discord rich presence with placeholder app id.
+  - `server_identity` — Palm6-branded loading screen (logo, socials, staff,
+    tips, rules, optional music via `html/config.js`), default spawn at
+    Legion Square (`vector4(195.17, -933.77, 30.69, 144.0)`), Discord rich
+    presence with placeholder app id (skipped until a real id is set).
 - **Config entry point.** `custom.cfg` ensures both custom resources in
   load order and grants `command.coords` to `group.admin`. The recipe's
   `server.cfg` is expected to `exec custom.cfg` at the bottom.

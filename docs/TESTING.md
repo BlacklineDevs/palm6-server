@@ -68,13 +68,15 @@ tester:
 
 - [ ] Dark loading screen appears on join (owned by `server_identity`).
 - [ ] Loading screen shows the Palm6 logo + server name overlay.
-- [ ] Discord social icon opens the invite; other socials stay hidden until
+- [ ] Live progress fraction shows a percentage above the bar (also in
+      `loading.html#preview`).
+- [ ] Discord and website social icons open; other socials stay hidden until
       enabled in `server_identity/html/config.js`.
 - [ ] Staff team panel lists names/roles from `config.js` and can toggle.
-- [ ] Rules panel lists city rules from `config.js` (starts collapsed) and can toggle.
-- [ ] Tips rotate under the progress bar (from `config.js` tips.items).
+- [ ] Rules / Staff / News / Keys / Gallery panels open from the dock (hotkeys
+      `1`–`5`, `Esc` closes).
 - [ ] Optional local check: open `server_identity/html/loading.html#preview`
-      in a browser — logo/socials/staff/rules/tips render and the bar animates.
+      in a browser — logo/socials/panels/tips/gallery render and the bar animates.
 - [ ] Music player stays hidden while `music.enabled` is false; when enabled,
       mute/volume/Space toggle work without console errors.
 - [ ] Multichar UI shows **2** character slots (`qbx:multichar_slots`).

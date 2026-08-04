@@ -11,9 +11,12 @@
 -- Discord rich presence
 -- ---------------------------------------------------------------------------
 local function applyDiscordPresence()
-    if not Config.DiscordAppId or Config.DiscordAppId == '' then return end
+    local appId = Config.DiscordAppId
+    if not appId or appId == '' or appId == '0000000000000000000' then
+        return
+    end
     Game.ApplyDiscordPresence(
-        Config.DiscordAppId,
+        appId,
         ('%s — %s'):format(Config.ServerName, Config.DiscordPresenceText)
     )
 end

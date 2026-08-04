@@ -25,7 +25,7 @@ These are the standing gaps between "shipped to prod" and "ready for outside pla
 ## §1 — New player's first 5 minutes (what a tester experiences)
 
 1. **Connect** → Palm6 branded loading screen (`server_identity`) with logo,
-   Discord/socials, staff panel, and a live progress bar.
+   Discord/website links, staff panel, tips, rules, and a live progress bar.
 2. **Character creation** (qbx multichar) — pick/create a character.
 3. **Mandatory rules dialog** (`palm6_onboarding`) — 5 house rules (RP-first, fear-for-life, NLR, no-exploiting, staff-final). Must accept to continue.
 4. **Starter grant** — **$1500 to bank** + a one-time **starter car** (blista, parked in a public garage) on first-ever join.
@@ -33,7 +33,8 @@ These are the standing gaps between "shipped to prod" and "ready for outside pla
 6. **`/help`** — opens the branded Palm6 NUI command panel (categorized). `/help crime`, `/help leo`, etc. drill in.
 
 **Tester checklist:**
-- [ ] Loading screen shows "Palm6" branding + progress bar
+- [ ] Loading screen shows Palm6 logo, Discord link, staff, tips, and progress %
+- [ ] Rules panel on the loadscreen matches the five house rules (collapsed by default)
 - [ ] Rules dialog appears on first join and blocks until accepted
 - [ ] `/rules` re-shows the rules later
 - [ ] $1500 landed in bank

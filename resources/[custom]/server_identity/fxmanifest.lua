@@ -3,7 +3,7 @@ game 'gta5'
 lua54 'yes'
 
 author 'EvThatGuy'
-version '0.2.0'
+version '0.9.24'
 description 'palm6 server_identity - loading screen, spawn handler, Discord rich presence'
 
 shared_scripts {
@@ -14,6 +14,7 @@ shared_scripts {
 client_scripts {
     'bridge/cl_game.lua',   -- game adapter - must load before client logic
     'client/main.lua',
+    'client/loadscreen.lua',
 }
 
 loadscreen 'html/loading.html'

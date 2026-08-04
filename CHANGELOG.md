@@ -22,6 +22,13 @@ The join screen now carries Palm6 branding beyond the key art and progress bar.
 - Restored missing `html/palm6_screen.jpg`; logo at `html/assets/logo.svg`.
 - Removed unused Lua `LoadingScreenTips` — loadscreen copy is `html/config.js` only.
 - Local QA via `html/loading.html#preview`.
+- Progress percentage above the bar; website social (`palm6rp.com`); rules
+  aligned with `palm6_onboarding` house rules; Discord presence skips the
+  all-zero placeholder App ID.
+- v0.3: live FiveM load-stage status, news + keybinds panels, chapter line,
+  clock, dock hotkeys (`1`–`4` / Esc), color app-icon logo, premium plate.
+- v0.4: gallery panel (`5`), music playlist + skip controls, ambient Ken Burns,
+  progress milestone ticks.
 
 **📣 Public:**
 When you connect, you’ll see the Palm6 logo, a Discord button, staff list,

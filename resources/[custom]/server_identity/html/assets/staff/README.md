@@ -1,7 +1,8 @@
 # Staff avatars
 
-Optional portrait images for the loadscreen roster.
+| File | Person | X |
+|------|--------|---|
+| `evthatguy.jpg` | EvThatGuy | https://x.com/evthatguy |
+| `moderngrindtech.jpg` | David | https://x.com/moderngrindtech |
 
-1. Drop a square image here (e.g. `owner.png`, 256×256+).
-2. In `../config.js`, set that member's `avatar` to `assets/staff/owner.png`.
-3. Restart `server_identity`. Empty `avatar` uses a letter initial instead.
+Replace these files anytime, then restart `server_identity`.

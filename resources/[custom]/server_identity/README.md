@@ -2,25 +2,21 @@
 
 Palm6 identity layer: branded loadscreen, spawn placement, Discord rich presence.
 
-## Loadscreen
+## Loadscreen (v0.9.24)
 
-Edit **[`html/config.js`](html/config.js)** for all player-facing loadscreen content:
+High-tech cinematic chrome matched to the **P6 logo**. Edit [`html/config.js`](html/config.js).
 
-| Key | Purpose |
-|-----|---------|
-| `logo` / `serverName` | System A mark + wordmark |
-| `socials` | Discord / YouTube / TikTok / Facebook / X / GitHub (`enabled` + `url`) |
-| `staff` | Roster (`name`, `role`, optional `avatar` under `assets/staff/`) |
-| `tips` | Rotating lines under the progress bar |
-| `rules` | Compact city-rules panel (starts collapsed) |
-| `music` | Set `enabled: true` and drop an mp3 under `html/assets/music/` |
+| Feature | Notes |
+|---------|--------|
+| Plates | 19-image pool (Discord captures + FiveM stills), shuffled each login |
+| Progress | Shimmer bar, phases, ETA, tip strip |
+| Atmosphere | Soft matte, grain, spotlight, theme picker (P) |
+| Dock | Start · Rules · News · Map · Staff · Jobs · Gallery · Updates · more |
+| Music | Mixkit Bay playlist (legal free stock) — drop-in MP3s supported |
+| Gates | First-visit rules acknowledge; Discord invite count |
 
-Background art: `html/palm6_screen.jpg`. Cursor is on so controls are clickable.
-
-**Local preview:** open `html/loading.html#preview` in a browser (progress bar animates without FiveM).
-
-**Music:** Space toggles play/pause when music is enabled. Autoplay may require a click in CEF.
+**Preview:** `html/loading.html#preview` (hard refresh after edits)
 
 ## Spawn & Discord
 
-Lua config: [`config.lua`](config.lua) — `SpawnPoint`, `DiscordAppId`, presence text.
+[`config.lua`](config.lua) — `SpawnPoint`, `DiscordAppId`.
