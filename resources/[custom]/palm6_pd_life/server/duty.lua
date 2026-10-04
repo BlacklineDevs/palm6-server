@@ -77,12 +77,44 @@ local function releasePost(src, silent)
 end
 
 -- --- take a post -----------------------------------------------------------
+--
+-- WHY THIS HAS A DUTY-DESK GATE AND A RATE LIMIT, when neither did anything on
+-- the day they were added.
+--
+-- `Bridge.SetDuty(src, true)` below makes this an ALTERNATE WAY TO GO ON DUTY,
+-- and being on duty is the gate for MDT, evidence, citations, seizure, blotter,
+-- heat and EMS billing. toggleDuty guards that transition twice (a cooldown and
+-- atDutyPoint); this handler guarded it neither way, so a police-job player could
+-- clock on from anywhere by sending a post id.
+--
+-- It was unreachable when written, twice over: `Config.Rooms` is `{}`, so
+-- isKnownPost always returns nil and this returns at the line above; and
+-- `Config.DutyGate.Enabled` is false, so even reaching SetDuty would buy nothing
+-- that /pdduty does not already allow from anywhere. That is exactly why the
+-- guard goes in now. `Config.DutyGate`'s own comment says to flip it on "once the
+-- room posts are captured in-game", which is the same event that makes this
+-- handler live. The trap and its trigger ship together, and closing it while it
+-- costs nothing is cheaper than remembering to.
+--
+-- The gate is deliberately conditional on the duty TRANSITION, not on manning a
+-- post. An officer who is ALREADY on duty can take a post anywhere, because
+-- nothing is being bypassed -- posts may well end up further from the desk than
+-- DutyGate.MinRadius. Only a call that would CHANGE duty state has to satisfy
+-- the same gate toggleDuty applies.
 RegisterNetEvent('palm6_pd_life:takePost', function(postId)
     local src = source
     local post = isKnownPost(postId)
     if not post then return end
+    if not rl(src, 'takePost', Config.DutyGate.CooldownSec) then return end
     if not Bridge.IsPolice(src) then
         Bridge.Notify(src, 'PD', 'Only police can man a post.', 'error')
+        return
+    end
+    -- Only gate the transition: already-on-duty officers are unaffected.
+    if not Bridge.IsOnDutyPolice(src) and not atDutyPoint(src) then
+        Bridge.Notify(src, 'PD',
+            'You need to be at the station duty desk to clock on. Come to the desk, then man a post.',
+            'error')
         return
     end
     if heldBy[postId] and heldBy[postId] ~= src then
