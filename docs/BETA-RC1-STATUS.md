@@ -221,6 +221,119 @@ Exact order. Steps 1 and 2 are not optional.
 
 ---
 
+## Police / DOJ / EMS stack
+
+Audited as a system on 2026-10-04. The money paths are sound; the problems are
+**duplicate sources of truth that disagree on screen**, and documentation that
+would mislead a tester.
+
+### Fixed this pass
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| `/record [citizenid]` left **no trace** when one citizen read another's criminal history. The only gate is `IsOnDutyLawyer`, and the resource's own README concedes the lawyer job is one any player can take. It was the only record read in the stack with no audit, while `palm6_mdt` audits both its writes and `/sentence` audits its own reads in the same file | **P1** | **FIXED (`657cdb6`)** — audited through the existing `palm6_staff` sink. Logged rather than rate-limited: a budget throttles casework without stopping a patient attacker |
+| `palm6_pd_life:takePost` was an unguarded second duty-transition path (`SetDuty(src, true)` with no `atDutyPoint` and no rate limit, while `toggleDuty` has both) | **P2 latent** | **FIXED (`657cdb6`)** — gate is conditional on the duty *transition*, so an already-on-duty officer can man a post anywhere. Unreachable today (`Config.Rooms = {}`) but its trigger ships with it |
+
+### Open: wanted state is stored four times and two surfaces contradict each other
+
+**P1, and a player can see it.** `palm6_mdt_warrants` is authoritative.
+`palm6_wanted` re-queries it raw rather than calling `HasActiveWarrant`.
+`palm6_citations` marks a fine `escalated` **before** issuing the warrant and
+keeps the mark when `IssueWarrant` returns nil, which it does on three paths.
+
+So a citizen can end up with `status='escalated'`, `warrant_id = NULL` and zero
+warrant rows, at which point:
+
+- `/fines` says **"OVERDUE — WARRANT OUT"**
+- `/priors` says **"OVERDUE, WARRANT OUT"**
+- `/amiwanted` says **"You are clean. No active warrants, bounties or BOLOs."**
+- `/warrants` and the MDT show nothing
+
+Separately, a bounty with no warrant puts a citizen top of the public `/wanted`
+board while every officer tool reads clean, because no MDT surface knows bounties
+exist. Fixing this is a design decision about which store wins, so it is recorded
+rather than patched.
+
+### Open: evidence still renders as raw JSON to officers
+
+**P2, and the fix is low-risk.** `palm6_evidence` json-encodes table payloads into
+the free-text `description` column, and **none of the three render paths decodes
+it**. Real table-payload writers include `palm6_mdt` itself, `palm6_chopshop`,
+`palm6_counterfeit`, `palm6_insurance` and `palm6_drugs`, so a detective running
+`/evidence case 7` reads lines like
+`- [fact] palm6_counterfeit — {"serial":"…","hop":2,"from_citizenid":"ABC12345"}`.
+`palm6_mdt` then truncates it mid-JSON at 100 chars. Only `palm6_witnesses` reads
+correctly, because it humanises *before* writing.
+
+Ready-to-apply fix, not done here because it touches three render sites and is
+presentation rather than correctness: one pure helper (try `json.decode`; on a
+table emit `key: value`; otherwise pass the string through unchanged) applied at
+`palm6_evidence/server/main.lua:545` and `:645` and `palm6_mdt/server/main.lua:275`.
+No schema, export-signature or write-path change, and prose rows fall through
+untouched. Apply the `palm6_mdt` trim **after** formatting.
+
+### Open: EMS billing is unbounded in aggregate
+
+A medic types the amount as a chat argument. It is capped **per bill** at $50-$5000
+(a reject, not a clamp) and everything else is server-authoritative: target is a
+server id mapped server-side, both positions are read off server peds, self-billing
+is blocked, 8 m proximity. But there is **no per-patient cap, no outstanding-total
+cap and no per-shift quota**, and the budget allows 10 per minute, so a medic can
+impose **$30,000/min of permanent unconsented debt** on one citizen. There is no
+accept/decline prompt.
+
+The debt is also unenforceable: `GetOpenFor` has **zero call sites repo-wide**, so
+unpaid EMS debt has no consequence of any kind. **Not a mint** — the money goes to
+the `ambulance` society account, not the medic, so it destroys player-side money
+rather than creating it.
+
+### Open: documentation would mislead a tester
+
+Roughly 30 doc-vs-runtime mismatches. The ones that matter for a beta:
+
+| Claim | Reality |
+|---|---|
+| `/help` says *"Each entry was confirmed against a real `RegisterCommand` call"* | False for `/witnesses` and 3 of 5 EMS rows |
+| `/cite [id] [offense]` (in `/help` **and** `BETA-TEST.md`) | Takes `[citizenid\|serverid] [amount] [reason]`. **Following the documented form fails.** The README is correct |
+| `/emsbill [id] [amount]` | A 5-140 char `reason` is **mandatory** |
+| `/witnesses` *"(on-duty police)"* | ACE-restricted, admin/mod only. An on-duty officer gets access-denied |
+| `/mdt`, `/warrant`, `/book`, `/calls` *"(on-duty police)"* | **Also require the `mdt_tablet` item** |
+| `/expunge` *"(on-duty lawyer)"* | **Any citizen may expunge their own booking.** Omits courthouse proximity, 168 h age, no-warrant, no-open-citations, and the $2,500 fee |
+| `/treat` *"Treat a patient"* | Writes a log row. Does **not** revive, heal or change health state |
+| `/blotter` *"Weekly"* | 24 h window. The weekly digest is off |
+| `palm6_mdt` *"server-only, no client script at all"* | Has a client NUI that performs warrant and BOLO **clears** |
+| `palm6_mdt` charge catalogue *"SHIPS OFF"* | `Config.Charges.Enabled = true` |
+| `palm6_witnesses` `FirePoliceAlerts` *"defaults OFF"* (config prose, header, **and the boot banner**) | **`= true`**. Only the README is right |
+| `palm6_yard` jail persistence (README **and** `sql/0047`) | `Bridge.PersistJailMinutes` is an unconditional `return true` no-op |
+| `palm6_seizure` `Config.PayOfficer = false` *"so police can't farm dirty money"* | The constant is read **nowhere**. Setting it true does nothing |
+| `palm6_insignia` README says chest tape throughout | Config anchors it **above the head** |
+| `palm6_uniform` CHECKLIST sends David to the duty point to verify the wardrobe | A 4th, higher-priority `Config.Wardrobe.Coords` wins, ~13.6 m away |
+| `palm6_bounty` board *"Alta St"* | Mission Row front entrance. Its 4 `file:line` citations all point at unrelated code |
+| **51 registered commands are absent from `/help`** | Including `/id`, the only way to learn a citizenid, which three documented commands require |
+
+`palm6_ems`, `palm6_pd_life`, `palm6_rapsheet`, `palm6_wanted` and `palm6_blotter`
+have **no README at all**. For `palm6_ems`, the money-handling one, the only
+player-facing description is the `/help` entry that is wrong on 3 of 5 commands.
+
+### Other open items worth naming
+
+- **No command in the stack checks a job GRADE.** `qbx_police_overrides` defines
+  Cadet through Chief; a Cadet has identical warrant, booking, BOLO and seizure
+  authority to the Chief.
+- **Warrant drops are unaudited on both paths** (`/warrantclear` and the NUI
+  clear), while warrant *issues* are audited. Cancellation is the half that is not.
+- `palm6_mdt_bookings.custody_status` / `released_at` have **zero readers and zero
+  writers** repo-wide, so every booking reads `housed` forever. Harmless now
+  because nothing renders it; if the intended out-of-repo `/ops` board is built
+  against these columns it will report every citizen ever booked as in custody.
+- `palm6_replay` writes evidence with a raw INSERT and **no `case_id`**, so the
+  "REPLAY EXHIBIT" its README promises is attached to no case and never appears in
+  `/evidence case` or `/mdtcase`.
+- `/expunge` is a booking-existence and foreign-ownership **oracle**: the "no such
+  booking" message fires before the authorisation message.
+
+---
+
 ## Allowlist: the single recommended RC1 configuration
 
 `palm6_allowlist` has **two independent admit paths, OR-matched**, and the order is

@@ -115,7 +115,15 @@ Run these roughly in map order so the operator crosses the city once. Each row: 
 
 ### Law enforcement (needs police job / duty)
 - [ ] `/mdt` opens MDT; `/bolo`, `/bolos`, `/warrant <id>`, `/warrants`, `/book <id> <charges>`, `/calls`
-- [ ] `/cite <id> <offense>`, `/priors <id>`, `/blotter`
+- [ ] `/cite <citizenid|serverid> <amount> <reason>` ⚠️ **corrected 2026-10-04** — this line
+      previously read `/cite <id> <offense>`, which is **not a valid invocation**: `amount` is
+      argument 2 and `reason` is argument 3 onward, both required and both length/range
+      validated (`palm6_citations/server/main.lua:146-151`). A tester following the old form
+      got a validation refusal and would reasonably have logged it as a broken command. The
+      same wrong form is still in `palm6_help` (`/help` in game) and is tracked in
+      `docs/BETA-RC1-STATUS.md`. Also note `/cite` requires the `mdt_tablet` item, which no
+      documentation mentioned.
+- [ ] `/priors <id>`, `/blotter` (`/blotter` is a **24h** window, not weekly)
 - [ ] `/evidence`, `/casenew`, `/witnesses`, `/bodycam`
 - [ ] `/seizedirty` (forfeit dirty money from a nearby suspect)
 - [ ] Lawyer: `/expunge <booking>`
