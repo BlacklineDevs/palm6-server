@@ -257,7 +257,7 @@ rather than patched.
 
 ### FIXED: evidence rendered as raw JSON to officers
 
-**P2. Fixed (`a1f0c9d`).** `palm6_evidence` json-encodes table payloads into the
+**P2. Fixed (`9662ad8`).** `palm6_evidence` json-encodes table payloads into the
 free-text `description` column, and **none of the three render paths decoded it**.
 Table-payload writers include `palm6_mdt` itself, `palm6_chopshop`,
 `palm6_counterfeit`, `palm6_insurance` and `palm6_drugs`, so this was the common
