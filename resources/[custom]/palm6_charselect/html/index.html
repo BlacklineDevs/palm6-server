@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Palm6 - Character Select</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="overlay" class="overlay" aria-hidden="true">
+
+    <!-- Top bar: brand left, screen title centre, slot counter right. -->
+    <header class="topbar">
+      <div class="brand-mark">
+        <span class="brand-word">PALM<span class="brand-six">6</span></span>
+      </div>
+      <div class="topbar__title">Character Selection</div>
+      <div class="topbar__slots"><span id="slotCount"></span></div>
+    </header>
+
+    <!-- Three columns. The CENTRE IS DELIBERATELY EMPTY and pointer-events:
+         none — that is the hole the character ped renders through, since this
+         page is a transparent CEF surface over the live game view. Filling it
+         is the mistake the previous layout made: it put a row of cards exactly
+         where the character should be standing. -->
+    <div class="stage">
+
+      <aside class="rail rail--roster">
+        <div class="rail__head">Your Characters</div>
+        <div id="charList" class="char-list" role="listbox" aria-label="Your characters"></div>
+        <button id="createBtn" class="btn btn--ghost btn--block" type="button">
+          <span class="btn__plus" aria-hidden="true">+</span> New Character
+        </button>
+      </aside>
+
+      <div class="ped-slot">
+        <!-- Shown ONLY when no live ped could be placed: the degrade path. -->
+        <div id="pedFallback" class="ped-fallback" hidden>
+          <div id="fallbackInitials" class="ped-fallback__medallion"></div>
+          <div class="ped-fallback__note">No saved appearance</div>
+        </div>
+
+        <div id="nameplate" class="nameplate" hidden>
+          <div id="npName" class="nameplate__name"></div>
+          <div id="npSub" class="nameplate__sub"></div>
+        </div>
+
+        <div id="loadingState" class="loading-state" hidden>
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <span>Loading characters&hellip;</span>
+        </div>
+      </div>
+
+      <aside class="rail rail--stats">
+        <div class="rail__head">Details</div>
+        <div id="statList" class="stat-list"></div>
+      </aside>
+
+    </div>
+
+    <!-- One primary action, the way every premium select screen ends. -->
+    <footer class="actionbar">
+      <button id="playBtn" class="btn btn--play" type="button" disabled>Play</button>
+      <button id="deleteBtn" class="btn btn--quiet" type="button" hidden>Delete Character</button>
+      <div id="navHint" class="actionbar__hint">&uarr;&darr; browse &middot; Enter to play</div>
+    </footer>
+
+    <div id="errorBanner" class="error-banner" hidden>
+      <span id="errorText"></span>
+    </div>
+
+    <!-- Delete-character confirmation, hidden until a card's delete control is chosen -->
+    <div id="deletePanel" class="create-panel" hidden>
+      <div class="create-panel__inner">
+        <h2 class="create-panel__title">Delete Character?</h2>
+        <p class="delete-panel__body">
+          This removes <strong id="deleteTargetName"></strong> from your character list.
+          Type the first name below to confirm.
+        </p>
+        <label class="field">
+          <span class="field__label">Type "<span id="deleteConfirmWord"></span>" to confirm</span>
+          <input id="deleteConfirmInput" class="field__input" type="text" autocomplete="off" />
+        </label>
+        <div id="deleteError" class="field-error" hidden></div>
+        <div class="create-panel__actions">
+          <button id="deleteCancel" class="btn btn--ghost" type="button">Back</button>
+          <button id="deleteSubmit" class="btn btn--danger" type="button" disabled>Delete Character</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Character creation form, hidden until the "+ New Character" card is chosen -->
+    <div id="createPanel" class="create-panel" hidden>
+      <div class="create-panel__inner">
+        <h2 class="create-panel__title">New Character</h2>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field__label">First Name</span>
+            <input id="fFirstname" class="field__input" type="text" maxlength="24" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span class="field__label">Last Name</span>
+            <input id="fLastname" class="field__input" type="text" maxlength="24" autocomplete="off" />
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field__label">Nationality</span>
+            <select id="fNationality" class="field__input">
+              <option value="American">American</option>
+              <option value="British">British</option>
+              <option value="Canadian">Canadian</option>
+              <option value="Mexican">Mexican</option>
+              <option value="Irish">Irish</option>
+              <option value="Italian">Italian</option>
+              <option value="German">German</option>
+              <option value="French">French</option>
+              <option value="Japanese">Japanese</option>
+              <option value="Korean">Korean</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">Gender</span>
+            <select id="fGender" class="field__input">
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field__label">Date of Birth</span>
+            <input id="fDob" class="field__input" type="date" />
+          </label>
+        </div>
+
+        <div id="createError" class="field-error" hidden></div>
+
+        <div class="create-panel__actions">
+          <button id="createCancel" class="btn btn--ghost" type="button">Back</button>
+          <button id="createSubmit" class="btn btn--gold" type="button">Create Character</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
