@@ -121,6 +121,7 @@ next bot deploy.
 | 6 | `GTARP_DB_*` is read by the bot but documented in no `.env.example`, so the whole PS feature deploys inert while reporting "queued" | `palm6-bot src/lib/gtarp-db.ts` | Open |
 | 7 | The website `(site)` route-group restructure is 40 commits stale; merging as-is leaves `/business` outside the shared layout, shipping with no nav or footer | `palm6-web`, snapshotted on `rescue/uncommitted-2026-10-04` | Must be rebased, not merged |
 | 8 | `LAUNCH-CONFIG.md` documents ~8 of 37 env vars in use. The omission that matters is `FIVEM_STATUS_URL`: without it the site shows "Pre-Launch" forever, even after the server opens, and nothing in the launch checklist says so | `palm6-web` | Open |
+| 9 | **A wanted player can break a police pursuit by walking into a shop**, and **admin spectate silently fails on anyone inside an interior.** `Config.Interiors = true` with `Config.Interior.PublicEntry = true` and `AdminBucketFollow = false`. The config header names both as decisions to make *before* going live; neither was made. Routing-bucket isolation is real, so the pursuing officer cannot follow or see them. Both are inert **only while no interior shell has been captured**, which this repo cannot determine | `palm6_business/shared/config.lua:330,378` | **HUMAN REQUIRED: run `/bizshells`.** If it lists any shell, both are live and #9 is a beta blocker for the police loop |
 
 ---
 
@@ -153,7 +154,11 @@ twice.
 | `palm6_brain` Director `CrimeEnabled` | `true`, throttled 911s gated by `MinOnDutyPolice` | Live and audited. Leave. |
 | `palm6_brain` `PoliceBus.Enabled` | `false` | Yes, keep off. The witness-incident half is an unrequested gameplay change. |
 | `palm6_brain` networked peds | `Enabled = true` but nothing spawns until `/netpedtest` | Armed, inert. Acceptable. |
-| `palm6_business` Phase 1 flags | Not individually audited this pass | **Unknown. Do not flip anything.** |
+| `palm6_business` Phase 0 core | `Config.Enabled = true` | Yes, hardened |
+| `palm6_business` storefronts (1a) | `Config.Phase1Enabled = **true**` since 2026-07-21 (`2dfd572`) | Yes. `docs/GO-LIVE-RUNBOOK.md`'s table said DARK and was stale; the config comment was honest. **Not re-darked:** unlike `palm6_racing` this was a deliberate step in the documented 6-gate sequence, not a forgotten feel-test. |
+| `palm6_business` per-type / manager / lifecycle / robbery | all `false` | Yes, keep dark. Robbery especially: player-vs-player value transfer with no feel-test on record. |
+| `palm6_business` interiors | `Config.Interiors = **true**` | ⚠️ **Two undecided balance calls, see P1 #9.** |
+| `palm6_protection Config.ExtortOwned` | `false` | Yes, keep dark. It is also what keeps the `vinewood` zone error latent. |
 | `palm6_mapeditor`, `object_gizmo`, `palm6_devtest` | Ensured in what deploys to production | **Open question.** ACE-gated per the `command-aces` invariant, but a dev tool reaching prod deserves a deliberate decision. Not changed. |
 
 ---

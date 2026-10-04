@@ -187,6 +187,37 @@ location and an `ox_inventory` shop. Converge them on one captured value.
 
 ---
 
+## 2e. One command that decides a beta blocker: `/bizshells`
+
+Run it. It takes five seconds and it determines whether two live settings are harmless or
+pursuit-breaking.
+
+`Config.Interiors = true`, so enterable business interiors are on. They are **inert until an
+admin has captured at least one shell** with `/bizshell`. `/bizshells` lists what has been
+captured.
+
+| `/bizshells` says | Meaning | Action |
+|---|---|---|
+| No shells captured for any type | Interiors are genuinely inert. The two settings below are pre-launch decisions, not live risks. | Note it and move on |
+| **Any shell captured** | Both settings below are **LIVE** | **Decide both before inviting testers** |
+
+If any shell is captured, these two are in play right now:
+
+1. **`Config.Interior.PublicEntry = true`** means a **wanted player can duck into any enterable
+   shop and vanish from a police pursuit.** Routing-bucket isolation is real, so the chasing
+   officer cannot follow them or even see them. For a beta built around its police loop that
+   ends pursuits, which is worse than it sounds. Fix is either `PublicEntry = false` or gating
+   entry on wanted state.
+2. **`Config.Interior.AdminBucketFollow = false`** means **admin spectate silently fails for
+   anyone inside an interior.** That is exactly the window where you would be trying to observe
+   a griefing report.
+
+**Test it directly if a shell exists:** have the criminal get wanted with police chasing, then
+enter a shop. If the officer loses them completely and cannot follow, that is finding #9
+confirmed and it should be fixed before a founding beta.
+
+---
+
 ## 3. Multiplayer pass (minimum 4 testers)
 
 Run these together, not as four solo sessions. Cross-player interaction is the
@@ -233,6 +264,7 @@ Section 1d drugs:              PASS / FAIL  wall-clip confirmed? Y/N
 Section 2a legion cluster:     decision:
 Section 2b vinewood:           decision:
 Section 2c 4-value cluster:    captured value:
+Section 2e /bizshells:         shells captured? Y / N   <- if Y, decide PublicEntry + AdminBucketFollow
 Section 3 multiplayer:         PASS / FAIL  notes:
 
 Any double payout observed?    Y / N   <- if Y, stop the beta and report
