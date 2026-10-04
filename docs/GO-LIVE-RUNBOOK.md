@@ -12,6 +12,60 @@ auto-start).
 
 ## 0. Current truth: what is LIVE vs what is pending
 
+> ## ⚠️ STATUS 2026-10-04 (Beta RC1 sweep): this document is a PRE-MERGE snapshot
+>
+> **The section below titled "Pending on `feat/defjam-fightclub-phase0` (18 commits, NOT on
+> main)" is stale. That branch IS merged into `main`** (verified with
+> `git branch -r --contains`). The `origin/main @ 994f875` in the next line is also stale;
+> `main` is at `b33ddf6`. Read the table below, not the one further down, for what is
+> actually gated today.
+>
+> **The one row that was materially wrong:** the pending table says Storefronts (Phase 1a)
+> ships **DARK**. `Config.Phase1Enabled` has been **`true`** since 2026-07-21 (`2dfd572`,
+> "ENABLE Phase 1 storefronts (gate 1 of 6, feel-test)"). The config's own comment is honest
+> about this and records the date; it is this runbook table that never caught up.
+>
+> Unlike the `palm6_racing` flag found in the same sweep, this one is **not** a forgotten
+> feel-test: `2dfd572` is a deliberate forward step in the documented 6-gate sequence and the
+> config records its rollback path. **It has NOT been re-darked.** Flipping it off would be as
+> arbitrary as flipping the others on.
+>
+> ### Phase gate readiness, read off the live values on 2026-10-04
+>
+> | Gate | Flag | Value | Safe for RC1? |
+> |---|---|---|---|
+> | Phase 0 core | `Config.Enabled` | **true** | Yes. Hardened, live since before the merge. |
+> | Storefronts (1a) | `Config.Phase1Enabled` | **true** | Yes, with the interiors caveat below. Needs migration `0070`. |
+> | Per-type mechanics (1b) | `Config.PerTypeMechanics` | false | Leave dark. Config states the Phase-0 economy is byte-for-byte unchanged while false and that this only changes numbers, never invariants. No RC1 need. |
+> | Manager role (1c) | `Config.ManagerRole` | false | Leave dark. Needs `0071`. No manager has ever been assigned. |
+> | Transfer / close | `Config.OwnershipLifecycle` | false | Leave dark. Owners are stuck forever while false, which is a known gap but not a beta blocker. |
+> | Register robbery | `Config.Robbery` | false | **Leave dark for RC1.** It is player-vs-player value transfer with no feel-test on record. |
+> | Interiors (1b) | `Config.Interiors` | **true** | ⚠️ **See the two undecided balance calls below.** Needs `0073`. |
+> | Extort owned business | `palm6_protection Config.ExtortOwned` | false | **Leave dark.** It is also what keeps the `vinewood` zone error latent (see `docs/BETA-RC1-STATUS.md`). |
+>
+> All four migrations the live gates reference (`0070`-`0073`) are present in
+> `palm6_dbmigrate/server.lua` and auto-run on boot.
+>
+> ### ⚠️ Two undecided balance calls, both live right now
+>
+> `Config.Interiors = true`, and its own header says these two are decisions to make
+> **before** going live. Neither has been made. Both are inert only while **no interior shell
+> has been captured**, which cannot be checked from this repo:
+>
+> **Run `/bizshells` in game. If it reports any captured shell, both of these are live:**
+>
+> 1. **`Config.Interior.PublicEntry = true`** — a **wanted player can duck into any enterable
+>    shop and vanish from a police pursuit.** Routing-bucket isolation is real, so the pursuing
+>    officer cannot follow or see them. For a beta whose police loop is a headline feature this
+>    is a pursuit-ending exploit, not a balance nitpick. Options in the config: set
+>    `PublicEntry = false`, or gate entry on wanted state.
+> 2. **`Config.Interior.AdminBucketFollow = false`** — **admin spectate silently breaks for any
+>    player inside an interior.** During a beta, that is the window in which you cannot observe
+>    a griefing report.
+>
+> If `/bizshells` reports no shells for any type, interiors are genuinely inert and both
+> reduce to pre-launch decisions. Confirm which, because the two outcomes are very different.
+
 **LIVE in production now (`origin/main` @ `994f875`):**
 - `palm6_business` **core** — `Config.Enabled = true`, the ultracode-hardened
   version. Register / deposit / hire / stock / serve / charge / payroll /

@@ -11,9 +11,22 @@ Config = {}
 
 -- HARD prod gate. Every entry point checks this; ships false = prod-inert (no
 -- organizer NPC, no blips, /startrace refuses). Flip true only to feel-test.
--- TEST TOGGLE 2026-07-20: enabled to feel-test on the live server. Set back to
--- false to re-dark after testing.
-Config.Enabled = true
+--
+-- RE-DARKED 2026-10-04 (Beta RC1 config-drift sweep). It was flipped true on
+-- 2026-07-20 by 0beca8d, whose own subject line reads "enable palm6_racing for
+-- live feel-test (revert to dark after)", and the revert never happened. For
+-- 2.5 months this file said "Ships DARK: Config.Enabled=false" on line 8,
+-- custom.cfg said "Ships DARK (Config.Enabled=false) -> no organizer NPC/blips,
+-- commands refuse" above its ensure, and the value was true. Three statements
+-- of intent against one live value.
+--
+-- Nothing is wrong with the resource; it is Phase 0 and rep-only, so it was
+-- never a money risk. The reason to re-dark it for RC1 is that its meet point
+-- is still an unverified coordinate (Config.Meet below, "VERIFY open spot") and
+-- shipping an organizer NPC and a map blip at an unwalked location is a
+-- guaranteed tester bug report. Flip it back deliberately, after someone stands
+-- on the meet point, not as a leftover from a July afternoon.
+Config.Enabled = false
 
 Config.Debug = false
 

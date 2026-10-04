@@ -74,6 +74,36 @@ module.exports = [
             + 'are foreign (qbx / other-resource) signals, not palm6_* names, and this '
             + 'check only rules on palm6_* names. Nothing to credit.',
     },
+    {
+        check: 'events',
+        key: 'dynamic:resources/[custom]/palm6_radialmenu/client/main.lua',
+        raises: [
+            'palm6_radialmenu:vehicleLock',
+            'palm6_radialmenu:vehicleHood',
+            'palm6_radialmenu:openEmoteMenu',
+            'palm6_radialmenu:showId',
+        ],
+        reason:
+            "RegisterNUICallback('select', ...) dispatches data.event via TriggerEvent/"
+            + 'TriggerServerEvent — the name arrives from the NUI payload, not a literal, '
+            + 'so the scanner cannot read it. It is gated: OpenRadial() walks the freshly-'
+            + 'built tree (client/registry.lua BuildTree()) into a per-open AllowedEvents '
+            + 'set, and the select callback drops any data.event not present in that set '
+            + '(defends against a modified client POSTing straight to the NUI callback '
+            + "endpoint with a forged event name). The four names above are shared/"
+            + "config.lua's shipped example tree leaves (lines 39-47) — the only events "
+            + 'reachable through this dispatcher today.',
+    },
+    {
+        check: 'events',
+        key: 'registered-unraised:palm6_radialmenu:forceClose',
+        reason:
+            "Cross-resource integration point, same shape as registry.lua's "
+            + "palm6_radialmenu:syncJob (v0.1.0: wiring exists, no caller ships yet). "
+            + 'Intended for another resource to TriggerEvent this locally when it needs to '
+            + 'force the menu shut (e.g. a cuffing resource) — nothing in this repo needs '
+            + 'that today, so nothing raises it yet.',
+    },
 
     // -----------------------------------------------------------------------
     // eventguard: a budget whose event is not RegisterNetEvent'd anywhere in

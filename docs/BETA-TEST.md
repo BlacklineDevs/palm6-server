@@ -6,6 +6,34 @@
 
 > This is an internal ops doc. The player-facing command reference is in-game via `/help` (and `/help <topic>`); it is the source of truth and is reproduced condensed in §7.
 
+> ## ⚠️ Status of this document as of 2026-10-04
+>
+> **The header above is stale.** "Live as of 2026-07-13, 53 `palm6_*` resources" describes
+> a July box. `custom.cfg` now has **87 ensures across 89 resource directories**, and three
+> resources that did not exist in July (`palm6_charselect`, `palm6_appearance`,
+> `palm6_radialmenu`) are in the character and spawn path.
+>
+> **The 52 unchecked boxes below are not a to-do list and must not be read as test
+> results.** None of them has been re-run. An unchecked box here means "nobody has
+> confirmed this since July", not "this is known broken", and ticking one because the
+> code looks right is exactly the mistake this document is for avoiding.
+>
+> For RC1, these two documents supersede the checkboxes and classify every gate as
+> **AUTO PASS / HUMAN REQUIRED / FAIL / DEFERRED**:
+>
+> - **`docs/BETA-RC1-STATUS.md`** - what passes automatically, what needs a human, what is
+>   still open, and the explicit list of dark features.
+> - **`docs/BETA-RC1-WALK-LIST.md`** - the in-game route, with exact `/p6tp` commands and
+>   pass criteria per step. Run that, not the boxes below.
+>
+> What is already **AUTO PASS** and does not need a human: all 8 repo invariants
+> (`node tools/audit/run.js`, self-test verified), 1499 Lua unit assertions, and the
+> loadscreen media check (all 19 plates and 6 music tracks are tracked; the animated
+> background and logo are intentionally blank, not missing).
+>
+> §0.1 (server-browser name) is still accurate and still owed by David. §0.2 (7 owed item
+> icons) is **resolved** and its row is corrected: they shipped and uploaded on 2026-07-14.
+
 ---
 
 ## §0 — Operator pre-flight (do these BEFORE inviting testers)
@@ -15,8 +43,8 @@ These are the standing gaps between "shipped to prod" and "ready for outside pla
 | # | Gap | Owner | Action | Blocks beta? |
 |---|-----|-------|--------|--------------|
 | 0.1 | **Server-browser name still `palm6 — Qbox RP`** (not "Palm6"). Not set in the repo — it lives in the panel-managed `server.cfg`. | David (panel) | RocketNode panel → server.cfg → set `sv_projectName "Palm6"` and `sv_hostname` to the branded name, restart. | Cosmetic, but first impression |
-| 0.2 | **7 new item icons blank** (PNGs owed). See §5 manifest. | David (generate in ChatGPT) | Drop PNGs into `ox_inventory/web/images/`, re-deploy. | No — items work, just show the placeholder box |
-| 0.3 | **Starter-vehicle garage name unconfirmed.** `palm6_onboarding` grants a `blista` into garage `motelgarage`. If that garage name doesn't exist in the deployed `qbx_garages`, new players get the $1500 cash but the car silently no-ops. | Operator (in-game) | Onboard a fresh character, confirm the starter car is retrievable from a garage. If not, set `Config.StarterVehicle.garage` to a real garage name. | Yes — new players stranded without a car |
+| 0.2 | ~~**7 new item icons blank** (PNGs owed).~~ ✅ **DONE 2026-07-14, nothing is owed.** All 7 PNGs are in `assets/ox_icons/` (committed `e00c206`), every basename matches a real item key in `ox_inventory_overrides/data/items.lua` (which is what ox requires, since it serves `web/images/<itemname>.png`), and the `palm6-upload-icons.yml` workflow ran on that exact sha and **succeeded**. Verified 2026-10-04. Their filesystem timestamps read 2026-07-22, which is a checkout artifact, not a content change: `git log` shows exactly one commit has ever touched them. | Nobody | Nothing. If an icon still shows a placeholder box in game, the box was re-provisioned since July: re-dispatch `palm6-upload-icons.yml`. | No |
+| 0.3 | **Starter-vehicle garage name unconfirmed.** ⚠️ **This row understated the failure and that is why it read as harmless for two months.** It said the car "silently no-ops" if the garage name is wrong. It did not no-op. `qbx_vehicles:CreatePlayerVehicle` writes the garage string without validating it, so a wrong name still created an owned car, still returned success, still set `starter_vehicle_granted = 1`, and still told the player "Your starter vehicle is parked at the motel garage" -- for a car in a garage no door opens. The once-per-citizen guard then made it unrepeatable. **Fixed 2026-10-04 (`900b186`):** the garage is resolved before granting, the flag is claimed before the car is created and released if creation fails, and a deferred grant is retried on a later load. The name is still operator-verified, but getting it wrong is now visible at boot and reversible instead of silent and permanent. | Operator (in-game) | Follow `docs/BETA-RC1-WALK-LIST.md` §0. Read the boot banner line, then set `palm6:onboarding_garage "<real name>"` in `server.cfg` if needed -- **no code deploy required**. | Was yes. Now no: nothing is burned while it is wrong |
 | 0.4 | **Allowlist/whitelist mode for beta.** `palm6_allowlist` does role-OR-license gating; txAdmin whitelist must stay `disabled` or joins double-gate. | David | Decide open vs closed beta; if closed, seed the allowlist with tester identifiers. | Depends on beta model |
 | 0.5 | **Placeholder coords un-walked.** ~8 systems still sit on round-number placeholder coordinates (§3). Verify/retune in the §2 pass. | Operator (in-game) | Walk each §3 POI; retune any that float/clip/are unreachable. | Yes for those systems |
 
@@ -87,7 +115,15 @@ Run these roughly in map order so the operator crosses the city once. Each row: 
 
 ### Law enforcement (needs police job / duty)
 - [ ] `/mdt` opens MDT; `/bolo`, `/bolos`, `/warrant <id>`, `/warrants`, `/book <id> <charges>`, `/calls`
-- [ ] `/cite <id> <offense>`, `/priors <id>`, `/blotter`
+- [ ] `/cite <citizenid|serverid> <amount> <reason>` ⚠️ **corrected 2026-10-04** — this line
+      previously read `/cite <id> <offense>`, which is **not a valid invocation**: `amount` is
+      argument 2 and `reason` is argument 3 onward, both required and both length/range
+      validated (`palm6_citations/server/main.lua:146-151`). A tester following the old form
+      got a validation refusal and would reasonably have logged it as a broken command. The
+      same wrong form is still in `palm6_help` (`/help` in game) and is tracked in
+      `docs/BETA-RC1-STATUS.md`. Also note `/cite` requires the `mdt_tablet` item, which no
+      documentation mentioned.
+- [ ] `/priors <id>`, `/blotter` (`/blotter` is a **24h** window, not weekly)
 - [ ] `/evidence`, `/casenew`, `/witnesses`, `/bodycam`
 - [ ] `/seizedirty` (forfeit dirty money from a nearby suspect)
 - [ ] Lawyer: `/expunge <booking>`

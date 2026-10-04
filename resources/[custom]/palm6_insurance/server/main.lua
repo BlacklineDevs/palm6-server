@@ -18,6 +18,28 @@
 local lastAction = {}   -- [src] = { [key] = ts } per-source rate limits
 local lastClaim = {}    -- [citizenid] = ts; in-memory, resets on restart (repeat-claim scoring covers the gap)
 
+-- Can a claimed policy actually be retired? true / false / nil (unverified).
+-- Set at boot by ensureSchema(), which reads the real enum out of
+-- information_schema instead of assuming the sql/0065 MODIFY landed. Declared up
+-- here because cmdFileClaim needs it and sits above ensureSchema in this file.
+-- See the long note at the end of ensureSchema for why a false here is a money
+-- faucet and not a cosmetic schema nit.
+local RetireOk = nil
+
+-- Has the probe RUN yet, independently of what it concluded. These are two
+-- different questions and the first version of this guard conflated them into
+-- one nil, which left a hole: ensureSchema runs on a CreateThread after
+-- Wait(3000) (oxmysql needs to connect first), so for the first ~3 seconds
+-- RetireOk is nil and a nil was treated as "allow". On a full server start
+-- nobody is connected yet, but on a bare `restart palm6_insurance` with players
+-- in the city, a claim filed inside that window would skip the check entirely.
+--
+-- Refusing for three seconds after a restart costs a player one retry. Allowing a
+-- claim that cannot retire its policy costs an unbounded number of payouts, which
+-- is the whole reason this guard exists. So: unprobed refuses, and only a probe
+-- that RAN and came back inconclusive is allowed to fail open.
+local RetireProbed = false
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -398,6 +420,30 @@ local function cmdFileClaim(src, args)
         return
     end
 
+    -- Refuse BEFORE filing if the policy cannot be retired afterwards. Order
+    -- matters: the retire below is what makes this one-payout-per-policy, and it
+    -- runs AFTER the INSERT. Filing first and discovering the retire is broken
+    -- second is precisely the faucet (claim filed, policy still 'active',
+    -- re-claimable). A refusal costs one player one claim; the alternative costs
+    -- an unbounded number of payouts. nil (unverified) deliberately does NOT
+    -- refuse -- see ensureSchema.
+    if not RetireProbed then
+        -- The boot probe has not run yet (ensureSchema waits 3s for oxmysql).
+        -- Refuse rather than skip the check: this only happens in the first few
+        -- seconds after a resource restart, and the player can simply retry.
+        Bridge.Notify(src, 'Mors Mutual',
+            'The claims desk is still opening. Try again in a moment.', 'error')
+        return
+    end
+    if RetireOk == false then
+        Bridge.Notify(src, 'Mors Mutual',
+            'Claims are temporarily closed for maintenance. Nothing was filed and your policy is untouched.',
+            'error')
+        print(('^1[palm6_insurance] REFUSED a %s claim from %s: policy retirement is broken ' ..
+               "(status enum lacks 'claimed'). See the boot banner.^0"):format(kind, cid))
+        return
+    end
+
     local ok, claimId = pcall(function()
         return MySQL.insert.await([[
             INSERT INTO palm6_insurance_claims
@@ -414,11 +460,36 @@ local function cmdFileClaim(src, args)
 
     -- Retire the policy so activePolicy() (which filters status = 'active')
     -- can never re-select it: one payout per policy, matching Mors Mutual.
-    pcall(function()
-        MySQL.update.await(
+    --
+    -- The result is CHECKED now. It used to be a bare pcall whose return nothing
+    -- read, which meant the single guard making this one-payout-per-policy could
+    -- fail and leave no trace at all. The RetireOk probe at boot catches the
+    -- known cause (the enum lacking 'claimed'); this catches every other one,
+    -- including a cause that appears between boot and now.
+    local retired = false
+    local rok = pcall(function()
+        local affected = MySQL.update.await(
             "UPDATE palm6_insurance_policies SET status = 'claimed' WHERE id = ? AND status = 'active'",
             { policy.id })
+        retired = (tonumber(affected) or 0) == 1
     end)
+    if not rok or not retired then
+        -- The claim is already filed and will pay. Do not try to unwind it; a
+        -- half-reversed payout is worse than a logged one. Make it loud instead,
+        -- and stop the NEXT one by latching the flag that gates filing.
+        RetireOk = false
+        print(('^1[palm6_insurance] policy %s was NOT retired after a %s claim by %s ' ..
+               '(update %s). That policy is still ACTIVE and re-claimable, and this claim ' ..
+               'will still pay. Claims are now DISABLED to stop a repeat. Retire it by hand: ' ..
+               "UPDATE palm6_insurance_policies SET status = 'claimed' WHERE id = %s;^0"):format(
+            tostring(policy.id), tostring(kind), tostring(cid),
+            rok and 'affected 0 rows' or 'threw', tostring(policy.id)))
+        if Bridge.ResourceStarted('palm6_staff') then
+            pcall(function()
+                exports.palm6_staff:Log('insurance_policy_not_retired', src, nil, cid)
+            end)
+        end
+    end
 
     -- Consume the asset on a write-off. A theft or total-loss claim means the
     -- vehicle is GONE — retire the player_vehicles ownership row so the owner
@@ -778,6 +849,64 @@ ALTER TABLE `palm6_insurance_claims`
             print(('^3[palm6_insurance] column self-heal skipped (%s) -> %s. Apply it by hand if tiers, policy retirement, or claim payout recovery misbehave.^0')
                 :format(a.file, tostring(err)))
         end
+    end
+
+    -- VERIFY the 0065 MODIFY actually took, rather than trusting that it did.
+    --
+    -- Why this is not paranoia. The one-payout-per-policy guard is the retire in
+    -- cmdFileClaim: UPDATE ... SET status = 'claimed' WHERE id = ? AND status =
+    -- 'active'. Both CREATE bodies in this repo (sql/0021 and the one above,
+    -- which is a verbatim copy of it) declare the column as
+    -- ENUM('active','lapsed','cancelled') -- WITHOUT 'claimed'. Only the 0065
+    -- MODIFY adds it. So on every box the allowed values depend entirely on that
+    -- one ALTER having succeeded.
+    --
+    -- If it did not, the failure is silent and expensive: under
+    -- STRICT_TRANS_TABLES (the MariaDB/MySQL prod default) writing an
+    -- out-of-range ENUM is a hard error, the retire is inside a bare pcall whose
+    -- result nothing reads, the policy stays 'active', and the claim has ALREADY
+    -- been filed by then. A damage claim keeps the car, so the same policy can be
+    -- re-filed indefinitely. Capped per claim by DamagePayoutVsPremiumPct, so it
+    -- is a slow faucet rather than an instant one, which is exactly the kind that
+    -- survives a beta unnoticed.
+    --
+    -- The ALTER loop above only prints ^3 and continues. Reasons it can fail that
+    -- have nothing to do with engine syntax: the DB user lacks ALTER privilege
+    -- (the most likely one, and no test can catch it because tests run as the
+    -- owner), the table is locked, or the enum was hand-edited. MODIFY COLUMN is
+    -- portable, so unlike its MariaDB-only neighbours a failure here is a real
+    -- signal and not expected noise.
+    --
+    -- Reads information_schema rather than attempting a write, so this verifies
+    -- without mutating anything.
+    local col
+    local probed = pcall(function()
+        local r = MySQL.single.await([[
+            SELECT COLUMN_TYPE AS t FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'palm6_insurance_policies'
+              AND COLUMN_NAME = 'status']])
+        col = r and r.t or nil
+    end)
+    RetireProbed = true   -- the probe RAN; the branches below say what it concluded
+    if not probed or not col then
+        -- Cannot tell. Do NOT fail closed on an inconclusive probe: that would
+        -- disable claims on a perfectly healthy box whose user cannot read
+        -- information_schema. Say so instead.
+        RetireOk = nil
+        print('^3[palm6_insurance] could not verify the policy status enum (information_schema ' ..
+              'unreadable). Claims stay ENABLED. If policy retirement is broken, a damage claim ' ..
+              'can be re-filed on one policy -- confirm by hand that palm6_insurance_policies.status ' ..
+              "includes 'claimed'.^0")
+    elseif tostring(col):find('claimed', 1, true) then
+        RetireOk = true
+    else
+        RetireOk = false
+        print(('^1[palm6_insurance] POLICY RETIREMENT IS BROKEN: status enum is %s and does not ' ..
+               "allow 'claimed', so each claim would leave its policy ACTIVE and re-claimable. " ..
+               'CLAIMS ARE DISABLED until this is fixed. Apply ' ..
+               'sql/0065_insurance_status_claimed.sql (or grant the server DB user ALTER on ' ..
+               'palm6_insurance_policies and restart).^0'):format(tostring(col)))
     end
 end
 

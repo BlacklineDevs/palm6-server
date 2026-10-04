@@ -1,0 +1,307 @@
+/*
+  palm6_radialmenu — html/style.css
+
+  This is a 2D HUD overlay, not a 3D scene. The only thing this menu syncs to is cursor
+  position, not GetGameplayCamCoords/etc — no camera native calls belong anywhere in
+  palm6_radialmenu, including bridge/cl_game.lua. "Camera-synced transitions" language
+  from any brief belongs to a separate, out-of-scope orbit-camera/appearance pattern.
+
+  No build step, vanilla CSS only, no framework. Single dark theme — the surveyed PALM6
+  brand tokens have no light-mode branch anywhere in the repo, so this resource stays
+  dark-only on purpose.
+*/
+
+:root {
+  --p6-night: #07101a;
+  --p6-navy: #0b1824;
+  --p6-surface: rgba(7, 14, 23, 0.92);
+  --p6-surface-soft: rgba(13, 25, 37, 0.82);
+
+  --p6-gold: #d6a950;
+  --p6-gold-bright: #f0d28b;
+  --p6-gold-dark: #8f672a;
+
+  --p6-cyan: #46c9ff;
+  --p6-text: #f5f0e5;
+  --p6-muted: #96a5b2;
+
+  --accent: #d6a950;
+  --accent-rgb: 214, 169, 80;
+
+  --panel-radius: 18px;
+
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Arial, sans-serif;
+
+  /* radial-specific, this resource only */
+  /* vmin so it holds proportion at any FiveM aspect ratio.
+     The 340px FLOOR is what stops the ring from shrinking so far that the SVG
+     text becomes unreadable: the labels live inside the viewBox, so they scale
+     with it. Measured: at 42vmin the ring was 302px on a 1280x720 client, a
+     0.657 scale, rendering the 10.5-unit label at 6.9 real px. The floor holds
+     that at 340px / 0.739 scale, and --radial-label-size below carries the
+     rest. Above ~810px minor dimension the floor never applies. */
+  --radial-size: clamp(340px, 42vmin, 460px);
+  --radial-view: 460;                  /* the SVG viewBox extent, unitless - see --radial-hub-ratio */
+  --radial-inner: 92px;                /* center hub radius / dead zone, in SVG USER UNITS (JS: INNER_R) */
+
+  /* Label size in SVG user units. Scaled up from the original 10.5 so the
+     smallest supported ring still renders it at roughly 10 real px
+     (13.5 * 0.739 = 10.0). At full size it is 13.5px, which is in line with the
+     hub's own type. */
+  --radial-label-size: 13.5px;
+  --radial-wedge-gap: 3deg;            /* symmetric gap subtracted from each wedge's start/end */
+  --radial-ease: cubic-bezier(0.22, 1, 0.36, 1);  /* palm6_ui's motion curve, reused verbatim */
+  --radial-open-ms: 220ms;
+  --radial-close-ms: 180ms;
+  --radial-stagger-ms: 22ms;           /* per-wedge entrance delay multiplier, set inline by JS */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background: transparent !important;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;   /* opts back in per-element, same convention as palm6_ui */
+  color: var(--p6-text);
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--radial-close-ms) var(--radial-ease);
+}
+
+body.is-open #app {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--radial-open-ms) var(--radial-ease);
+}
+
+/* ---------------------------------------------------------------------------------------
+   Wedges — SVG <path> elements, not conic-gradient. Per-wedge hit-testing, icon placement
+   at mid-angle, and independent hover/select state all require a real element per wedge,
+   which a CSS gradient can't provide.
+--------------------------------------------------------------------------------------- */
+
+.radial-root {
+  width: var(--radial-size);
+  height: var(--radial-size);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.radial-wedge {
+  pointer-events: auto;
+  cursor: pointer;
+  animation: p6-wedge-in var(--radial-open-ms) var(--radial-ease) both;
+}
+
+.radial-wedge.is-leaving {
+  animation: p6-wedge-out var(--radial-close-ms) var(--radial-ease) both;
+  /* A LEAVING WEDGE MUST NOT BE CLICKABLE.
+     This rule used to override `animation` and nothing else, so the wedge kept
+     `pointer-events: auto` for the whole 180ms transition - and p6-wedge-out
+     animates opacity (not visibility) and ends at scale(0.85), so it is still
+     under the cursor the entire time. A second click on the same pixel re-hit
+     a level that was already closing: corrupted breadcrumb, dead Back press,
+     or a leaf event fired for a level that no longer exists. The JS guards in
+     activateWedge/onSelect/onBack close the keyboard route; this closes the
+     mouse one. */
+  pointer-events: none;
+}
+
+@keyframes p6-wedge-in {
+  from { opacity: 0; transform: scale(0.85) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes p6-wedge-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.85) translateY(6px); }
+}
+
+.radial-wedge-path {
+  fill: var(--p6-surface-soft);
+  stroke: rgba(var(--accent-rgb), 0.28);
+  stroke-width: 1;
+  transition: fill 120ms var(--radial-ease), stroke 120ms var(--radial-ease);
+  transform-origin: 0 0;
+}
+
+.radial-wedge-icon {
+  color: var(--p6-text);
+  pointer-events: none;
+  transition: color 120ms var(--radial-ease), transform 120ms var(--radial-ease);
+}
+
+.radial-wedge-label {
+  fill: var(--p6-muted);
+  font-size: var(--radial-label-size);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+  transition: fill 120ms var(--radial-ease);
+}
+
+/* state classes — toggled by JS, not by :hover alone, since keyboard nav also needs to
+   drive the same visual state */
+
+.radial-wedge.is-hover .radial-wedge-path {
+  fill: rgba(var(--accent-rgb), 0.22);
+  stroke: var(--p6-gold-bright);
+  stroke-width: 1.4;
+}
+
+.radial-wedge.is-hover .radial-wedge-icon {
+  color: var(--p6-gold-bright);
+  filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.55));
+}
+
+.radial-wedge.is-hover .radial-wedge-label {
+  fill: var(--p6-gold-bright);
+}
+
+.radial-wedge.is-disabled {
+  pointer-events: none;
+  cursor: default;
+}
+
+.radial-wedge.is-disabled .radial-wedge-path {
+  fill: rgba(255, 255, 255, 0.03);
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.radial-wedge.is-disabled .radial-wedge-icon,
+.radial-wedge.is-disabled .radial-wedge-label {
+  color: var(--p6-muted);
+  fill: var(--p6-muted);
+  opacity: 0.5;
+}
+
+/* ~80ms pulse before the leaf fires, so a click reads as a deliberate confirm rather than
+   an instant blip */
+.radial-wedge.is-selecting .radial-wedge-path {
+  fill: rgba(var(--accent-rgb), 0.4);
+  stroke: var(--p6-gold-bright);
+  stroke-width: 1.8;
+}
+
+.radial-wedge.is-selecting .radial-wedge-icon {
+  color: var(--p6-gold-bright);
+  transform: scale(1.12);
+}
+
+/* ---------------------------------------------------------------------------------------
+   Center hub — glassmorphism. This is an HTML <div> (not inside the SVG — CEF's
+   backdrop-filter support on SVG elements is unreliable, an HTML div is not).
+--------------------------------------------------------------------------------------- */
+
+.radial-hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* THE HUB IS AN HTML DIV; THE DEAD ZONE IT COVERS IS SVG USER UNITS.
+     --radial-inner (92) is a viewBox coordinate that the SVG scales along with
+     everything else, but this div was sized in real px at 92*2-8 = 176px, so
+     the two only agreed when the SVG happened to be rendered 1:1 - i.e. when
+     the viewport's minor dimension was at least 1048px. Everywhere else the
+     hub overhung the wedges and drew its gold border across every one of them,
+     occluding each icon's inner edge: 27.5px of overhang at 1280x720, 23.5px
+     at 1366x768, 12.4px at 1600x900, 2.7px of clearance at 1920x1080.
+     Expressed as the ratio it always was (176 / 460 of the ring) it is correct
+     at every size. */
+  width: calc(var(--radial-size) * 176 / var(--radial-view));
+  height: calc(var(--radial-size) * 176 / var(--radial-view));
+  border-radius: 999px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* Proportional too, for the same reason the width is: a fixed 12px each side
+     ate 24 of the 130px the hub is at the 340px floor, versus 24 of 176 at full
+     size. */
+  padding: calc(var(--radial-size) * 12 / var(--radial-view));
+  text-align: center;
+
+  background: linear-gradient(160deg, var(--p6-surface) 0%, var(--p6-surface-soft) 100%);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  box-shadow:
+    0 0 32px rgba(var(--accent-rgb), 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 24px rgba(var(--accent-rgb), 0.08);
+
+  pointer-events: none;
+}
+
+.radial-hub-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--p6-text);
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+.radial-hub-breadcrumb {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--p6-muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* At the root there is no path to show, so the line carries the way out
+   instead. Quieter than a real breadcrumb - it is a hint, not a location. */
+.radial-hub-breadcrumb.is-hint {
+  opacity: 0.55;
+  letter-spacing: 0.12em;
+  font-size: 9px;
+}
+
+/* ---------------------------------------------------------------------------------------
+   Back wedge — same visual language, gold-tinted icon-only wedge appended as the last
+   sector whenever the breadcrumb stack is deeper than the root.
+--------------------------------------------------------------------------------------- */
+
+.radial-wedge.is-back .radial-wedge-path {
+  fill: rgba(70, 201, 255, 0.08);
+  stroke: rgba(70, 201, 255, 0.35);
+}
+
+.radial-wedge.is-back .radial-wedge-icon {
+  color: var(--p6-cyan);
+}
+
+.radial-wedge.is-back.is-hover .radial-wedge-path {
+  fill: rgba(70, 201, 255, 0.22);
+  stroke: var(--p6-cyan);
+}
+
+.radial-wedge.is-back.is-hover .radial-wedge-icon {
+  color: #eaf9ff;
+}

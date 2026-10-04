@@ -58,10 +58,23 @@ Config.StarterCash = {
 --            name in the deployed qbx_garages config; confirm in-game before
 --            enabling in prod. `motelgarage` is the common Qbox central public
 --            garage; override if Palm6 renamed it.
+--
+-- `garageConvar` — set `palm6:onboarding_garage "<name>"` in server.cfg to
+--            override the name below WITHOUT a code deploy. This exists
+--            because the correct value can only be read off the live box, and
+--            a deploy to fix a one-word typo restarts the whole FXServer.
+-- `requireVerifiedGarage` — when true (default), the grant is DEFERRED rather
+--            than performed if the garage cannot be shown to exist. See the
+--            long note on grantStarterVehicle() in server/main.lua: an
+--            unverified grant is not a failed grant, it is a PERMANENT one
+--            into a garage nobody can open. Deferring is reversible; that is
+--            the entire reason this flag defaults to true.
 Config.StarterVehicle = {
     enabled = true,
     model = 'blista',
     garage = 'motelgarage',
+    garageConvar = 'palm6:onboarding_garage',
+    requireVerifiedGarage = true,
     -- Player-facing name for the garage in the tour message (the internal
     -- `garage` key is not friendly). Purely cosmetic.
     garageLabel = 'motel',

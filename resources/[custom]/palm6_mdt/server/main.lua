@@ -272,7 +272,18 @@ local function cmdCase(src, args)
     for _, e in ipairs(c.entries or {}) do
         if shown >= Config.Cases.EntryLines then break end
         shown = shown + 1
+        -- Humanise BEFORE trimming. palm6_evidence stores table payloads as JSON
+        -- in this same free-text column, and trimming first produced a blob cut
+        -- off mid-key at 100 characters -- unreadable twice over. Soft call: if
+        -- palm6_evidence is absent or the export is missing we keep the raw
+        -- value, which is exactly the old behaviour.
         local desc = tostring(e.description or '')
+        if Bridge.ResourceStarted('palm6_evidence') then
+            local okFmt, formatted = pcall(function()
+                return exports.palm6_evidence:FormatEntry(desc)
+            end)
+            if okFmt and type(formatted) == 'string' and formatted ~= '' then desc = formatted end
+        end
         if #desc > Config.Cases.EntryTrim then desc = desc:sub(1, Config.Cases.EntryTrim) .. '…' end
         lines[#lines + 1] = ('[%s/%s] %s'):format(e.kind or 'note', e.source or '?', desc)
     end

@@ -104,13 +104,144 @@ local function alreadyOnboarded(citizenid)
 end
 
 -- ---------------------------------------------------------------------------
+-- Starter vehicle.
+--
+-- THE DEFECT THIS REPLACES. The old inline version asked
+-- Bridge.GiveStarterVehicle for a boolean and treated it as "the player has a
+-- car". It does not mean that. It means qbx_vehicles' CreatePlayerVehicle
+-- returned a row id — and that export writes the `garage` string into the
+-- owned-vehicle row WITHOUT checking it against qbx_garages. So a garage name
+-- that does not exist on the box still produced: a created row, granted=true,
+-- starter_vehicle_granted=1, and the player told "Your starter vehicle is
+-- parked at the motel garage." The car is real, owned, and in a garage no
+-- door opens. And because the once-per-citizen INSERT in acceptRules is the
+-- double-grant guard, that player can NEVER be granted another one.
+--
+-- `motelgarage` was never verified against the deployed qbx_garages — the
+-- config comment next to it says so in as many words ("confirm in-game before
+-- enabling in prod") while the flag above it is already `enabled = true`.
+--
+-- The fix is ordering plus doubt:
+--   1. Resolve the garage first. Only 'present' grants. 'absent' and
+--      'unknown' DEFER (see Config.StarterVehicle.requireVerifiedGarage) —
+--      a deferral is reversible, an unreachable car is not.
+--   2. CLAIM THE FLAG BEFORE CREATING THE CAR, with a conditional UPDATE the
+--      database settles (`AND starter_vehicle_granted = 0`). Only the caller
+--      whose UPDATE reports one affected row proceeds. This is what makes the
+--      retry path below safe to run on every load: two concurrent loads, a
+--      replayed accept and a reconnect mid-grant all lose the claim instead of
+--      producing a second car. Same synchronous-latch-before-yield shape as
+--      palm6_flashdrop's finishCheckout.
+--   3. Release the claim if creation then fails, so it is retried later
+--      rather than burned.
+--
+-- Consequence worth stating plainly: if the additive ALTER never ran (MySQL 8
+-- — see ensureSchema), the claim UPDATE throws, nothing is claimed and NO car
+-- is granted. That is the safe direction. It is reported in the boot banner
+-- rather than left to be discovered as "starter vehicles stopped working".
+-- ---------------------------------------------------------------------------
+local GarageState = 'unknown'   -- resolved at boot and re-resolved per grant
+local VehicleColumnReady = nil  -- nil = unprobed; set by probeVehicleColumn()
+
+local function starterGarageName()
+    local cv = Config.StarterVehicle.garageConvar
+    if cv and cv ~= '' then
+        local override = GetConvar(cv, '')
+        if override ~= '' then return override, true end
+    end
+    return Config.StarterVehicle.garage, false
+end
+
+local function grantStarterVehicle(src, cid)
+    if not cid then return false end
+    local garage, overridden = starterGarageName()
+
+    GarageState = Bridge.ResolveGarage(garage)
+    if GarageState ~= 'present' and Config.StarterVehicle.requireVerifiedGarage then
+        print(('^3[palm6_onboarding] starter vehicle DEFERRED for %s — garage "%s" is %s%s. ' ..
+               'No car was created and nothing was marked granted; it will be retried on a ' ..
+               'later load. Fix with: set %s "<real garage name>" in server.cfg.^0'):format(
+            cid, garage, GarageState,
+            overridden and ' (from the convar override)' or ' (from shared/config.lua)',
+            Config.StarterVehicle.garageConvar or 'palm6:onboarding_garage'))
+        return false
+    end
+
+    -- Claim first. The DB, not this process, decides who wins.
+    local claimed = false
+    local claimErr
+    local ok = pcall(function()
+        local affected = MySQL.update.await(
+            'UPDATE palm6_onboarding SET starter_vehicle_granted = 1 ' ..
+            'WHERE citizenid = ? AND starter_vehicle_granted = 0', { cid })
+        claimed = (tonumber(affected) or 0) == 1
+    end)
+    if not ok then claimErr = true end
+    if claimErr then
+        VehicleColumnReady = false
+        print('^1[palm6_onboarding] starter vehicle claim FAILED — the ' ..
+              'starter_vehicle_granted column is missing (the additive ALTER never ran on ' ..
+              'this box). No car granted. Apply sql/0045_onboarding_starter_grants.sql.^0')
+        return false
+    end
+    if not claimed then return false end -- already granted, or a concurrent caller won
+
+    local created = Bridge.GiveStarterVehicle(cid, Config.StarterVehicle.model, garage)
+    if not created then
+        -- Release, so this is a deferral and not a burned grant.
+        pcall(function()
+            MySQL.update.await(
+                'UPDATE palm6_onboarding SET starter_vehicle_granted = 0 WHERE citizenid = ?',
+                { cid })
+        end)
+        print(('^3[palm6_onboarding] starter vehicle creation failed for %s (qbx_vehicles ' ..
+               'down or refused). Claim released; will retry on a later load.^0'):format(cid))
+        return false
+    end
+
+    if src then
+        Bridge.Notify(src, 'Welcome to Palm6',
+            ('Your starter vehicle is parked at the %s garage.'):format(
+                Config.StarterVehicle.garageLabel or garage),
+            'success')
+    end
+    return true
+end
+
+-- ---------------------------------------------------------------------------
 -- First load (or reconnect) — server decides whether the mandatory prompt
 -- is owed. Nothing here is client-trusted: the DB row is the source of truth.
 -- ---------------------------------------------------------------------------
+-- Already-onboarded citizen who is still owed a starter vehicle (the grant was
+-- deferred because the garage could not be verified, or creation failed). One
+-- indexed read on a column that is 1 for everybody healthy, so this is a cheap
+-- no-op in the normal case.
+local function owesStarterVehicle(citizenid)
+    local row
+    local ok = pcall(function()
+        row = MySQL.single.await(
+            'SELECT id FROM palm6_onboarding ' ..
+            'WHERE citizenid = ? AND starter_vehicle_granted = 0', { citizenid })
+    end)
+    return ok and row ~= nil
+end
+
+-- Retry a deferred grant. Safe to call on every load: grantStarterVehicle
+-- claims the flag conditionally, so a citizen who already has a car loses the
+-- claim and nothing happens.
+local function retryStarterVehicle(src, cid)
+    if not Config.StarterVehicle.enabled then return end
+    if not owesStarterVehicle(cid) then return end
+    grantStarterVehicle(src, cid)
+end
+
 Bridge.OnPlayerLoaded(function(src)
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if alreadyOnboarded(cid) then return end
+    if alreadyOnboarded(cid) then
+        retryStarterVehicle(src, cid)
+        return
+    end
     TriggerClientEvent('palm6_onboarding:promptRules', src)
 end)
 
@@ -124,7 +255,14 @@ RegisterNetEvent('palm6_onboarding:checkStatus', function()
     lastCheck[src] = ct
     local cid = Bridge.GetCitizenId(src)
     if not cid then return end
-    if alreadyOnboarded(cid) then return end
+    if alreadyOnboarded(cid) then
+        -- This path matters more than it looks: the bridge records that
+        -- QBCore:Server:OnPlayerLoaded may deliver a sentinel `source` on this
+        -- box, in which case the handler above never resolves a citizenid and
+        -- the retry never fires there. This event carries a real net `source`.
+        retryStarterVehicle(src, cid)
+        return
+    end
     TriggerClientEvent('palm6_onboarding:promptRules', src)
 end)
 
@@ -159,24 +297,11 @@ RegisterNetEvent('palm6_onboarding:acceptRules', function()
         end)
     end
 
-    -- Starter vehicle — owned car parked in a garage. Best-effort: if
-    -- qbx_vehicles is down or the grant fails, cash still stands and the flag
-    -- stays 0 (never re-granted, because the citizen row already exists — the
-    -- guard is the once-per-citizen INSERT above, not this flag).
+    -- Starter vehicle — see grantStarterVehicle(). Deliberately NOT inline
+    -- any more: the same grant has to be reachable from a later load, because
+    -- a deferred grant that can never be retried is just a lost grant.
     if Config.StarterVehicle.enabled then
-        local granted = Bridge.GiveStarterVehicle(cid, Config.StarterVehicle.model,
-            Config.StarterVehicle.garage)
-        if granted then
-            pcall(function()
-                MySQL.update.await(
-                    'UPDATE palm6_onboarding SET starter_vehicle_granted = 1 WHERE citizenid = ?',
-                    { cid })
-            end)
-            Bridge.Notify(src, 'Welcome to Palm6',
-                ('Your starter vehicle is parked at the %s garage.'):format(
-                    Config.StarterVehicle.garageLabel or Config.StarterVehicle.garage),
-                'success')
-        end
+        grantStarterVehicle(src, cid)
     end
 
     -- Starter outfit — deferred (Config.StarterOutfit.enabled is false by
@@ -226,6 +351,47 @@ AddEventHandler('onResourceStart', function(resource)
         if not SchemaReady then
             print('^1[palm6_onboarding] schema MISSING - nobody can be onboarded and the rules ' ..
                   'prompt will refire on every load.^0')
+        end
+
+        -- Starter-garage state. Reported at boot because the failure it
+        -- guards is silent by nature: before this check, a wrong garage name
+        -- produced a cheerful success notification and an unreachable car.
+        if Config.StarterVehicle.enabled then
+            local garage, overridden = starterGarageName()
+            GarageState = Bridge.ResolveGarage(garage)
+            local src = overridden and 'convar override' or 'shared/config.lua'
+            if GarageState == 'present' then
+                print(('[palm6_onboarding] starter garage "%s" resolved in qbx_garages (%s).')
+                    :format(garage, src))
+            elseif GarageState == 'absent' then
+                print(('^1[palm6_onboarding] starter garage "%s" (%s) does NOT exist in ' ..
+                       'qbx_garages. Starter vehicles are DEFERRED — no car is created and ' ..
+                       'no grant is burned. Fix with: set %s "<real garage name>".^0'):format(
+                    garage, src, Config.StarterVehicle.garageConvar))
+            else
+                print(('^3[palm6_onboarding] starter garage "%s" (%s) could NOT be verified ' ..
+                       '(qbx_garages not started, or it exposes no readable garage list). ' ..
+                       'Starter vehicles are DEFERRED while requireVerifiedGarage is true. ' ..
+                       'Confirm the name in-game, then set %s "%s" to release them.^0'):format(
+                    garage, src, Config.StarterVehicle.garageConvar, garage))
+            end
+        end
+
+        -- Owed-grant backlog: citizens onboarded but still without a car.
+        local owed = 0
+        local probed = pcall(function()
+            local r = MySQL.single.await(
+                'SELECT COUNT(*) AS n FROM palm6_onboarding WHERE starter_vehicle_granted = 0')
+            owed = r and tonumber(r.n) or 0
+        end)
+        VehicleColumnReady = probed
+        if not probed then
+            print('^1[palm6_onboarding] starter_vehicle_granted column MISSING — starter ' ..
+                  'vehicles cannot be granted at all on this box. Apply ' ..
+                  'sql/0045_onboarding_starter_grants.sql.^0')
+        elseif owed > 0 then
+            print(('^3[palm6_onboarding] %d onboarded citizen(s) are still owed a starter ' ..
+                   'vehicle; each is retried on their next load.^0'):format(owed))
         end
     end)
 end)

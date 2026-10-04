@@ -258,6 +258,39 @@ Config.Events = {
     -- as ox_inventory:openInventory above.
     ['palm6_onboarding:checkStatus'] = { calls = 10, window_seconds = 60 },
 
+    -- palm6_charselect — all three fire pre-login (before qbx_core has a
+    -- player object for this source), so none of the usual "only a loaded
+    -- player can reach this" assumptions apply. Found missing entirely
+    -- during an adversarial review of the resource - it shipped with zero
+    -- budgets despite deleteCharacter doing a DB read+write per call.
+    -- requestCharacters/confirmSelect: cheap reads (Bridge.IsPlayerLoaded /
+    -- Bridge.GetHiddenSet), same "blunt budget as defense-in-depth" shape as
+    -- checkStatus above.
+    ['palm6_charselect:requestCharacters'] = { calls = 10, window_seconds = 60 },
+    ['palm6_charselect:confirmSelect'] = { calls = 10, window_seconds = 60 },
+    -- confirmCreate: same handler shape as confirmSelect (a qbx_core lookup
+    -- plus a playtime session start), for the create path, which previously
+    -- confirmed nothing at all. Tighter than confirmSelect because creating a
+    -- character is rarer than selecting one, and because each accepted call
+    -- flushes and reopens a playtime session - a DB write.
+    ['palm6_charselect:confirmCreate'] = { calls = 5, window_seconds = 60 },
+    -- deleteCharacter: a real write (Bridge.HideCharacter). A genuine player
+    -- deletes at most a couple characters per session; tighter than the
+    -- read-only two above, same shape as acceptRules.
+    ['palm6_charselect:deleteCharacter'] = { calls = 5, window_seconds = 60 },
+    -- requestAppearances: fires once per character-list render (join, and
+    -- again after a soft-delete re-renders the grid). Does an ownership SELECT
+    -- per citizenid plus one batched read of palm6_appearance_data, so it is a
+    -- real cost, but strictly read-only - same shape as requestCharacters.
+    ['palm6_charselect:requestAppearances'] = { calls = 10, window_seconds = 60 },
+
+    -- palm6_appearance:server:save — a client-triggered DB write carrying a
+    -- client-supplied payload, and it shipped with no budget at all. A player
+    -- saves an appearance a handful of times per session at most (the editor
+    -- closes on save), so this is generous while still bounding a script that
+    -- spams the event to hammer the table.
+    ['palm6_appearance:server:save'] = { calls = 8, window_seconds = 60 },
+
     -- evidence:server:CreateCasing — recipe-shipped net event (qbx_police).
     -- palm6_gunrunning registers a second handler on it to cross-reference
     -- fired-weapon serials against its black-market sales registry. The

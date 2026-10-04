@@ -8,6 +8,7 @@
 
 local xpCache   = {}  -- [cid] = { [activity] = xp }
 local lastGather = {} -- [src] = { [activity] = os.time() }
+local sellInFlight = {} -- [src] = true while one palm6_grind:sell is mid-flight
 
 local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
 
@@ -165,6 +166,29 @@ end)
 -- ---------------------------------------------------------------------------
 -- sell
 -- ---------------------------------------------------------------------------
+-- IN-FLIGHT LATCH. This was the only money handler in the layer with no
+-- synchronous latch of any kind, and its own sibling `gather` above has one
+-- (lastGather, stamped before the getXp yield).
+--
+-- The race: this handler reads the full stack with Bridge.CountItem, then yields
+-- -- getXp() hits MySQL whenever the xp cache is cold, which a reconnect
+-- guarantees because playerDropped clears it -- and only afterwards calls
+-- RemoveItem and AddCash. Two copies fired in one frame both read the same
+-- `count` and both proceed to the grant.
+--
+-- WHETHER THAT DOUBLE-PAYS IS NOT KNOWABLE FROM THIS REPO, and this latch is not
+-- claiming it does. ox_inventory is part of the base pack and lives on the game
+-- box, so RemoveItem's semantics are unreadable here, and the bridge passes its
+-- return value straight through. If RemoveItem clamps an over-large count and
+-- still returns truthy, this is a cash dupe; if it is all-or-nothing and returns
+-- false, the `if not Bridge.RemoveItem` below already catches it and nothing is
+-- lost. The latch is added because a money path whose safety depends on an
+-- unversioned out-of-repo dependency behaving one particular way is not a
+-- hardened money path, regardless of which way it behaves today.
+--
+-- An in-flight latch rather than a timestamp: there is no Config.SellCooldown and
+-- selling a whole stack in one action is intended, so a time window would be a
+-- gameplay change. This only collapses concurrent copies.
 RegisterNetEvent('palm6_grind:sell', function(activityKey)
     local src = source
     local act = Config.Activities[activityKey]
@@ -178,45 +202,60 @@ RegisterNetEvent('palm6_grind:sell', function(activityKey)
         return
     end
 
-    local count = Bridge.CountItem(src, sell.item)
-    if count <= 0 then
-        Bridge.Notify(src, sell.label, ('You have no %s to sell.'):format(sell.item:gsub('_', ' ')), 'error')
-        return
-    end
+    -- Set before the first yield. Bridge.GetCitizenId and nearby() are both
+    -- synchronous (a cached qbx player read and a server-side coord read), so
+    -- nothing above this point can have suspended.
+    if sellInFlight[src] then return end
+    sellInFlight[src] = true
 
-    local level = levelOf(getXp(cid, activityKey))
-    local price = math.floor(sell.price * (1 + level * Config.PriceBonusPerLevel))
-    local total = count * price
-
-    -- palm6_pulse "Boomtown" window boosts legal-grind sale value. Server-read +
-    -- capped (a client can't assert a multiplier); pcall+ResourceState-gated so
-    -- grind runs standalone if pulse is absent. This is an NPC-buyer faucet — the
-    -- exact reward loop the Boomtown window is meant to amplify.
-    local boomMult = 1.0
-    pcall(function()
-        if GetResourceState('palm6_pulse') == 'started' then
-            local m = exports.palm6_pulse:GetActiveModifier('grind')
-            if type(m) == 'number' and m > 1 then boomMult = m end
+    local ok, err = pcall(function()
+        local count = Bridge.CountItem(src, sell.item)
+        if count <= 0 then
+            Bridge.Notify(src, sell.label, ('You have no %s to sell.'):format(sell.item:gsub('_', ' ')), 'error')
+            return
         end
-    end)
-    total = math.floor(total * boomMult)
 
-    if not Bridge.RemoveItem(src, sell.item, count) then
-        Bridge.Notify(src, sell.label, 'Sale failed.', 'error')
-        return
-    end
-    Bridge.AddCash(src, total, 'grind-sell')
-    -- Derive the each-price from the (possibly boosted) total so the numbers agree,
-    -- and tag the Boomtown boost so it's legible.
-    local each = count > 0 and math.floor(total / count) or total
-    local boom = boomMult > 1 and (' [Boomtown x%.2f]'):format(boomMult) or ''
-    Bridge.Notify(src, sell.label,
-        ('Sold %dx %s for $%d ($%d each).%s'):format(count, sell.item:gsub('_', ' '), total, each, boom), 'success')
+        local level = levelOf(getXp(cid, activityKey))
+        local price = math.floor(sell.price * (1 + level * Config.PriceBonusPerLevel))
+        local total = count * price
+
+        -- palm6_pulse "Boomtown" window boosts legal-grind sale value. Server-read +
+        -- capped (a client can't assert a multiplier); pcall+ResourceState-gated so
+        -- grind runs standalone if pulse is absent. This is an NPC-buyer faucet — the
+        -- exact reward loop the Boomtown window is meant to amplify.
+        local boomMult = 1.0
+        pcall(function()
+            if GetResourceState('palm6_pulse') == 'started' then
+                local m = exports.palm6_pulse:GetActiveModifier('grind')
+                if type(m) == 'number' and m > 1 then boomMult = m end
+            end
+        end)
+        total = math.floor(total * boomMult)
+
+        if not Bridge.RemoveItem(src, sell.item, count) then
+            Bridge.Notify(src, sell.label, 'Sale failed.', 'error')
+            return
+        end
+        Bridge.AddCash(src, total, 'grind-sell')
+        -- Derive the each-price from the (possibly boosted) total so the numbers agree,
+        -- and tag the Boomtown boost so it's legible.
+        local each = count > 0 and math.floor(total / count) or total
+        local boom = boomMult > 1 and (' [Boomtown x%.2f]'):format(boomMult) or ''
+        Bridge.Notify(src, sell.label,
+            ('Sold %dx %s for $%d ($%d each).%s'):format(count, sell.item:gsub('_', ' '), total, each, boom), 'success')
+    end)
+
+    -- Release unconditionally. A leaked latch would permanently stop that player
+    -- selling, which is worse than the race it closes. The error is re-raised
+    -- unchanged so nothing is swallowed.
+    sellInFlight[src] = nil
+    if not ok then error(err, 0) end
 end)
 
 AddEventHandler('playerDropped', function()
     local src = source
     lastGather[src] = nil
+    sellInFlight[src] = nil
     local cid = Bridge.GetCitizenId(src)
     if cid then xpCache[cid] = nil end  -- reloaded fresh from DB next session; keeps this bounded to online players
 end)

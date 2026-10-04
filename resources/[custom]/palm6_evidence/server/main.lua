@@ -206,6 +206,81 @@ local function trim(s)
     return (s:gsub('^%s+', ''):gsub('%s+$', ''))
 end
 
+-- ---------------------------------------------------------------------------
+-- Render a stored description for a human.
+--
+-- appendEntry() json-encodes a TABLE payload into `description`, which is the
+-- same free-text column an officer's typed note lands in, and nothing marks
+-- which is which (`kind` is a caller-chosen taxonomy tag, not an encoding tag).
+-- No render path decoded it, so a detective running /evidence case 7 read lines
+-- like:
+--
+--   - [fact] palm6_counterfeit — {"serial":"QX…","hop":2,"from_citizenid":"ABC12345"}
+--
+-- and palm6_mdt then truncated that mid-JSON at 100 characters. Real table-payload
+-- writers include palm6_mdt itself, palm6_chopshop, palm6_counterfeit,
+-- palm6_insurance and palm6_drugs, so this is the common case for export-written
+-- entries, not an edge case. palm6_witnesses was the only writer that read
+-- correctly, because it humanises before the write.
+--
+-- Deliberately a RENDER-SIDE fix only: no schema change, no export-signature
+-- change, and appendEntry still stores exact JSON, so a machine consumer that
+-- json.decodes the column is unaffected.
+--
+-- Fails open in every direction. A non-JSON string is returned untouched (so
+-- palm6_witnesses' prose and every hand-typed note pass straight through), a
+-- decode failure returns the original, and an empty object returns the original
+-- rather than an empty line.
+local function describeEntry(desc)
+    local s = tostring(desc or '')
+    -- Cheap pre-check so prose never reaches json.decode at all.
+    local head = s:match('^%s*(.)')
+    if head ~= '{' and head ~= '[' then return s end
+
+    local ok, t = pcall(json.decode, s)
+    if not ok or type(t) ~= 'table' then return s end
+
+    local function scalar(v)
+        -- Integral numbers print without a decimal tail. json.decode may hand
+        -- back a float for a whole number depending on the decoder, and
+        -- tostring(2.0) is "2.0" -- which reads as a bug in an evidence log and
+        -- reads worse on a money figure ("amount: 1500.0"). Guard NaN and the
+        -- infinities explicitly: both satisfy v == math.floor(v), and %d throws
+        -- on them.
+        if type(v) == 'number' then
+            if v == v and v ~= math.huge and v ~= -math.huge and v == math.floor(v) then
+                return ('%d'):format(v)
+            end
+            return tostring(v)
+        end
+        if type(v) ~= 'table' then return tostring(v) end
+        local okEnc, enc = pcall(json.encode, v)
+        return okEnc and enc or '<nested>'
+    end
+
+    local parts = {}
+    if t[1] ~= nil then
+        -- Array shape: values only, in order.
+        for i = 1, #t do parts[#parts + 1] = scalar(t[i]) end
+    else
+        -- Object shape: sorted so the same payload always reads the same way.
+        local keys = {}
+        for k in pairs(t) do keys[#keys + 1] = tostring(k) end
+        table.sort(keys)
+        for _, k in ipairs(keys) do
+            -- NB: assign the gsub result to a local FIRST. gsub returns
+            -- (string, count), and passing it straight into :format() would feed
+            -- the COUNT to the second %s. Same trap documented in
+            -- palm6_business/bridge/sv_framework.lua, where it broke gang
+            -- create/join.
+            local label = k:gsub('_', ' ')
+            parts[#parts + 1] = ('%s: %s'):format(label, scalar(t[k]))
+        end
+    end
+    if #parts == 0 then return s end
+    return table.concat(parts, ', ')
+end
+
 local function clamp(s, maxLen)
     if type(s) ~= 'string' then return nil end
     s = trim(s)
@@ -455,6 +530,17 @@ end)
 -- ListCases(status: string|nil, limit: number|nil) -> { { id, title,
 --   status, created_at, suspects }, ... }  (newest activity first;
 --   status defaults 'open', limit clamps to [1, 25])
+--- Render a stored entry `description` for a human. Pure, read-only, no DB.
+--- Exposed because palm6_mdt renders the same entries through /mdtcase and would
+--- otherwise need its own copy of describeEntry -- and a second copy of a
+--- formatter is how two surfaces start disagreeing about what one row says.
+--- GetCase deliberately still returns the EXACT stored value, so a machine
+--- consumer that json.decodes the column is unaffected; formatting is the
+--- caller's choice at render time. Non-JSON input is returned untouched.
+exports('FormatEntry', function(desc)
+    return describeEntry(desc)
+end)
+
 exports('ListCases', function(status, limit)
     status = tostring(status or 'open')
     limit = math.min(math.max(math.floor(tonumber(limit) or 10), 1), 25)
@@ -542,7 +628,8 @@ local function renderCaseDetail(case)
         lines[#lines + 1] = '- no entries yet'
     else
         for _, e in ipairs(case.entries) do
-            lines[#lines + 1] = ('- [%s] **%s** — %s\n  _%s_'):format(e.kind, e.officer_name, e.description, tostring(e.created_at))
+            lines[#lines + 1] = ('- [%s] **%s** — %s\n  _%s_'):format(
+                e.kind, e.officer_name, describeEntry(e.description), tostring(e.created_at))
         end
     end
     return table.concat(lines, '\n')
@@ -642,7 +729,8 @@ RegisterCommand('evidence', function(src, args)
 
     local lines = {}
     for _, r in ipairs(rows) do
-        lines[#lines + 1] = ('**%s** — %s\n_%s_'):format(r.officer_name, r.description, tostring(r.created_at))
+        lines[#lines + 1] = ('**%s** — %s\n_%s_'):format(
+            r.officer_name, describeEntry(r.description), tostring(r.created_at))
     end
     showDialog(src, table.concat(lines, '\n\n'))
 end, false)

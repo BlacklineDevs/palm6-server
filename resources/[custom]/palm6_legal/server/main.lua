@@ -22,6 +22,13 @@ local lastAction = {}   -- [src] = { [key] = ts }
 
 local SchemaReady = false  -- flipped by ensureSchema(); reported in the boot banner
 
+-- Forward declaration. The staff audit sink is defined further down, next to the
+-- prose about sealed bookings that explains its semantics, but resolveSubject
+-- (above it) now needs it: pulling ANOTHER citizen's record is the one read in
+-- this resource that has to leave a trace. Declared here and assigned there
+-- rather than moving the definition away from its explanation.
+local auditLog
+
 -- ---------------------------------------------------------------------------
 -- Boot DDL (self-creating table). Same shape as palm6_courier and palm6_ems:
 -- Wait-for-oxmysql on the caller's thread, per-statement pcall, IF NOT EXISTS
@@ -150,6 +157,28 @@ local function resolveSubject(src, arg)
         Bridge.Notify(src, 'Legal', 'No citizen with that id on record.', 'error')
         return nil
     end
+    -- AUDIT THE FOREIGN PULL. Everything above this line is an authorisation
+    -- check; this is the first point at which one citizen is known to be reading
+    -- another's criminal history, so it is the right place to record it.
+    --
+    -- Why it matters more here than it looks: the only gate is
+    -- Bridge.IsOnDutyLawyer, which checks a job name and an on-duty flag, and the
+    -- README concedes the lawyer job is one any player can take. So this path
+    -- hands any player who clocks on as a lawyer the unsealed booking history,
+    -- open-citation total and active-warrant flag of ANY citizen, for free. That
+    -- is a defensible IC design -- a defence attorney reads records -- but it was
+    -- the only record read in the stack with no trace at all, while palm6_mdt
+    -- audits both of its writes and /sentence audits its own reads two hundred
+    -- lines below. Enumeration of every citizen on the server was indistinguish-
+    -- able from one lawyer doing their job.
+    --
+    -- Logged rather than rate-limited on purpose. A rolling budget would throttle
+    -- legitimate casework and would not stop a patient attacker; a trace makes
+    -- the pattern visible to staff after the fact, which is what the equivalent
+    -- police-side reads get. The self-pull is deliberately NOT logged: it is not
+    -- a disclosure.
+    auditLog('legal_record_pull', src, Bridge.GetSourceByCitizenId(target),
+        ('pulled the record of %s (%s)'):format(name, target))
     return target, name
 end
 
@@ -330,7 +359,8 @@ end
 -- missing or broken sink fail the command. palm6_staff's Log is not internally
 -- pcall'd, so the pcall here is load-bearing rather than decorative.
 -- ---------------------------------------------------------------------------
-local function auditLog(action, actorSrc, targetSrc, detail)
+-- Assigned, not declared: see the forward declaration near the top of the file.
+function auditLog(action, actorSrc, targetSrc, detail)
     if not Bridge.ResourceStarted('palm6_staff') then return end
     pcall(function()
         exports.palm6_staff:Log(action, actorSrc, targetSrc, detail)

@@ -592,12 +592,44 @@ local function opBuyStock(src, qty)
     pushMenu(src)
 end
 
+-- One serve per citizen in flight at a time. See the note on opServe below.
+-- Keyed by citizenid, not src, to match what last_serve_at is keyed on.
+local serveInFlight = {}
+
 -- NPC walk-in serve — the ONE faucet. Bounded by: clocked-in worker + supply
 -- (cost basis) + per-worker cooldown + per-business daily cap. The client
 -- skill-check is UX (active play); the money gates below are the real controls.
-local function opServe(src)
-    if not enabled() then return end
-    local cid = Bridge.GetCitizenId(src)
+--
+-- THE COOLDOWN WAS NOT ACTUALLY ONE OF THOSE BOUNDS UNDER CONCURRENCY.
+-- getMembership() yields on a DB read, the cooldown below is tested against the
+-- row that read returned, and last_serve_at is only written at the END of this
+-- function. So N copies of palm6_business:serve fired in a single frame all
+-- suspended at getMembership, all resumed holding the SAME last_serve_at, all
+-- passed the cooldown, and all reached the credit. The eventguard budget is
+-- calls = 40 per 60s, so a clocked-in worker with supply could bank ~40 serves
+-- in one frame instead of one every 45 seconds.
+--
+-- Not a mint: supply >= 1 and the daily-cap predicate are both inside the single
+-- atomic UPDATE, so MySQL serialises them and DailyNpcIncome still holds. What it
+-- destroyed is the active-play requirement this comment block claims -- the whole
+-- point of a per-worker cooldown is that the faucet is paced by someone standing
+-- in a shop, and it was bypassable to the daily cap in one packet.
+--
+-- Fixed with an IN-FLIGHT latch rather than a timestamp latch. The repo's usual
+-- idiom is palm6_market's "atomic cooldown set BEFORE any yield" (a per-src
+-- timestamp), but that needs the cooldown VALUE before the yield, and here the
+-- value comes from serviceOf(m.biz_type) which is only known after it. Per-type
+-- cooldowns range 28s to 120s against a 45s global, so any fixed pre-yield window
+-- would either over-restrict retail or under-restrict a dealership. An in-flight
+-- latch has no window to get wrong: it only collapses concurrent copies, and by
+-- the time it clears, last_serve_at has been written, so the DB check is the sole
+-- pacing authority exactly as designed. Same shape as palm6_flashdrop's
+-- res.claiming latch.
+--
+-- Bridge.GetCitizenId is a synchronous read of qbx_core's cached player object
+-- (bridge/sv_framework.lua:26-29), so the latch below is genuinely set before the
+-- first yield.
+local function opServeBody(src, cid)
     local m = getMembership(cid)
     if not m then return notify(src, 'Business', 'You do not work anywhere.', 'error') end
     if m.clocked_in ~= 1 then return notify(src, 'Business', 'Clock in first.', 'error') end
@@ -648,6 +680,21 @@ local function opServe(src)
     -- root context menu each time would interrupt it. The notify confirms the
     -- payout; /business reopens with fresh supply/day figures.
     notify(src, 'Business', ('Served a %s (+$%d).'):format(svc.serveNoun, pay), 'success')
+end
+
+-- The latch wrapper. pcall so the latch is released even if the body errors --
+-- a leaked latch would permanently stop that citizen serving, which is a worse
+-- failure than the race it closes. The error is re-raised unchanged so nothing
+-- is swallowed.
+local function opServe(src)
+    if not enabled() then return end
+    local cid = Bridge.GetCitizenId(src)
+    if not cid then return end
+    if serveInFlight[cid] then return end   -- a serve is already mid-flight
+    serveInFlight[cid] = true
+    local ok, err = pcall(opServeBody, src, cid)
+    serveInFlight[cid] = nil
+    if not ok then error(err, 0) end
 end
 
 local function opClock(src, wantIn)

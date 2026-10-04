@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PALM6 — Appearance</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="overlay" class="hidden" aria-hidden="true">
+
+    <!-- Full-bleed drag surface for camera orbit. Sits UNDER the panel/tabs
+         (z-index) but ABOVE the transparent CEF background so pointer events
+         land here whenever the cursor isn't over a control. -->
+    <div id="viewport-hitzone"></div>
+
+    <!-- Camera region tabs -->
+    <nav id="camera-region-tabs" aria-label="Camera focus region"></nav>
+
+    <!-- Camera controls. The panel subtitle says "drag to rotate, scroll to
+         zoom", which is a hint and not an affordance: a player who does not
+         read it has no way to know the ped can be turned, and a player on a
+         trackpad may have no usable scroll at all. These do the same thing the
+         drag/scroll gestures do, through the same NUI callbacks. -->
+    <div id="camera-controls" class="camera-controls" aria-label="Camera controls">
+      <button type="button" class="cam-btn" data-cam="rotate-left" title="Rotate left" aria-label="Rotate left">&#8630;</button>
+      <button type="button" class="cam-btn" data-cam="zoom-in" title="Zoom in" aria-label="Zoom in">&plus;</button>
+      <button type="button" class="cam-btn" data-cam="zoom-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
+      <button type="button" class="cam-btn" data-cam="rotate-right" title="Rotate right" aria-label="Rotate right">&#8631;</button>
+    </div>
+
+    <!-- Main creator panel -->
+    <aside class="creator-panel" id="creator-panel">
+      <header class="panel-header">
+        <h1 id="panel-title">Create Your Character</h1>
+        <p id="panel-subtitle" class="muted">Drag to rotate — scroll to zoom</p>
+      </header>
+
+      <!-- Section tabs. The panel used to be one flat 1885px scroll in a 945px
+           viewport: every slider, every wardrobe row, every swatch grid and the
+           save bar, stacked. Splitting it by category is what every appearance
+           editor on the market does, and it is the difference between "scroll
+           until you find it" and "it is on the Face tab". -->
+      <nav id="panel-tabs" class="panel-tabs" aria-label="Editor sections">
+        <button type="button" class="panel-tab is-active" data-section="head-blend-panel">Face</button>
+        <button type="button" class="panel-tab" data-section="wardrobe-panel">Wardrobe</button>
+        <button type="button" class="panel-tab" data-section="appearance-colors">Colors</button>
+        <button type="button" class="panel-tab" data-section="tattoos-panel">Tattoos</button>
+      </nav>
+
+      <!-- Only this scrolls. The header, the tabs and the save bar stay put. -->
+      <div id="panel-body" class="panel-body">
+
+      <section id="head-blend-panel" class="panel-section">
+        <div class="section-head">
+          <h2>Face</h2>
+          <button type="button" id="randomize-btn" class="btn btn-ghost">Randomize</button>
+        </div>
+
+        <div class="blend-group">
+          <div class="blend-row">
+            <label>Shape Parent 1</label>
+            <input type="range" min="0" max="45" step="1" id="shapeFirst" data-mix-target="shape" />
+          </div>
+          <div class="blend-row">
+            <label>Shape Parent 2</label>
+            <input type="range" min="0" max="45" step="1" id="shapeSecond" data-mix-target="shape" />
+          </div>
+          <div class="blend-row">
+            <label>Shape Parent 3</label>
+            <input type="range" min="0" max="45" step="1" id="shapeThird" data-mix-target="shape" />
+          </div>
+          <div class="blend-row">
+            <label>Shape Mix</label>
+            <input type="range" min="0" max="1" step="0.01" id="shapeMix" />
+          </div>
+
+          <div class="blend-row">
+            <label>Skin Parent 1</label>
+            <input type="range" min="0" max="45" step="1" id="skinFirst" data-mix-target="skin" />
+          </div>
+          <div class="blend-row">
+            <label>Skin Parent 2</label>
+            <input type="range" min="0" max="45" step="1" id="skinSecond" data-mix-target="skin" />
+          </div>
+          <div class="blend-row">
+            <label>Skin Parent 3</label>
+            <input type="range" min="0" max="45" step="1" id="skinThird" data-mix-target="skin" />
+          </div>
+          <div class="blend-row">
+            <label>Skin Mix</label>
+            <input type="range" min="0" max="1" step="0.01" id="skinMix" />
+          </div>
+
+          <div class="blend-row">
+            <label>Third Parent Mix</label>
+            <input type="range" min="0" max="1" step="0.01" id="thirdMix" />
+          </div>
+        </div>
+
+        <details class="collapsible">
+          <summary>Face Features</summary>
+          <div id="face-feature-list" class="feature-grid"></div>
+        </details>
+
+        <details class="collapsible">
+          <summary>Overlays</summary>
+          <div id="overlay-list" class="feature-grid"></div>
+        </details>
+      </section>
+
+      <section id="wardrobe-panel" class="panel-section">
+        <h2>Wardrobe</h2>
+        <div id="wardrobe-components" class="cycle-list"></div>
+        <div id="wardrobe-props" class="cycle-list"></div>
+      </section>
+
+      <section id="appearance-colors" class="panel-section">
+        <h2>Colors</h2>
+        <div class="color-row">
+          <label>Hair Color</label>
+          <div class="swatch-grid" id="hair-color-grid"></div>
+        </div>
+        <div class="color-row">
+          <label>Hair Highlight</label>
+          <div class="swatch-grid" id="hair-highlight-grid"></div>
+        </div>
+        <div class="color-row">
+          <label>Eye Color</label>
+          <div class="swatch-grid" id="eye-color-grid"></div>
+        </div>
+      </section>
+
+      <section id="tattoos-panel" class="panel-section">
+        <h2>Tattoos</h2>
+        <p class="muted tattoo-note">Applying a new design isn't available yet — this clears any tattoos already on this character.</p>
+        <button type="button" id="clear-tattoos-btn" class="btn btn-ghost">Clear Tattoos</button>
+      </section>
+
+      </div><!-- /#panel-body -->
+
+      <!-- PINNED. Outside the scroll container on purpose: this is the primary
+           action of a MANDATORY step (new-character creation has no cancel
+           path), and it used to sit ~940px below the fold with nothing on
+           screen to suggest it existed. -->
+      <footer id="save-bar" class="panel-section">
+        <button type="button" id="cancel-btn" class="btn btn-ghost">Cancel</button>
+        <!-- Create mode has NO cancel (character creation is mandatory), so
+             without this a player who hits "Randomize All" and hates the
+             result has no way back at all. Takes cancel's slot in create mode
+             so the bar stays at three buttons in both modes. -->
+        <button type="button" id="reset-btn" class="btn btn-ghost">Reset</button>
+        <button type="button" id="randomize-all-btn" class="btn btn-secondary">Randomize All</button>
+        <button type="button" id="save-btn" class="btn btn-primary">Save &amp; Continue</button>
+      </footer>
+    </aside>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -390,6 +390,55 @@ AddEventHandler('onResourceStart', function(resource)
             print('^1[palm6_protection] schema MISSING - collection cooldowns cannot be enforced ' ..
                   'and every shakedown is uncapped on this box.^0')
         end
+
+        -- Zone/business coherence. Config.Zones is a declared mirror of
+        -- palm6_turf's zone centers, and Config.Businesses each name a zone id.
+        -- Nothing checked that a business is anywhere near the zone it claims.
+        --
+        -- It is not academic: the 'vinewood' center below is
+        -- (-1222.10, -906.90, 12.33), which is Little Seoul / Vespucci, while the
+        -- business that declares zone = 'vinewood' (vw_pawn, "Clinton Ave,
+        -- Downtown Vinewood") sits at (373.87, 325.90, 103.57). Those are about
+        -- 2,017 units apart against an OwnedZoneRadius of 200. One of the two is
+        -- a wrong-row paste, and it stayed invisible because the hardcoded
+        -- businesses carry an explicit `zone` field and never consult the
+        -- centers. The centers are only used to resolve PLAYER-placed
+        -- storefronts, so the consequences today are a /turf blip in the wrong
+        -- neighborhood and a player storefront in Vinewood that can never
+        -- resolve to the vinewood zone (while one in Little Seoul wrongly will).
+        --
+        -- This does NOT guess a correct value. No coordinate in this project may
+        -- be invented (palm6_anchors/README.md), and palm6_turf owns the zone
+        -- centers; moving one relocates a turf capture point, which is a design
+        -- decision and not a cleanup. It only makes the disagreement loud.
+        local mismatches = 0
+        for _, b in ipairs(Config.Businesses) do
+            local center
+            for _, z in ipairs(Config.Zones) do
+                if z.id == b.zone then center = z.coords break end
+            end
+            if not center then
+                mismatches = mismatches + 1
+                print(('^1[palm6_protection] business "%s" declares zone "%s", which is not in ' ..
+                       'Config.Zones. It can never resolve an owner.^0'):format(b.id, tostring(b.zone)))
+            else
+                local d = #(b.coords - center)
+                if d > Config.OwnedZoneRadius then
+                    mismatches = mismatches + 1
+                    print(('^3[palm6_protection] business "%s" (%s) is %.0f units from its own zone ' ..
+                           '"%s" center, well past OwnedZoneRadius %.0f. The hardcoded entry still ' ..
+                           'works (it names its zone outright), but the zone center and this ' ..
+                           'storefront cannot both be right, and player-placed storefronts in this ' ..
+                           'area will resolve to the wrong zone or to none.^0'):format(
+                        b.id, b.label, d, b.zone, Config.OwnedZoneRadius))
+                end
+            end
+        end
+        if mismatches == 0 then
+            print(('[palm6_protection] zone coherence OK — all %d business(es) sit within ' ..
+                   '%.0f units of their declared zone center.'):format(
+                #Config.Businesses, Config.OwnedZoneRadius))
+        end
     end)
 end)
 

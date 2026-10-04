@@ -1,0 +1,742 @@
+:root {
+  --p6-night: #07101a;
+  --p6-navy: #0b1824;
+  --p6-surface: rgba(7, 14, 23, 0.92);
+  --p6-surface-soft: rgba(13, 25, 37, 0.82);
+  --p6-gold: #d6a950;
+  --p6-gold-bright: #f0d28b;
+  --p6-gold-dark: #8f672a;
+  --p6-cyan: #46c9ff;
+  --p6-cyan-rgb: 70, 201, 255;
+  --p6-text: #f5f0e5;
+  --p6-muted: #96a5b2;
+  --accent: #d6a950;
+  --accent-rgb: 214, 169, 80;
+  --panel-radius: 18px;
+  --rail-width: clamp(240px, 20vw, 320px);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent !important; }
+body { pointer-events: none; user-select: none; }
+
+/* ---------------------------------------------------------------------- */
+/* [hidden] MUST WIN. This one line is load-bearing.                       */
+/*                                                                         */
+/* The UA stylesheet's `[hidden] { display: none }` has the weakest         */
+/* possible specificity, so ANY class rule that sets `display` beats it.    */
+/* `.create-panel` sets `display: flex` and is position:fixed inset:0 - so  */
+/* while "hidden" it was a full-viewport, pointer-events:auto, opacity:0    */
+/* sheet of glass on top of everything. Measured in a real browser:         */
+/* document.elementFromPoint() at the centre of a character card returned   */
+/* #createPanel, not the card. The whole screen was UNCLICKABLE, and there  */
+/* is no ESC path off it by design. `.loading-state` had the same defect    */
+/* visibly - the spinner sat permanently over the finished list.            */
+/*                                                                         */
+/* Neither was findable by reading the JS, which sets `.hidden = true`      */
+/* correctly everywhere. It only shows up rendered.                         */
+/* ---------------------------------------------------------------------- */
+[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------------- */
+/* Overlay shell                                                          */
+/*                                                                         */
+/* LAYOUT NOTE, and the reason this was rebuilt: this page is a            */
+/* TRANSPARENT surface over the live 3D game view, and the character ped   */
+/* stands in the middle of the frame. Every premium multicharacter script  */
+/* on the market therefore docks its UI to the EDGES and leaves the centre */
+/* empty. The previous layout put a row of three fat cards dead centre -   */
+/* exactly where the character stands - and repeated the same stat labels  */
+/* on each one. Roster left, ped centre, details right, one primary CTA.   */
+/* ---------------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+.overlay.is-mounted { visibility: visible; opacity: 1; }
+
+/* Edge scrims.
+   Not decoration: the rail headings, the top bar and the action-bar hint sit
+   DIRECTLY over the live game view with nothing behind them but a text
+   shadow. Over a bright daytime street that is unreadable. Two soft vertical
+   gradients pinned to the left and right edges give every piece of chrome
+   something dark to sit on, at any time of day, without boxing the character
+   in. This is why every premium select screen darkens its edges. */
+.overlay::before,
+.overlay::after {
+  content: "";
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--rail-width) + 8vw);
+  pointer-events: none;
+  z-index: -1;
+}
+.overlay::before {
+  left: 0;
+  background: linear-gradient(90deg, rgba(3, 8, 14, 0.82), rgba(3, 8, 14, 0.45) 55%, transparent);
+}
+.overlay::after {
+  right: 0;
+  background: linear-gradient(270deg, rgba(3, 8, 14, 0.82), rgba(3, 8, 14, 0.45) 55%, transparent);
+}
+
+/* Select/create request in flight (client/main.lua's `busy` guard) - blocks
+   a second click from physically registering instead of relying on the Lua
+   side alone to silently swallow it. The roster keeps its opacity so the
+   player still sees which character they picked; the create panel dims and
+   waits instead of looking frozen. */
+.overlay.is-busy .rail,
+.overlay.is-busy .actionbar,
+.overlay.is-busy .create-panel__inner {
+  pointer-events: none;
+}
+.overlay.is-busy .char-row:not(.is-selected) { opacity: 0.5; }
+.overlay.is-busy .create-panel__inner { opacity: 0.7; }
+
+/* ---------------------------------------------------------------------- */
+/* Top bar                                                                */
+/* ---------------------------------------------------------------------- */
+
+.topbar {
+  display: grid;
+  grid-template-columns: var(--rail-width) 1fr var(--rail-width);
+  align-items: center;
+  padding: 3vh 3vw 0;
+  opacity: 0;
+  transform: translateY(-14px);
+  animation: bar-enter 620ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 60ms;
+}
+@keyframes bar-enter { to { opacity: 1; transform: translateY(0); } }
+
+.brand-mark { color: var(--p6-text); text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7); }
+.brand-word {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--p6-gold-bright);
+}
+.brand-six { color: var(--p6-cyan); }
+
+.topbar__title {
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--p6-muted);
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.8);
+}
+.topbar__slots {
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--p6-muted);
+  opacity: 0.85;
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.8);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Stage: rail | ped | rail                                               */
+/* ---------------------------------------------------------------------- */
+
+.stage {
+  display: grid;
+  grid-template-columns: var(--rail-width) 1fr var(--rail-width);
+  gap: 3vw;
+  padding: 3vh 3vw;
+  min-height: 0;
+}
+
+.rail {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  opacity: 0;
+  animation: rail-enter 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 140ms;
+}
+.rail--roster { transform: translateX(-24px); }
+.rail--stats  { transform: translateX(24px); animation-delay: 220ms; }
+@keyframes rail-enter { to { opacity: 1; transform: translateX(0); } }
+
+.rail__head {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--p6-muted);
+  opacity: 0.75;
+  padding-left: 2px;
+}
+
+/* The centre column is a HOLE, not a container. pointer-events stays off so
+   nothing here can swallow a click aimed at the world, and nothing is
+   painted over the ped except the nameplate strip at its feet. */
+.ped-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
+  /* Clears the action bar so the nameplate sits under the ped's feet rather
+     than crowding the PLAY button. */
+  padding-bottom: 4vh;
+}
+
+/* Stage spotlight.
+   A soft warm pool centred on where the ped stands, plus a floor glow under
+   its feet. This is the cheapest thing on the screen that makes the character
+   read as LIT rather than pasted on: the game's own lighting is fixed by
+   Config.PreviewStage (14:20, EXTRASUNNY), so the UI has to supply the sense
+   of a staged subject. Sits behind everything (z-index -1 within the column)
+   and takes no pointer events, so it can never interfere with the world or a
+   click. Only drawn when a real ped is actually standing there. */
+.overlay.has-stage .ped-slot::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(60vh, 90%);
+  aspect-ratio: 1;
+  transform: translate(-50%, -52%);
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    rgba(var(--accent-rgb), 0.16) 0%,
+    rgba(var(--accent-rgb), 0.06) 38%,
+    transparent 68%);
+  pointer-events: none;
+  z-index: -1;
+  animation: stage-glow 520ms ease-out both;
+}
+/* Contact shadow: grounds the ped instead of letting it float. */
+.overlay.has-stage .ped-slot::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: calc(4vh + 74px);
+  width: min(26vh, 300px);
+  height: 26px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.55) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+  animation: stage-glow 520ms ease-out both;
+}
+@keyframes stage-glow { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------------------------------------------------------------------- */
+/* Roster rows                                                            */
+/* ---------------------------------------------------------------------- */
+
+.char-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--accent-rgb), 0.4) transparent;
+}
+
+.char-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 2px solid transparent;
+  background: linear-gradient(180deg, rgba(11, 24, 36, 0.72), rgba(5, 11, 18, 0.78));
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  opacity: 0;
+  transform: translateX(-10px);
+  animation: row-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--enter-delay, 0ms);
+}
+@keyframes row-enter { to { opacity: 1; transform: translateX(0); } }
+
+.char-row:hover { border-color: rgba(var(--p6-cyan-rgb), 0.45); }
+.char-row.is-focused {
+  border-left-color: var(--p6-gold-bright);
+  background: linear-gradient(180deg, rgba(26, 44, 62, 0.85), rgba(9, 18, 28, 0.85));
+}
+.char-row:focus-visible { box-shadow: 0 0 0 2px rgba(var(--p6-cyan-rgb), 0.55); }
+.char-row.is-selected { border-color: var(--p6-gold-bright); }
+
+.char-row__medallion {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--p6-gold-bright);
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.09);
+}
+.char-row__text { min-width: 0; flex: 1; }
+.char-row__name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--p6-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.char-row__sub {
+  font-size: 11px;
+  color: var(--p6-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A live ped preview exists for this character. */
+.char-row__live {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--p6-cyan);
+  box-shadow: 0 0 8px rgba(var(--p6-cyan-rgb), 0.8);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.char-row.has-preview .char-row__live { opacity: 0.9; }
+
+.btn--block { width: 100%; }
+.btn__plus { color: var(--p6-gold); font-weight: 800; }
+
+/* ---------------------------------------------------------------------- */
+/* Nameplate + degrade medallion (centre column)                          */
+/* ---------------------------------------------------------------------- */
+
+.nameplate {
+  text-align: center;
+  color: var(--p6-text);
+  text-shadow: 0 4px 26px rgba(0, 0, 0, 0.9);
+  animation: plate-enter 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes plate-enter { from { opacity: 0; transform: translateY(8px); } }
+.nameplate__name {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.nameplate__sub {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--p6-gold-bright);
+  opacity: 0.9;
+}
+/* Hairline gold rule under the name, tapering out at both ends. Small, but it
+   is the difference between "text floating on a game screen" and a nameplate. */
+.nameplate__sub::before {
+  content: "";
+  display: block;
+  width: 120px;
+  height: 1px;
+  margin: 0 auto 8px;
+  background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.85), transparent);
+}
+
+/* Only when no live ped could be placed - see client/main.lua's `stage`
+   message. Keeps the centre from being an unexplained empty hole. */
+.ped-fallback {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.ped-fallback__medallion {
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 38px;
+  font-weight: 700;
+  color: var(--p6-gold-bright);
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: radial-gradient(circle at 50% 35%, rgba(var(--accent-rgb), 0.16), rgba(5, 11, 18, 0.7));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.ped-fallback__note {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--p6-muted);
+  opacity: 0.7;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Details rail                                                           */
+/* ---------------------------------------------------------------------- */
+
+.stat-list {
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(11, 24, 36, 0.72), rgba(5, 11, 18, 0.78));
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  overflow: hidden;
+}
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-row__label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--p6-muted);
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.stat-row__value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--p6-text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stat-row--money .stat-row__value { color: var(--p6-gold-bright); }
+.stat-row--empty {
+  justify-content: center;
+  color: var(--p6-muted);
+  font-size: 12px;
+  padding: 22px 14px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Action bar                                                             */
+/* ---------------------------------------------------------------------- */
+
+.actionbar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 3vw 4vh;
+  pointer-events: auto;
+}
+
+.btn--play {
+  min-width: 260px;
+  padding: 14px 44px;
+  font-size: 15px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, var(--p6-gold-bright), var(--p6-gold));
+  color: #1a1206;
+  box-shadow: 0 10px 34px rgba(var(--accent-rgb), 0.4);
+}
+.btn--play:hover:not(:disabled) { box-shadow: 0 12px 44px rgba(var(--accent-rgb), 0.58); }
+.btn--play:disabled { opacity: 0.35; cursor: not-allowed; box-shadow: none; }
+
+.btn--quiet {
+  background: transparent;
+  border: 1px solid rgba(220, 90, 90, 0.28);
+  color: rgba(230, 150, 150, 0.75);
+  padding: 6px 16px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+.btn--quiet:hover { color: #f5b3b3; border-color: rgba(220, 90, 90, 0.6); }
+
+.actionbar__hint {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--p6-muted);
+  opacity: 0.55;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Commit: the moment the character is chosen                             */
+/*                                                                        */
+/* client/main.lua sends `confirmSelect` once the server has CONFIRMED the */
+/* login actually took effect, then plays a camera push-in on the ped      */
+/* (Game.PlaySelectCinematic, Config.SelectCameraDurationMs). All the      */
+/* chrome falls away and only the character's name is left over the        */
+/* push-in. Timed off --cinematic-ms, which script.js sets from the same   */
+/* Lua config value rather than duplicating the number here.               */
+/* ---------------------------------------------------------------------- */
+.overlay.is-committing .rail,
+.overlay.is-committing .actionbar,
+.overlay.is-committing .topbar,
+.overlay.is-committing::before,
+.overlay.is-committing::after {
+  /* `animation: none` is load-bearing, not tidiness. .rail and .topbar run
+     their entrance animations with `forwards`, and a filled animation wins
+     over a plain declaration in the cascade - so this rule set opacity:0 and
+     NOTHING HAPPENED (measured: computed opacity stayed 1 through the whole
+     commit). Cancelling the animation hands control back to the declaration.
+     Same shape as the [hidden] defect at the top of this file: a rule that
+     reads correctly and is silently outranked. */
+  animation: none;
+  opacity: 0;
+  transition: opacity 420ms ease;
+  pointer-events: none;
+}
+.overlay.is-committing .nameplate {
+  transition: transform var(--cinematic-ms, 900ms) cubic-bezier(0.22, 1, 0.36, 1),
+              opacity var(--cinematic-ms, 900ms) ease;
+  transform: translateY(-10px) scale(1.06);
+}
+.overlay.is-committing .ped-fallback { opacity: 0; transition: opacity 320ms ease; }
+
+/* ---------------------------------------------------------------------- */
+/* Narrow / low-resolution clients                                        */
+/*                                                                        */
+/* 1280x720 is a real FiveM resolution. Two 320px rails plus gaps leave    */
+/* the ped almost no room there, so the rails narrow before anything       */
+/* overlaps the character.                                                */
+/* ---------------------------------------------------------------------- */
+@media (max-width: 1400px) {
+  :root { --rail-width: clamp(200px, 22vw, 250px); }
+  .nameplate__name { font-size: 24px; }
+  .btn--play { min-width: 200px; padding: 12px 32px; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Loading state                                                          */
+/* ---------------------------------------------------------------------- */
+
+.loading-state {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  color: var(--p6-muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.loading-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--accent-rgb), 0.25);
+  border-top-color: var(--p6-gold-bright);
+  animation: loading-spin 850ms linear infinite;
+}
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Error banner                                                           */
+/* ---------------------------------------------------------------------- */
+
+/* TOP-CENTRE, not above the action bar.
+   It used to sit at `bottom: 6vh`, which is clear of the buttons at 1080p and
+   lands directly on top of "Delete Character" at 720p (measured: banner
+   634-673 over a button at 630-667). It is pointer-events:none so it never
+   blocked the click, but an error message covering an interactive control is
+   still wrong, and 1280x720 is a real FiveM resolution. Top-centre is the
+   standard place for a game toast and cannot collide with the primary action
+   at any height. */
+.error-banner {
+  pointer-events: none;
+  position: absolute;
+  top: 11vh;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--p6-surface);
+  border: 1px solid rgba(220, 90, 90, 0.5);
+  color: #f5b3b3;
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 180ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 3;
+}
+.error-banner.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(4px);   /* settles downward from the top edge */
+}
+
+/* ---------------------------------------------------------------------- */
+/* Create-character panel                                                 */
+/* ---------------------------------------------------------------------- */
+
+.create-panel {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(3, 7, 12, 0.55);
+  opacity: 0;
+  transition: opacity 180ms ease;
+  z-index: 4;
+}
+.create-panel.is-visible { opacity: 1; }
+
+.create-panel__inner {
+  width: min(480px, 90vw);
+  border-radius: var(--panel-radius);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  background:
+    linear-gradient(160deg, rgba(var(--accent-rgb), 0.08), transparent 40%),
+    linear-gradient(180deg, rgba(13, 24, 35, 0.94), rgba(5, 11, 18, 0.97));
+  backdrop-filter: blur(26px) saturate(140%);
+  -webkit-backdrop-filter: blur(26px) saturate(140%);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6), 0 0 40px rgba(var(--accent-rgb), 0.14);
+  padding: 28px;
+  transform: translateY(16px) scale(0.98);
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.create-panel.is-visible .create-panel__inner {
+  transform: translateY(0) scale(1);
+}
+
+.create-panel__title {
+  margin: 0 0 20px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--p6-gold-bright);
+  letter-spacing: 0.02em;
+}
+
+.field-row {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--p6-muted);
+}
+
+.field__input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--p6-text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+.field__input:focus {
+  border-color: var(--p6-cyan);
+  box-shadow: 0 0 0 3px rgba(var(--p6-cyan-rgb), 0.16);
+}
+
+.field-error {
+  font-size: 12px;
+  color: #f5b3b3;
+  margin: -4px 0 14px;
+}
+
+.create-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.btn {
+  border: none;
+  border-radius: 9px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease, opacity 180ms ease, color 180ms ease, border-color 180ms ease;
+  font-family: inherit;
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
+
+.btn--gold {
+  background: linear-gradient(180deg, var(--p6-gold-bright), var(--p6-gold));
+  color: #1a1206;
+  box-shadow: 0 8px 24px rgba(var(--accent-rgb), 0.35);
+}
+.btn--gold:hover { box-shadow: 0 10px 30px rgba(var(--accent-rgb), 0.5); }
+
+.btn--ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--p6-muted);
+}
+.btn--ghost:hover:not(:disabled) { color: var(--p6-text); border-color: rgba(255, 255, 255, 0.3); }
+.btn--ghost:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.btn--danger {
+  background: linear-gradient(180deg, #e07a7a, #c94a4a);
+  color: #2a0a0a;
+  box-shadow: 0 8px 24px rgba(201, 74, 74, 0.35);
+}
+.btn--danger:hover:not(:disabled) { box-shadow: 0 10px 30px rgba(201, 74, 74, 0.5); }
+.btn--danger:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+.delete-panel__body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--p6-muted);
+  margin: 0 0 16px;
+}
+.delete-panel__body strong { color: var(--p6-text); }
