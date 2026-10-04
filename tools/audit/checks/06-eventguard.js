@@ -46,10 +46,31 @@ module.exports = {
         // Reading them as KEYS rather than as any-string-in-the-file keeps the
         // long prose comments in that file (which quote event names constantly)
         // out of the result.
+        //
+        // THE WINDOWS BELOW USED TO BE 4 AND 10 CHARACTERS, AND THIS CHECK SAW
+        // ONLY 123 OF THE 148 BUDGETS IN THE LIVE CONFIG.
+        //
+        // That file column-aligns its `=` for readability, so an entry reads
+        //     ['palm6_gangs:create']         = { calls = 5, ... },
+        // where `]` and `=` are nine spaces apart. `]` plus nine spaces plus `=`
+        // is eleven characters, so with a ten-character lookahead the `=` fell
+        // outside the window, the test failed, and the budget was silently not a
+        // budget as far as this check was concerned. Twenty-five entries, 17% of
+        // the table, were never validated at all: a typo'd or renamed event name
+        // among them would have been an inert ratelimit that this check reported
+        // as fine. That is the exact failure described in `protects` above, in
+        // the checker written to catch it.
+        //
+        // The self-test did not catch it because its fixture used a single space.
+        // It now plants a wide-aligned entry specifically, so this cannot regress.
+        //
+        // Generous fixed windows rather than a parser: the alignment column is a
+        // style choice that can widen again, and 160 characters is past any
+        // plausible one while still being bounded.
         const budgets = [];
         for (const s of cfgFile.strings) {
-            const before = cfgFile.code.slice(Math.max(0, s.start - 4), s.start);
-            const after = cfgFile.code.slice(s.end, s.end + 10);
+            const before = cfgFile.code.slice(Math.max(0, s.start - 160), s.start);
+            const after = cfgFile.code.slice(s.end, s.end + 160);
             if (/\[\s*$/.test(before) && /^\s*\]\s*=/.test(after)) {
                 budgets.push({ name: s.value, line: s.line });
             }

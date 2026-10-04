@@ -249,6 +249,27 @@ const PLANTS = [
     },
     {
         check: 'eventguard',
+        key: 'palm6_beta:wideAligned',
+        note: 'a budget whose = is COLUMN-ALIGNED far from its ], which a narrow lookahead cannot see',
+        apply(root) {
+            // Regression guard for a real blind spot. The live config aligns its
+            // `=` into a column, so entries read
+            //     ['palm6_gangs:create']         = { calls = 5, ... },
+            // with nine spaces between `]` and `=`. The check used a ten-character
+            // lookahead, so the `=` fell outside the window and 25 of the 148 live
+            // budgets (17%) were never validated at all. The fixture used a single
+            // space, so the self-test passed while the real table had a hole in it.
+            //
+            // This plant uses a deliberately wide gap AND a name nothing registers.
+            // A narrow lookahead cannot see the entry, reports no violation, and
+            // this plant goes undetected, which fails the self-test.
+            const p = path.join(root, 'resources/[custom]/palm6_eventguard/config.lua');
+            fs.writeFileSync(p, fs.readFileSync(p, 'utf8')
+                .replace('}\n', "    ['palm6_beta:wideAligned']              = { calls = 1, window_seconds = 1 },\n}\n"), 'utf8');
+        },
+    },
+    {
+        check: 'eventguard',
         key: 'order:palm6_alpha',
         note: 'a guarded resource ensured BEFORE palm6_eventguard, which makes its budgets no-ops',
         apply(root) {
