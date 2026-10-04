@@ -26,6 +26,20 @@ local lastClaim = {}    -- [citizenid] = ts; in-memory, resets on restart (repea
 -- faucet and not a cosmetic schema nit.
 local RetireOk = nil
 
+-- Has the probe RUN yet, independently of what it concluded. These are two
+-- different questions and the first version of this guard conflated them into
+-- one nil, which left a hole: ensureSchema runs on a CreateThread after
+-- Wait(3000) (oxmysql needs to connect first), so for the first ~3 seconds
+-- RetireOk is nil and a nil was treated as "allow". On a full server start
+-- nobody is connected yet, but on a bare `restart palm6_insurance` with players
+-- in the city, a claim filed inside that window would skip the check entirely.
+--
+-- Refusing for three seconds after a restart costs a player one retry. Allowing a
+-- claim that cannot retire its policy costs an unbounded number of payouts, which
+-- is the whole reason this guard exists. So: unprobed refuses, and only a probe
+-- that RAN and came back inconclusive is allowed to fail open.
+local RetireProbed = false
+
 local function now() return os.time() end
 
 local function dbg(msg)
@@ -413,6 +427,14 @@ local function cmdFileClaim(src, args)
     -- re-claimable). A refusal costs one player one claim; the alternative costs
     -- an unbounded number of payouts. nil (unverified) deliberately does NOT
     -- refuse -- see ensureSchema.
+    if not RetireProbed then
+        -- The boot probe has not run yet (ensureSchema waits 3s for oxmysql).
+        -- Refuse rather than skip the check: this only happens in the first few
+        -- seconds after a resource restart, and the player can simply retry.
+        Bridge.Notify(src, 'Mors Mutual',
+            'The claims desk is still opening. Try again in a moment.', 'error')
+        return
+    end
     if RetireOk == false then
         Bridge.Notify(src, 'Mors Mutual',
             'Claims are temporarily closed for maintenance. Nothing was filed and your policy is untouched.',
@@ -866,6 +888,7 @@ ALTER TABLE `palm6_insurance_claims`
               AND COLUMN_NAME = 'status']])
         col = r and r.t or nil
     end)
+    RetireProbed = true   -- the probe RAN; the branches below say what it concluded
     if not probed or not col then
         -- Cannot tell. Do NOT fail closed on an inconclusive probe: that would
         -- disable claims on a perfectly healthy box whose user cannot read
