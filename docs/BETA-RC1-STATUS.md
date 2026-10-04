@@ -82,8 +82,8 @@ boot banner); an `ensure` for a deleted directory; and migration numbering acros
 | Gate | State |
 |---|---|
 | Clean resource boot | **HUMAN REQUIRED.** All 87 ensures resolve to real resources and there are no duplicates (verified statically), but nothing here has booted an FXServer. |
-| Migrations, fresh database | **HUMAN REQUIRED.** Numbering is consistent across both authorities and the next free number is 0078. Not applied to a clean DB in this session. |
-| Migrations, production upgrade | **HUMAN REQUIRED.** Same. |
+| Migrations, fresh database | **AUDITED STATICALLY, see the section below.** Numbering is consistent and the next free number is 0078. Not applied to a clean DB in this session. |
+| Migrations, production upgrade | **AUDITED STATICALLY, see below.** |
 | `/diag` clean | **HUMAN REQUIRED.** |
 | `palm6_devtest` clean | **HUMAN REQUIRED.** |
 | Critical world anchors verified | **FAIL.** About 33 live `VERIFY IN-GAME` markers. See the walk list. |
@@ -218,6 +218,66 @@ Exact order. Steps 1 and 2 are not optional.
 4. No migrations are introduced by this branch. `sql/0045` is pre-existing and
    unchanged; the fix only detects whether it was applied, so no DB rollback is
    implied.
+
+---
+
+## Migrations: does a fresh database match an upgraded one?
+
+Audited statically on 2026-10-04. **No live database was inspected, so nothing here
+is a claim about production's actual schema.**
+
+There are **three** schema authorities, not two: hand-applied `sql/` (67 files),
+`palm6_dbmigrate/server.lua` (46 numbers, including 0067 and 0068-0073 which have
+no `sql/` file), and **40 resources that self-create their own tables at boot**
+with `CREATE TABLE IF NOT EXISTS`. The existing `migrations` invariant reads the
+first two and compares CREATE bodies; it never looks at the third.
+
+**The good result, and it is load-bearing:** 109 tables have a CREATE somewhere,
+**82 are created in more than one authority, and CREATE-body drift is zero.** Every
+one was compared normalised. The "copied VERBATIM from the matching sql/ file"
+convention is genuinely holding. Every `UNIQUE` constraint that a guard depends on
+is present identically in every copy, including the three the code explicitly calls
+load-bearing (`palm6_fightclub_bets(match_id, citizenid)`,
+`palm6_onboarding(citizenid)`, `palm6_officer_badges(badge)`).
+
+**The real divergence is entirely in ALTER-added columns.** 56 of the 58
+ALTER-added columns appear in **no** CREATE body. A fresh box builds the table
+without them and then depends on `ADD COLUMN IF NOT EXISTS` to add them. That form
+is **MariaDB-only and throws on MySQL 8 even when the column already exists**, which
+is why every resource deliberately keeps these ALTERs out of its `schemaOk` signal
+(otherwise a healthy MySQL box prints "schema MISSING" every boot). The reasoning is
+sound; the cost is that the one signal that would catch this divergence is off on
+purpose.
+
+| Finding | Severity | State |
+|---|---|---|
+| `palm6_insurance_policies.status` created as a 3-member enum in **both** CREATE bodies; `'claimed'` is added only by `sql/0065`'s MODIFY. If that ALTER ever fails, the retire-on-claim UPDATE throws into a bare `pcall` and a damage claim becomes re-filable on one policy | **P1** | **FIXED (`4d25503`)** — the enum is now verified out of `information_schema` at boot, claims refuse *before* filing if it is definitely wrong, and the retire checks its own affected rows |
+| 56 columns + 9 indexes exist only in MariaDB-only ALTERs. On the documented MariaDB 11.8 target the paths converge. On MySQL 8 a fresh box silently lacks all of them, and 15 of them are claim-before-credit settlement flags, so the crash-recovery design of migrations 0054-0063 would not exist on that box | **P1 on MySQL 8 / P3 on MariaDB** | Open. Engine-dependent. The highest-leverage fix is to fold ALTER-added columns into the CREATE bodies in all three authorities, leaving the ALTERs purely as the upgrade path |
+| 24 tables and migration numbers 0067-0073 are invisible to `sql/` and therefore to `tools/apply-migrations.sh`'s `palm6_schema_migrations` ledger. A restore driven by that ledger reports success while missing them (runtime fills them in via `dbmigrate` + `ensureSchema`) | **P2** | Open. The ledger is not a description of the schema, and nothing in the repo says so |
+| Six `palm6_mdt` schema changes carry no migration number in either authority | **P2** | Open. Both paths get them, so they converge; they are just invisible to the ledger |
+| Two `dbmigrate` ALTERs target tables no authority has created yet at that point, so they fail by construction on the first boot of a fresh box. `dbmigrate/server.lua:36-39` admits this | **P2** | Open. Harmless, but they are the only red FAIL lines a *correct* fresh install produces, which trains an operator to read the FAIL summary as noise |
+| `palm6_racing` satisfies its table dependency with `Wait(6000)` rather than a dependency check | **P3** | Moot while racing is dark (`d03beca`), real if it is re-enabled |
+| `sql/0002` and `sql/0003` are not idempotent *as data* (they reset society balances and job salaries to seed values) | **P3** | Ledger-guarded. `0002`'s target has zero in-repo writers |
+
+### One correction to the audit, recorded because acting on it would have caused harm
+
+The audit reported the `paid` column default on `palm6_season_rewards` and
+`palm6_lottery_draws` as a **P1** divergence (fresh `DEFAULT 0` vs upgraded
+`DEFAULT 1`) and described the fresh value as the dangerous one. **Both are
+non-issues, and "fixing" the default to match would have been actively harmful.**
+
+- `palm6_season/server/main.lua:590` inserts `paid` **explicitly as 0**
+  (`INSERT IGNORE ... (..., paid) VALUES (?, ?, ?, ?, ?, ?, 0)`), so the default is
+  never read.
+- `palm6_lottery/server/main.lua:430` **resets `paid = 0` at the drawing-to-drawn
+  finalize**, guarded by `WHERE status='drawing'` so only a genuine new transition
+  resets it. The payout reconcile only scans `status='drawn' AND paid=0`, so an
+  `open` row's `paid` value is unreachable. `sql/0059`'s header states this design
+  outright.
+
+`TINYINT(1)` vs `TINYINT` is display width only. Verdict: **P3, cosmetic.** The
+design anticipated exactly this case; the severity came from reading the ALTER's
+comment without tracing the write paths.
 
 ---
 
