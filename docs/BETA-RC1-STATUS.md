@@ -221,6 +221,59 @@ Exact order. Steps 1 and 2 are not optional.
 
 ---
 
+## Allowlist: the single recommended RC1 configuration
+
+`palm6_allowlist` has **two independent admit paths, OR-matched**, and the order is
+correct: the DB `allowlist` table is checked **first and synchronously**, then the
+real-time Discord role lookup. `Config.FailOpen = false`, so a Discord API outage
+denies rather than admits. Because the DB path runs first, an outage still admits
+every already-synced player, which is the right failure shape. txAdmin's native
+whitelist must stay `disabled` or joins get double-gated; the config says so.
+
+So §10's concerns are already satisfied in design. What is **not** decided:
+
+### 1. Set both bot convars. This is the recommendation.
+
+```
+set palm6:discord_bot_token  "<token>"
+set palm6:discord_guild_id   "<guild id>"
+```
+
+Two reasons, and the second matters more than the documented one:
+
+- It removes the ~10 minute admit lag.
+- **It removes a dependency on an out-of-repo scheduled task.** Nothing in this
+  repo writes the `allowlist` table. The rows come from
+  `sync-horizon-allowlist.py` / Task `HorizonAllowlistSync`, running every ~10
+  minutes somewhere else. While the convars are unset, **that task is the only
+  thing standing between a whitelisted applicant and a denial**, and if it dies
+  the symptom is invisible in the worst way: every already-synced player keeps
+  joining normally, so the box looks healthy, while nobody newly whitelisted can
+  get in. There is direct precedent on this stack for a dead scheduled job
+  staying green and silent for days.
+
+The boot banner now reports the table's row count and when a new person was last
+added, with an explicit note that this is **not** proof the sync ran (`identifier`
+is UNIQUE so the sync upserts, and `created_at` records first-add, not last-run).
+It is a sanity check, not a heartbeat.
+
+### 2. Decide whether the admit role set is a closed beta
+
+`Config.AllowedRoles` currently admits **six** roles: `admin`, `moderator`,
+`whitelisted`, `member`, `customer`, `investor`.
+
+If `@member` is granted broadly in the Discord, this is an **open** beta wearing a
+closed beta's name. That is a product decision, not a bug, and it is left alone
+here. For a closed founding beta the narrow set is `admin` + `moderator` +
+`whitelisted`, with `customer` and `investor` added only if those are deliberately
+play-granting tiers.
+
+Correctly handled already and worth not breaking: the **Founding Tester role is
+deliberately excluded**, because `/beta` tells reservation holders that approval is
+still required before play. A founding reservation must not by itself grant entry.
+
+---
+
 ## Migrations: does a fresh database match an upgraded one?
 
 Audited statically on 2026-10-04. **No live database was inspected, so nothing here

@@ -203,5 +203,50 @@ CreateThread(function()
     elseif roleCount == 0 then
         print('[palm6_allowlist] WARNING: AllowedRoles is EMPTY -> only DB-allowlisted players can join.')
     end
+
+    -- Report the state of the DB allowlist.
+    --
+    -- Why this line exists. When the bot convars are UNSET, the DB table is the
+    -- ONLY admit path, and nothing in this repo writes it: the rows come from an
+    -- out-of-repo scheduled task (sync-horizon-allowlist.py / Task
+    -- HorizonAllowlistSync, ~10 min, see config.lua). If that task dies, the
+    -- symptom is invisible from here in the worst possible way: every already
+    -- synced player keeps joining normally, so the server looks healthy, while
+    -- nobody NEWLY whitelisted can get in. The player reports "it says I'm not on
+    -- the allowlist" and the box says nothing is wrong.
+    --
+    -- HONEST LIMIT, stated because a misleading health line is worse than none:
+    -- this is NOT proof the sync ran. `identifier` is UNIQUE, so the sync
+    -- upserts, and created_at therefore records when each person was FIRST added,
+    -- not when the sync last executed. A healthy sync with nobody new to add
+    -- leaves the newest timestamp untouched for weeks. Read it as "the last time
+    -- a new person was admitted to the table", which an operator can sanity-check
+    -- against whether anyone was whitelisted since. The reliable fix is to set
+    -- the two convars, which makes admission independent of the task entirely.
+    local total, enabled, newest = 0, 0, nil
+    local probed = pcall(function()
+        local r = MySQL.single.await(
+            'SELECT COUNT(*) AS n, COALESCE(SUM(enabled),0) AS e, MAX(created_at) AS newest FROM allowlist')
+        if r then
+            total   = tonumber(r.n) or 0
+            enabled = tonumber(r.e) or 0
+            newest  = r.newest
+        end
+    end)
+    if probed then
+        print(('[palm6_allowlist] DB allowlist: %d row(s), %d enabled; newest added %s')
+            :format(total, enabled, newest and tostring(newest) or 'never'))
+        if total == 0 then
+            print('^3[palm6_allowlist] the DB allowlist is EMPTY. If the bot convars are also unset, NOBODY can join.^0')
+        end
+        if (not tokenSet or not guildSet) then
+            print('^3[palm6_allowlist] the DB table is currently the ONLY admit path, and nothing in ' ..
+                  'this repo writes it (an out-of-repo ~10 min task does). A newly whitelisted player ' ..
+                  'who cannot join, while everyone else can, means that task is dead. Setting both ' ..
+                  'bot convars removes the dependency.^0')
+        end
+    else
+        print('^3[palm6_allowlist] could not read the allowlist table to report its size.^0')
+    end
     print('[palm6_allowlist] ============================================')
 end)
