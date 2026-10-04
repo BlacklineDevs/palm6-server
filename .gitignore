@@ -17,3 +17,13 @@ Thumbs.db
 # SQL backups / dumps
 *.sql.bak
 dump.sql
+
+# Loadscreen source material — NOT runtime assets. The loadscreen serves only
+# html/assets/bg/slides/*.jpg (tracked); `real/` holds the licensed originals
+# those plates were cut from and `ref/` the moodboard refs (~33 MB combined).
+# Keep them on the workstation, out of the deploy payload.
+resources/[[]custom]/server_identity/html/assets/bg/real/
+resources/[[]custom]/server_identity/html/assets/bg/ref/
+# Local *-backup.<ext> scratch copies of committed art (an exact-name rule
+# would not catch these — see the backup-file trap in docs/).
+resources/[[]custom]/server_identity/html/**/*-backup.*
