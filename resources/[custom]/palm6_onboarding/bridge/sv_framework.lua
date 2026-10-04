@@ -111,6 +111,70 @@ function Bridge.ResourceStarted(name)
     return GetResourceState(name) == 'started'
 end
 
+-- Can the deployed qbx_garages reach a garage called `name`?
+--
+-- Returns 'present', 'absent', or 'unknown' — THREE states on purpose.
+-- Collapsing 'unknown' into 'absent' would switch starter vehicles off on a
+-- box where they work fine; collapsing it into 'present' is the bug this
+-- whole function exists to stop. The caller decides what to do with doubt.
+--
+-- WHY THIS CANNOT BE ANSWERED STATICALLY: qbx_garages is part of the base
+-- Qbox pack and lives on the game box, NOT in this repo (see the custom-layer
+-- note in docs/). Nothing in this tree names a garage anywhere else, so there
+-- is no in-repo authority to check `Config.StarterVehicle.garage` against.
+-- Both probes below read the LIVE resource at runtime, which is the only
+-- place the answer exists.
+--
+-- Probe A (authoritative when it works): ask qbx_garages for its own table.
+-- The export name is not guaranteed across Qbox versions, hence the pcall and
+-- the fall-through; a version that does not expose it yields 'unknown', not a
+-- wrong answer.
+--
+-- Probe B (heuristic, deliberately weaker): read the resource's shared config
+-- as TEXT and look for the name used as a table key. This can only ever
+-- UPGRADE 'unknown' to 'present' — it is never allowed to prove absence,
+-- because a garage defined in a file this probe does not read would look
+-- identical to a garage that does not exist. A commented-out entry would be a
+-- false 'present'; that is the acceptable direction of error here, since the
+-- operator-facing failure mode it protects is "typo in a name nobody checked".
+function Bridge.ResolveGarage(name)
+    if type(name) ~= 'string' or name == '' then return 'absent' end
+    if GetResourceState('qbx_garages') ~= 'started' then return 'unknown' end
+
+    -- Probe A — the resource's own view of its garages.
+    local ok, garages = pcall(function()
+        return exports.qbx_garages:GetGarages()
+    end)
+    if ok and type(garages) == 'table' then
+        if garages[name] ~= nil then return 'present' end
+        -- Array-of-records shape, seen in some forks.
+        for _, g in pairs(garages) do
+            if type(g) == 'table' and (g.name == name or g.label == name) then
+                return 'present'
+            end
+        end
+        -- A table that resolved and does not contain it is real evidence.
+        return 'absent'
+    end
+
+    -- Probe B — text read of the shipped config. Upgrade-only (see above).
+    local body
+    pcall(function()
+        body = LoadResourceFile('qbx_garages', 'shared/garages.lua')
+            or LoadResourceFile('qbx_garages', 'config/garages.lua')
+            or LoadResourceFile('qbx_garages', 'shared/config.lua')
+    end)
+    if type(body) == 'string' and body ~= '' then
+        local pat = name:gsub('(%W)', '%%%1')
+        if body:find("%['" .. pat .. "'%]") or body:find('%["' .. pat .. '"%]')
+            or body:find('%f[%w_]' .. pat .. '%s*=') then
+            return 'present'
+        end
+    end
+
+    return 'unknown'
+end
+
 -- Grant a one-time owned starter vehicle to `citizenid`, parked in `garage`.
 -- Goes through qbx_vehicles:CreatePlayerVehicle (the supported owned-vehicle
 -- API) rather than a raw player_vehicles INSERT, so it survives qbx schema
