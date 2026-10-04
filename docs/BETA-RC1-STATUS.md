@@ -255,23 +255,30 @@ board while every officer tool reads clean, because no MDT surface knows bountie
 exist. Fixing this is a design decision about which store wins, so it is recorded
 rather than patched.
 
-### Open: evidence still renders as raw JSON to officers
+### FIXED: evidence rendered as raw JSON to officers
 
-**P2, and the fix is low-risk.** `palm6_evidence` json-encodes table payloads into
-the free-text `description` column, and **none of the three render paths decodes
-it**. Real table-payload writers include `palm6_mdt` itself, `palm6_chopshop`,
-`palm6_counterfeit`, `palm6_insurance` and `palm6_drugs`, so a detective running
-`/evidence case 7` reads lines like
-`- [fact] palm6_counterfeit — {"serial":"…","hop":2,"from_citizenid":"ABC12345"}`.
-`palm6_mdt` then truncates it mid-JSON at 100 chars. Only `palm6_witnesses` reads
-correctly, because it humanises *before* writing.
+**P2. Fixed (`a1f0c9d`).** `palm6_evidence` json-encodes table payloads into the
+free-text `description` column, and **none of the three render paths decoded it**.
+Table-payload writers include `palm6_mdt` itself, `palm6_chopshop`,
+`palm6_counterfeit`, `palm6_insurance` and `palm6_drugs`, so this was the common
+case for export-written entries. A detective running `/evidence case 7` read
+`- [fact] palm6_counterfeit — {"serial":"QX7731","hop":2,"from_citizenid":"ABC12345"}`,
+and `palm6_mdt` then truncated it **mid-JSON** at 100 characters. Only
+`palm6_witnesses` read correctly, because it humanises before writing.
 
-Ready-to-apply fix, not done here because it touches three render sites and is
-presentation rather than correctness: one pure helper (try `json.decode`; on a
-table emit `key: value`; otherwise pass the string through unchanged) applied at
-`palm6_evidence/server/main.lua:545` and `:645` and `palm6_mdt/server/main.lua:275`.
-No schema, export-signature or write-path change, and prose rows fall through
-untouched. Apply the `palm6_mdt` trim **after** formatting.
+A render-side fix only: `describeEntry()` tries `json.decode` behind a cheap
+first-character pre-check, emits `key: value` for an object or ordered values for
+an array, and returns the input untouched on anything that is not decodable JSON.
+`appendEntry` still stores exact JSON, so a machine consumer that decodes the
+column is unaffected. Exposed as `exports.palm6_evidence:FormatEntry` and called
+softly from `palm6_mdt` rather than duplicated, because a second copy of a
+formatter is how two surfaces start disagreeing about what one row says. The
+`palm6_mdt` trim now runs **after** formatting.
+
+Verified against eight payload shapes: prose, a real counterfeit payload, an
+array, an empty object, malformed JSON, leading whitespace, a brace inside prose,
+and empty. All eight behave, and the test caught that integral numbers were
+rendering as `hop: 2.0` (and would have rendered money as `amount: 1500.0`).
 
 ### Open: EMS billing is unbounded in aggregate
 
