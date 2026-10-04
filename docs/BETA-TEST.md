@@ -31,8 +31,8 @@
 > loadscreen media check (all 19 plates and 6 music tracks are tracked; the animated
 > background and logo are intentionally blank, not missing).
 >
-> §0.1 (server-browser name) and §0.2 (7 owed item icons) below are still accurate and
-> still owed by David.
+> §0.1 (server-browser name) is still accurate and still owed by David. §0.2 (7 owed item
+> icons) is **resolved** and its row is corrected: they shipped and uploaded on 2026-07-14.
 
 ---
 
@@ -43,7 +43,7 @@ These are the standing gaps between "shipped to prod" and "ready for outside pla
 | # | Gap | Owner | Action | Blocks beta? |
 |---|-----|-------|--------|--------------|
 | 0.1 | **Server-browser name still `palm6 — Qbox RP`** (not "Palm6"). Not set in the repo — it lives in the panel-managed `server.cfg`. | David (panel) | RocketNode panel → server.cfg → set `sv_projectName "Palm6"` and `sv_hostname` to the branded name, restart. | Cosmetic, but first impression |
-| 0.2 | **7 new item icons blank** (PNGs owed). See §5 manifest. | David (generate in ChatGPT) | Drop PNGs into `ox_inventory/web/images/`, re-deploy. | No — items work, just show the placeholder box |
+| 0.2 | ~~**7 new item icons blank** (PNGs owed).~~ ✅ **DONE 2026-07-14, nothing is owed.** All 7 PNGs are in `assets/ox_icons/` (committed `e00c206`), every basename matches a real item key in `ox_inventory_overrides/data/items.lua` (which is what ox requires, since it serves `web/images/<itemname>.png`), and the `palm6-upload-icons.yml` workflow ran on that exact sha and **succeeded**. Verified 2026-10-04. Their filesystem timestamps read 2026-07-22, which is a checkout artifact, not a content change: `git log` shows exactly one commit has ever touched them. | Nobody | Nothing. If an icon still shows a placeholder box in game, the box was re-provisioned since July: re-dispatch `palm6-upload-icons.yml`. | No |
 | 0.3 | **Starter-vehicle garage name unconfirmed.** ⚠️ **This row understated the failure and that is why it read as harmless for two months.** It said the car "silently no-ops" if the garage name is wrong. It did not no-op. `qbx_vehicles:CreatePlayerVehicle` writes the garage string without validating it, so a wrong name still created an owned car, still returned success, still set `starter_vehicle_granted = 1`, and still told the player "Your starter vehicle is parked at the motel garage" -- for a car in a garage no door opens. The once-per-citizen guard then made it unrepeatable. **Fixed 2026-10-04 (`900b186`):** the garage is resolved before granting, the flag is claimed before the car is created and released if creation fails, and a deferred grant is retried on a later load. The name is still operator-verified, but getting it wrong is now visible at boot and reversible instead of silent and permanent. | Operator (in-game) | Follow `docs/BETA-RC1-WALK-LIST.md` §0. Read the boot banner line, then set `palm6:onboarding_garage "<real name>"` in `server.cfg` if needed -- **no code deploy required**. | Was yes. Now no: nothing is burned while it is wrong |
 | 0.4 | **Allowlist/whitelist mode for beta.** `palm6_allowlist` does role-OR-license gating; txAdmin whitelist must stay `disabled` or joins double-gate. | David | Decide open vs closed beta; if closed, seed the allowlist with tester identifiers. | Depends on beta model |
 | 0.5 | **Placeholder coords un-walked.** ~8 systems still sit on round-number placeholder coordinates (§3). Verify/retune in the §2 pass. | Operator (in-game) | Walk each §3 POI; retune any that float/clip/are unreachable. | Yes for those systems |
